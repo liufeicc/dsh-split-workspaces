@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Split workspaces",
+    "description": "Tile several workspaces left/right and up/down in the main panel, drag the dividers to resize, drag a pane header onto another pane and release to swap the two places, and highlight the pane that currently has focus; one conversation per pane."
+  }
+}

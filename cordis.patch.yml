@@ -1,0 +1,5 @@
+# The split-workspaces bundle: one Host row (the browser roster source) and the
+# Client half that renders the tiled workspace board.
+- insert:
+    - id: split-workspaces
+      name: '@local/dsh-split-workspaces'

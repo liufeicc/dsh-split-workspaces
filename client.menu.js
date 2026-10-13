@@ -63,6 +63,28 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * 替换图标：两支方向相反的箭头（上下两条），说的是「把这一格的内容换掉」。
+       *
+       * 为什么不用文件夹 + 箭头：标题栏上已经有「打开目录」那个文件夹图标，再来一个
+       * 带文件夹的图标会被当成同一个动作。两支反向箭头是「替换 / 对调」最省解释的画法，
+       * 而且与另外三个图标同一套画法（14×14 视框、`stroke: currentColor`），
+       * 焦点窗格标题栏上的白字配色自动继承。
+       */
+      function ReplaceGlyph() {
+        return h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true, className: css.glyph },
+          // 上面那条向右：「往这一格里放」。
+          h('path', {
+            d: 'M3 5.5h7.5M8 3l2.5 2.5L8 8',
+            stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round', strokeLinejoin: 'round',
+          }),
+          // 下面那条向左：「原来那个出去」。
+          h('path', {
+            d: 'M13 10.5H5.5M8 8l-2.5 2.5L8 13',
+            stroke: 'currentColor', strokeWidth: 1.2, strokeLinecap: 'round', strokeLinejoin: 'round',
+          }));
+      }
+
+      /**
        * 无遮罩的弹出菜单：点击别处或按 Esc 关闭。
        *
        * 传了 `icon` 就用一个纯图标按钮当触发器（窗格标题栏里的分屏菜单用它省地方），
@@ -132,7 +154,7 @@ window.__ModuleLoader__.load({
           h('span', { className: css.menuItemLabel, title: label }, label),
           hint === undefined ? null : h('span', { className: css.menuItemHint }, hint));
       }
-      return { Chevron, PanelIcon, SplitGlyph, FolderGlyph, Popover, MenuItem };
+      return { Chevron, PanelIcon, SplitGlyph, FolderGlyph, ReplaceGlyph, Popover, MenuItem };
     }
 
     return { createMenu };

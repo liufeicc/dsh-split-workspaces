@@ -13,6 +13,10 @@
  * 与交换后的光标安放也都跟着它，视图块只负责把共用的拖动状态（谁在被拖、指针在谁
  * 上面）传下来做视觉反馈。
  *
+ * 「替换工作区」同样属于标题栏：每格一个图标，菜单里是「新建工作区…」与还没铺开的
+ * 工作区（`replaceChoices` 由视图块算好传下来），选中后调 `replaceWorkspace` ——
+ * 那一格的**位置**不动，只换里面的工作区与对话。
+ *
  * 依赖由入口块注入（DSH 的包内代码块之间不能互相 require）：
  * createPane({ css, cx, errorText, model, presets, menu, paneSlot })。
  *
@@ -37,7 +41,7 @@ window.__ModuleLoader__.load({
      * @param deps.paneSlot - 本插件声明的窗格子槽位名（对话本体挂在这里）。
      */
     function createPane({ css, cx, errorText, model, presets, menu, paneSlot }) {
-      const { SplitGlyph, FolderGlyph, Popover, MenuItem } = menu;
+      const { SplitGlyph, FolderGlyph, ReplaceGlyph, Popover, MenuItem } = menu;
       /** 分屏方向 → 词典键，四行菜单的文案。 */
       const SPLIT_LABEL_KEYS = {
         left: 'pane.splitLeft',
@@ -226,7 +230,7 @@ window.__ModuleLoader__.load({
       }
 
       /** 一个窗格：标题栏 + 共享的 Conversation Factory。 */
-      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], rows, sessionId, summary, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, agentPresets, presetOptions, presetDefaultId, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
+      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, agentPresets, presetOptions, presetDefaultId, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
@@ -240,6 +244,8 @@ window.__ModuleLoader__.load({
         const [splitDirection, setSplitDirection] = useState(null);
         /** 第二步里「新建工作区…」是否正在等文件夹选择器 / 建工作区。 */
         const [workspaceBusy, setWorkspaceBusy] = useState(false);
+        /** 「替换工作区 → 新建工作区…」是否正在等文件夹选择器 / 建工作区。 */
+        const [replaceBusy, setReplaceBusy] = useState(false);
         const reference = useSessionReference(sessions, sessionId);
         const current = summary;
         /**
@@ -367,6 +373,84 @@ window.__ModuleLoader__.load({
               setWorkspaceBusy(false);
             });
         }, [splitDirection, workspaceBusy, createWorkspaceFromDirectory, paneActions, pane.key, describeAddError]);
+
+        /**
+         * 替换流程的报错文案。
+         *
+         * 「选择器打不开」与「工作区换不过去」是两件不同的事，用户能做的也不一样，
+         * 因此分别说 —— 判定方式与面板顶部的添加流程一致（`createWorkspaceFromDirectory`
+         * 会给选择器本身的失败打上 `pickerFailed`）。
+         */
+        const describeReplaceError = useCallback((reason) => {
+          const headline = reason !== null && typeof reason === 'object' && reason.pickerFailed === true
+            ? t('panel.pickerFailed')
+            : t('pane.replaceFailed');
+          return headline + ': ' + errorText(reason);
+        }, [t]);
+
+        /**
+         * 「替换工作区 → 新建工作区…」：选出目录、注册成工作区，再用它替掉这一格。
+         *
+         * 与分屏菜单那条路共用 `createWorkspaceFromDirectory`（Desktop 的 preload 桥、
+         * web 的选择器、失败处理因此都只有一份实现）。用户取消（返回 undefined）时
+         * 什么也不做，棋盘保持原样。
+         */
+        const replaceWithNewWorkspace = useCallback(() => {
+          if (replaceBusy) return;
+          setReplaceBusy(true);
+          setError(null);
+          Promise.resolve()
+            .then(() => createWorkspaceFromDirectory())
+            .then((createdId) => {
+              if (createdId === undefined) return;
+              paneActions.replaceWorkspace(pane.key, createdId);
+            })
+            .catch((reason) => {
+              setError(describeReplaceError(reason));
+            })
+            .finally(() => {
+              setReplaceBusy(false);
+            });
+        }, [replaceBusy, createWorkspaceFromDirectory, paneActions, pane.key, describeReplaceError]);
+
+        /**
+         * 「替换工作区」菜单的内容：与面板顶部的「添加工作区」**同一份候选** ——
+         * `新建工作区…`，外加还没铺开的工作区（`replaceChoices` 由视图块用
+         * `model.unopenedWorkspaces` 算好传下来）。
+         *
+         * 已经铺开的工作区刻意不在候选里：它已经在别的格子上，真要对调用「拖动标题栏
+         * 交换位置」那条路 —— 那条路不重开对话，而「替换」必然要换一个会话。
+         *
+         * @param close - Popover 给的关闭函数；选中后先关菜单再替换。
+         */
+        const renderReplaceMenu = (close) => {
+          const createNew = h(MenuItem, {
+            key: 'new-workspace',
+            label: replaceBusy ? t('pane.replacing') : t('panel.newWorkspace'),
+            hint: t('panel.newWorkspaceHint'),
+            onClick: () => {
+              close();
+              replaceWithNewWorkspace();
+            },
+          });
+          if (replaceChoices.length === 0) {
+            /*
+             * 两种「没得选」要分开说：一个工作区都没注册过（棋盘是靠文件夹选择器刚长出来的
+             * 那一格），与「别的工作区都铺在棋盘上了」——用户面对的是完全不同的情况。
+             */
+            const note = workspaceCount === 0 ? t('panel.noWorkspace') : t('pane.replaceAllOpen');
+            return [createNew, h('div', { key: 'note', className: css.menuNote }, note)];
+          }
+          return [createNew, ...replaceChoices.map((choice) => h(MenuItem, {
+            key: choice.workspaceId,
+            label: choice.title,
+            hint: choice.path,
+            onClick: () => {
+              close();
+              paneActions.replaceWorkspace(pane.key, choice.workspaceId);
+            },
+          }))];
+        };
 
         /**
          * 分屏菜单的两段内容。
@@ -614,6 +698,19 @@ window.__ModuleLoader__.load({
             disabled: workspace === undefined || openBusy,
             onClick: openWorkspace,
           }, h(FolderGlyph, null)),
+          /*
+           * 替换工作区：把**这一格**换成另一个还没铺开的工作区。
+           *
+           * 为什么做成「每格一个图标」而不是面板顶部的一个按钮：替换是一格自己的事，
+           * 按钮就在那一格身上，于是永远不必再回答「替哪一格」——省掉一层
+           * 「先选窗格」的菜单，也不会点错格子。位置语义见 renderReplaceMenu。
+           */
+          h(Popover, {
+            key: 'replace',
+            icon: h(ReplaceGlyph, null),
+            title: t('pane.replaceHint'),
+            align: 'end',
+          }, renderReplaceMenu),
           /*
            * 分屏：一个图标按钮弹出两段菜单（方向 → 工作区）。
            *

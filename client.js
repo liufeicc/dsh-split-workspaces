@@ -186,6 +186,7 @@ window.__ModuleLoader__.load({
       const paneActions = {
         addPane: (workspaceId, sessionId) => paneStore.addPane(workspaceId, sessionId),
         splitPane: (key, dir, workspaceId) => paneStore.splitPane(key, dir, workspaceId),
+        replaceWorkspace: (key, workspaceId) => paneStore.replaceWorkspace(key, workspaceId),
         swapPanes: (keyA, keyB) => paneStore.swapPanes(keyA, keyB),
         removePane: (key) => paneStore.removePane(key),
         closeAll: () => paneStore.closeAll(),

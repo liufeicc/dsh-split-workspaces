@@ -107,10 +107,12 @@ check('它是个带固定 key 的图标按钮，复用标题栏的按钮样式',
   && button.props.className.includes('dshSplitWs_iconButton') && button.props.type === 'button');
 check('它有可读的名字（无障碍标签同标题）',
   button.props['aria-label'] === button.props.title && button.props.title !== '');
-check('按钮挨着工作区名 / 路径，排在外面的分屏按钮之前',
+check('按钮挨着工作区名 / 路径，排在「替换工作区」与分屏按钮之前',
   (() => {
+    // 「打开目录」与「替换工作区」都是**这一格的工作区**上的动作，因此排在
+    // 分屏（会动布局）之前。
     const keys = (paneHeadOf(pane.tree).children ?? []).flat().filter(Boolean).map((child) => child.props.key);
-    return keys.join(',') === 'heading,open,split,session,close';
+    return keys.join(',') === 'heading,open,replace,split,session,close';
   })());
 
 // 工作区还不知道是哪个：没有路径可开，按钮必须是灰的。

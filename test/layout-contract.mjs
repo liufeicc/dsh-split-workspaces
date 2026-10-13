@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ReactStub, byData, byName, findAll, loadBundle, mount, settle } from './harness.mjs';
 // 断言记录、棋盘挂载、颜色对比度与元素查找的小工具；另外三个契约测试用的是同一份。
-import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, openWorkspaceStep, popoverRender, paneHeadOf, contrastRatio, mixWithBlack } from './board.mjs';
+import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, replaceMenuOf, openWorkspaceStep, popoverRender, paneHeadOf, contrastRatio, mixWithBlack } from './board.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +30,17 @@ check('每个代码块都按 loader 规则注册并导出自己的东西', typeo
   && typeof mods.model.createPaneStore === 'function' && typeof mods.presets.createPresetStore === 'function'
   && typeof mods.menu.createMenu === 'function' && typeof mods.pane.createPane === 'function'
   && typeof mods.view.createView === 'function');
+
+check('中文与英文的词典键一一对应（新增的「替换工作区」那几条两边都齐）', (() => {
+  const zh = Object.keys(mods.dicts.zh).sort().join(',');
+  const en = Object.keys(mods.dicts.en).sort().join(',');
+  return zh === en
+    && typeof mods.dicts.en['pane.replaceWorkspace'] === 'string'
+    && typeof mods.dicts.en['pane.replaceHint'] === 'string'
+    && typeof mods.dicts.en['pane.replacing'] === 'string'
+    && typeof mods.dicts.en['pane.replaceFailed'] === 'string'
+    && typeof mods.dicts.en['pane.replaceAllOpen'] === 'string';
+})());
 
 const {
   createPaneStore,
@@ -50,6 +61,7 @@ const {
   neighborPane,
   splitPlacement,
   splitCandidates,
+  unopenedWorkspaces,
 } = mods.model;
 
 /** 造一个「左右分屏」节点，供纯函数断言使用。 */
@@ -600,5 +612,123 @@ const panelState = panelBoard.paneStore.getSnapshot();
 check('面板的「新建工作区…」仍然把新工作区铺到棋盘右边', panelState.panes.length === 3
   && panelState.panes[2].workspaceId === 'ws-panel'
   && panelBoard.createdWith[0].path === '/tmp/panel', JSON.stringify(panelState.panes.map((pane) => pane.workspaceId)));
+
+/*
+ * --- 替换工作区：位置不变、内容换掉 --------------------------------------------------
+ *
+ * 用户明确要的一条路：在**这一格**的位置上，关掉原来的工作区，换成另一个（还没铺开的）
+ * 工作区。因此这里守两件事：
+ *   1. 存储只改那一格的记录，布局树与别的窗格是**同一个对象**（位置与比例一个字节不动）；
+ *   2. 旧会话必须被清掉，否则这一格会继续显示上一个工作区的对话（看着像替换没生效）。
+ */
+
+check('未铺开的工作区：剔除已铺开的，顺序保持 Host 给的那样', (() => {
+  const rows = unopenedWorkspaces(candidateItems, ['ws-b']);
+  return rows.map((row) => row.workspaceId).join(',') === 'ws-a,ws-c' && rows[0].title === 'alpha';
+})());
+check('未铺开的工作区：都铺开时是空列表（菜单据此说明没有可换的）',
+  unopenedWorkspaces(candidateItems, ['ws-a', 'ws-b', 'ws-c']).length === 0
+  && unopenedWorkspaces([], []).length === 0);
+
+const repStore = createPaneStore();
+repStore.addPane('ws-a');
+repStore.addPane('ws-b');
+repStore.setActive('pane-2');
+repStore.setPreset('pane-1', 'ptc');
+repStore.setSession('pane-1', 's-a');
+const repBefore = repStore.getSnapshot();
+check('替换工作区：未知窗格什么也不做，也不产生新快照',
+  repStore.replaceWorkspace('pane-9', 'ws-c') === false && repStore.getSnapshot() === repBefore);
+check('替换工作区：换成同一个工作区什么也不做（不是一次「重开对话」）',
+  repStore.replaceWorkspace('pane-1', 'ws-a') === false && repStore.getSnapshot() === repBefore);
+check('替换工作区：真的换了才返回 true', repStore.replaceWorkspace('pane-1', 'ws-c') === true);
+check('替换工作区：布局树原样（位置、层级、比例都不动）',
+  repStore.getSnapshot().layout === repBefore.layout);
+check('替换工作区：别的窗格还是同一个记录对象，焦点也不动',
+  repStore.getSnapshot().panes[1] === repBefore.panes[1] && repStore.getSnapshot().activeKey === 'pane-2');
+check('替换工作区：换工作区 + 清旧会话 + 回到「跟随最新会话」', (() => {
+  const pane = repStore.getSnapshot().panes[0];
+  return pane.workspaceId === 'ws-c' && pane.sessionId === null && pane.follow === true;
+})());
+check('替换工作区：这一格暂存的模式留着（它是用户为这一格选的）',
+  repStore.getSnapshot().panes[0].preset === 'ptc');
+
+/* ---------- 渲染出来的「替换工作区」菜单 ---------- */
+
+const repBoard = await renderBoard(mod);
+const repPane = paneDom(repBoard.render().tree, 'pane-1');
+const repMenu = replaceMenuOf(repPane.tree);
+check('每个窗格标题栏都有一个「替换工作区」图标菜单', repMenu !== undefined
+  && repMenu.popover.props.icon !== undefined && repMenu.popover.props.label === undefined);
+check('替换菜单与「添加工作区」同款：先「新建工作区…」，再列还没铺开的工作区',
+  repMenu.labels.join(',') === '新建工作区…,gamma'
+  && repMenu.items[0].props.hint === '选择文件夹'
+  && repMenu.items[1].props.hint === '/tmp/gamma', repMenu.labels.join(','));
+check('替换菜单不列已经铺在棋盘上的工作区（那些要靠拖动标题栏对调）',
+  !repMenu.labels.includes('alpha') && !repMenu.labels.includes('beta'));
+
+const repLayoutBefore = repBoard.paneStore.getSnapshot().layout;
+repMenu.items[1].props.onClick();
+repPane.flush();
+const repAfter = repBoard.paneStore.getSnapshot();
+check('选中一行就把这一格换成它：窗格数不变、布局树原样（还在原位）',
+  repAfter.panes.length === 2 && repAfter.layout === repLayoutBefore
+  && repAfter.panes[0].workspaceId === 'ws-c', JSON.stringify(repAfter.panes.map((pane) => pane.workspaceId)));
+check('替换后这一格显示的是新工作区的状态，不是旧工作区的会话', (() => {
+  const provider = findAll(paneDom(repBoard.render().tree, 'pane-1').tree, byName('SessionProvider'))[0];
+  return provider !== undefined
+    && findAll(provider.props.empty(), (node) => node.children.includes('该工作区还没有会话')).length === 1;
+})());
+check('替换后新工作区从候选里消失，旧工作区回到候选里', (() => {
+  const menu = replaceMenuOf(paneDom(repBoard.render().tree, 'pane-1').tree);
+  return menu.labels.join(',') === '新建工作区…,alpha';
+})());
+
+/*
+ * 两种「没得选」要分开说：一个工作区都没注册过（棋盘是靠文件夹选择器刚长出来的那一格），
+ * 与「别的工作区都铺在棋盘上了」。直接改 props 重挂这一格来看这两句话 ——
+ * 否则得为一句文案造两个棋盘。
+ */
+const repNoChoiceRows = (overrides) => {
+  const frame = frameOf(repBoard.render().tree, 'pane-1');
+  return replaceMenuOf(mount(frame.type, { ...frame.props, ...overrides }).tree).rows;
+};
+check('别的工作区都铺开时，菜单说「没有别的工作区可换了」', (() => {
+  const rows = repNoChoiceRows({ replaceChoices: [], workspaceCount: 3 });
+  return rows.length === 2 && rows[0].props.label === '新建工作区…'
+    && rows[1].children.includes('没有别的工作区可换了');
+})());
+check('一个工作区都还没注册过时说「还没有工作区」', (() => {
+  const rows = repNoChoiceRows({ replaceChoices: [], workspaceCount: 0 });
+  return rows[1].children.includes('还没有工作区');
+})());
+
+// 菜单里的「新建工作区…」：选目录 → 注册 → 用它替掉这一格（位置同样不变）。
+const repNewBoard = await renderBoard(mod, { pickedPath: '/tmp/replace', createdId: 'ws-replaced' });
+const repNewPane = paneDom(repNewBoard.render().tree, 'pane-2');
+const repNewLayout = repNewBoard.paneStore.getSnapshot().layout;
+replaceMenuOf(repNewPane.tree).items[0].props.onClick();
+await settle();
+repNewPane.flush();
+const repNewState = repNewBoard.paneStore.getSnapshot();
+check('「替换工作区 → 新建工作区…」用选中的目录注册，并把它放进这一格',
+  repNewState.panes.length === 2 && repNewState.panes[1].workspaceId === 'ws-replaced'
+  && repNewState.layout === repNewLayout
+  && repNewBoard.createdWith.length === 1 && repNewBoard.createdWith[0].path === '/tmp/replace'
+  && repNewBoard.pickCount() === 1, JSON.stringify(repNewState.panes.map((pane) => pane.workspaceId)));
+
+// 选择器打不开：说清是「选择器」的问题，这一格保持原样。
+const repFailBoard = await renderBoard(mod, { pickerThrows: true });
+const repFailPane = paneDom(repFailBoard.render().tree, 'pane-1');
+replaceMenuOf(repFailPane.tree).items[0].props.onClick();
+await settle();
+repFailPane.flush();
+check('替换时选择器打不开：报「无法打开文件夹选择器」', findAll(repFailPane.tree, (node) => typeof node.props.className === 'string'
+  && node.props.className.includes('dshSplitWs_paneError'))
+  .some((node) => JSON.stringify(node.children).includes('无法打开文件夹选择器')));
+check('替换时选择器打不开：这一格与整个棋盘都保持原样', (() => {
+  const state = repFailBoard.paneStore.getSnapshot();
+  return state.panes.length === 2 && state.panes[0].workspaceId === 'ws-a' && repFailBoard.createdWith.length === 0;
+})());
 
 report();

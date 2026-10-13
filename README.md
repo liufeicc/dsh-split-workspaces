@@ -13,7 +13,8 @@ that currently holds focus is marked by a brand-coloured title bar.
   clicking it switches the main area to the **multi-workspace tiled** panel.
 - The panel itself: at the top are `Add workspace` / `Even out` / `Close all`, below is the
   board — every pane has its own title bar (workspace name and path, the `Open directory`
-  icon, the `Split` icon, mode selector, session selector, close), and inside the pane it
+  icon, the `Replace workspace` icon, the `Split` icon, mode selector, session selector,
+  close), and inside the pane it
   reuses the shared `conversation.content` Factory (the `embedded` variant), mounted under an
   explicit `SessionProvider` binding, so each pane is a complete conversation (transcript,
   input box, streaming output).
@@ -33,6 +34,18 @@ that currently holds focus is marked by a brand-coloured title bar.
   the Host mapping, a file manager that will not start, a deployment with no session
   service, or no graphical environment at all are each spelled out in the pane's own error
   line (the localised reason first, the Host's original text appended as detail).
+- **The `Replace workspace` icon** (one per pane title bar, between `Open directory` and
+  `Split`): puts another workspace into **that pane**. The menu is the same shape as the
+  panel's `Add workspace` — a `New workspace…` row (reusing the very same folder picker and
+  registration) followed by the workspaces that are **not tiled yet**; a workspace already
+  tiled on the board is not a candidate (it is already in another pane — to exchange the two
+  places, drag a title bar, which does not reopen any conversation). After choosing one, the
+  **place stays**: the layout tree, the splitter ratios and the pane's neighbours do not move
+  by a single byte; only the workspace and the conversation inside are swapped. The old
+  workspace's session reference is therefore released, and the pane goes back to following the
+  new workspace's most recently updated session; the pane's staged Agent mode is kept (that is
+  a choice about the pane, not about the workspace). It is one icon per pane rather than one
+  button in the panel header so that "which pane?" never has to be asked.
 - **How tiling works**: `Add workspace` always attaches the new pane to the right edge of
   the whole board; the **split menu on each pane's title bar has two steps**: the first step
   picks a direction (left, right, up, down), the second step picks **the workspace to put
@@ -141,6 +154,15 @@ that currently holds focus is marked by a brand-coloured title bar.
   use, and after all workspaces are tiled there is still some workspace left to choose for
   splitting. The `Back` row shows the currently selected direction on its right, so the
   second step also shows which way this split is going.
+- **`Replace workspace` uses the very same candidates as `Add workspace`** (the model's
+  `unopenedWorkspaces`: the workspace list minus everything already tiled on the board), so the
+  ordering and the two "there is nothing to pick" sentences are identical in both places. Those
+  two cases are different situations: no workspace has ever been registered (that pane was just
+  grown by the folder picker) versus "every other workspace is tiled on the board" — what the
+  user can do about them differs. Already-tiled workspaces are deliberately absent from the
+  candidates: choosing one would mean "the same workspace occupies two panes", whereas the
+  intent here is "bring a different workspace in"; to exchange two panes use the title-bar
+  drag, which does not reopen conversations.
 - **`New workspace…` in the second step**: it is present even when no workspace has ever been
   registered, so the board can still grow its first pane. Clicking it opens the folder picker,
   and the chosen directory is registered as a workspace and switched into the new pane
@@ -332,7 +354,8 @@ the whole implementation.
   document-level `Alt+arrow keys` handling, delegating focus to the pane block's
   `focusPaneInput`).
 - `client.pane.js` — pane layer: `PaneFrame` (workspace title, the **open-directory button**,
-  split menu, mode, session, close) and the session reference it holds; the **drag-to-swap on
+  the **replace-workspace icon** — its menu contents and the `New workspace…` path — split
+  menu, mode, session, close) and the session reference it holds; the **drag-to-swap on
   the title bar** (pointer down grabs → the drag starts only past the threshold → hit testing
   finds the drop target → release swaps positions, plus "the click that just finished
   dragging no longer steals the caret"); plus the whole set of decisions for "lighting up a
@@ -340,14 +363,15 @@ the whole implementation.
   frame on pane close) and `focusPaneInput` (the `Alt+arrow keys` path uses it too).
 - `client.menu.js` — menu parts: `Popover` (including the controlled open switch),
   `MenuItem`, and the svg icons used in various places (the tile icon, the split icon, the
-  folder icon, the arrows).
+  folder icon, the replace icon, the arrows).
 - `client.model.js` — the pure model: the layout tree (split, collapse, balance, ratio
   clamping, **swapping the key of two leaves**), **pane geometry** (`layoutRects` converts
   the layout tree into rectangles, `neighborPane` finds the neighbour at "the corresponding
-  position" by rectangle), the pane store (including `swapPanes`), the drag threshold, the
-  "which session should be shown" decision, and the candidate workspaces for the split
-  menu's second step (`splitCandidates`); it does not depend on React and can be tested
-  directly in Node.
+  position" by rectangle), the pane store (including **`replaceWorkspace`** and `swapPanes`),
+  the drag threshold, the "which session should be shown" decision, and the candidate
+  workspaces for the split menu's second step (`splitCandidates`) and the "not tiled yet"
+  list both places share (`unopenedWorkspaces`); it does not depend on React and can be
+  tested directly in Node.
 - `client.presets.js` — Agent modes: read the Host roster, apply a mode, share a snapshot.
 - `client.styles.js` — the stylesheet and class names; colours only use theme tokens
   (`--dsw-*`).
@@ -367,7 +391,10 @@ the whole implementation.
   (`check` / `report`), installing the plugin as a "board with two panes", colour contrast
   (WCAG), and small helpers for finding panes and menus in the render output.
 - `test/layout-contract.mjs` — offline contract tests for tiling / focus highlight / the
-  two-step split menu (including `New workspace…`) (`node test/layout-contract.mjs`).
+  two-step split menu (including `New workspace…`) / **replace workspace** (the store changes
+  only that pane, the layout tree and the other panes are the same objects; the menu
+  candidates and the two "nothing to pick" sentences; both the `New workspace…` path and a
+  picker that will not open) (`node test/layout-contract.mjs`).
 - `test/drag-contract.mjs` — offline contract tests for the two kinds of dragging
   (`node test/drag-contract.mjs`): resizing with a splitter (including keyboard fine-tuning
   and double-click balance), and the whole chain of **drag-to-swap on the title bar**. The
@@ -396,6 +423,14 @@ the whole implementation.
   "caret ownership" depends on, see pitfall 5. It is not part of the offline tests (those five
   remain dependency-free); run it by hand before changing this code
   (`node tools/browser-probe.mjs`).
+- `tools/replace-probe.mjs` — a **real-browser** probe: on **its own** separate `dsh web`
+  (it does not touch the window you have open) it clicks through "Replace workspace" and
+  measures the three things the offline tests cannot answer — the icon button really opens the
+  menu, the menu really lists no already-tiled workspace, and after picking one the pane is
+  **still in place** (neither its rectangle nor its DOM node changed, meaning the contents
+  were replaced rather than the pane closed and reopened) — and leaves screenshots of the open
+  menu and of the result (`node tools/replace-probe.mjs`, about a minute;
+  `DSH_REPLACE_PROBE_URL` reuses a running service).
 - `tools/swap-probe.mjs` — a **real-browser** probe: it starts its own separate `dsh web`
   (without touching the window you have open) plus a headless Chrome, and really drags twice
   with **trusted mouse input** to measure three things the offline tests cannot answer — that
@@ -440,6 +475,13 @@ When you touch the "caret ownership" part, additionally run the real-browser pro
 node tools/browser-probe.mjs
 ```
 
+When you touch the "replace workspace" part, run the third real-browser probe (also requires
+`google-chrome` and `dsh`, about a minute; `DSH_REPLACE_PROBE_URL` reuses a running service):
+
+```bash
+node tools/replace-probe.mjs
+```
+
 When you touch the "drag to swap positions" part, run the other real-browser probe (requires
 `google-chrome` and `dsh`; it starts its own separate web service, about two minutes):
 
@@ -459,7 +501,12 @@ input box ④ drag-select a piece of text inside a pane → the selection must s
 pane that takes its place should take over the caret on the next frame ⑥ press and hold some
 pane's title bar, drag it onto another pane and release → the two panes swap positions and
 **neither conversation is reopened** (look before and after at whether the messages in the
-panes are still there and whether "Opening session…" flashes).
+panes are still there and whether "Opening session…" flashes) ⑦ with a spare workspace
+available, click the "Replace workspace" icon on one pane's title bar → the menu's first row
+is `New workspace…` and the rest are the workspaces that are not tiled yet; pick one → **that
+pane's place and size do not change**, only what is inside becomes the new workspace's
+conversation (the old conversation is gone and leaves nothing behind), and not a pixel of the
+other panes moves.
 
 ## License
 

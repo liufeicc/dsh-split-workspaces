@@ -298,7 +298,11 @@ window.__ModuleLoader__.load({
         }, [paneActions]);
 
         const openWorkspaceIds = useMemo(() => panes.map((pane) => pane.workspaceId), [panes]);
-        const addable = items.filter((item) => !openWorkspaceIds.includes(item.workspaceId));
+        /*
+         * 「还没铺开的工作区」：面板顶部的「添加工作区」与每个窗格标题栏的「替换工作区」
+         * 用的是同一份候选（`model.unopenedWorkspaces`），因此两处菜单的排序与措辞天然一致。
+         */
+        const addable = useMemo(() => model.unopenedWorkspaces(items, openWorkspaceIds), [items, openWorkspaceIds]);
 
         /** 分屏菜单第二步的候选：未铺开的在前，已铺开的标「已打开」。 */
         const splitChoices = useMemo(() => model.splitCandidates(items, openWorkspaceIds), [items, openWorkspaceIds]);
@@ -432,6 +436,12 @@ window.__ModuleLoader__.load({
             grow,
             workspace: workspaceById.get(pane.workspaceId),
             workspaceChoices: splitChoices,
+            /*
+             * 替换菜单的候选：还没铺开的工作区（`addable`），加上「一共注册了几个工作区」
+             * 这个数 —— 菜单要分开说「还没有工作区」与「别的工作区都铺开了」。
+             */
+            replaceChoices: addable,
+            workspaceCount: items.length,
             rows: plan === undefined ? [] : plan.rows,
             sessionId: plan === undefined ? undefined : plan.sessionId,
             summary: plan === undefined ? undefined : plan.summary,

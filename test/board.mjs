@@ -187,3 +187,17 @@ export function splitMenuOf(dom) {
   const items = findAll(rows, byName('MenuItem'));
   return { popover, rows, items, labels: items.map((item) => item.props.label) };
 }
+
+/**
+ * 一个窗格标题栏里的「替换工作区」菜单。
+ *
+ * 按元素的 `key === 'replace'` 找，不按 title 找：这个菜单的 title 是一句说明
+ * （「把这一格换成另一个工作区（位置不变）」），改文案不该让测试失效。
+ */
+export function replaceMenuOf(dom) {
+  const popover = findAll(dom, byName('Popover')).find((node) => node.props.key === 'replace');
+  if (popover === undefined) return undefined;
+  const rows = popoverRender(popover)(() => {});
+  const items = findAll(rows, byName('MenuItem'));
+  return { popover, rows, items, labels: items.map((item) => item.props.label) };
+}

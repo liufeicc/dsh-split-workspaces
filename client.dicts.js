@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
   factory() {
     const zh = {
       'panel.title': '多工作区平铺',
-      'panel.hint': '每个窗格一个工作区对话；窗格标题栏的“分屏”菜单先选方向、再选要放进新窗格的工作区，按住标题栏拖到另一个窗格上松手即可交换两格的位置，拖动分隔条改变大小，点击窗格即聚焦并把键盘光标接进它的输入框，Alt+方向键把焦点切到相应方向的窗格。',
+      'panel.hint': '每个窗格一个工作区对话；窗格标题栏的“分屏”菜单先选方向、再选要放进新窗格的工作区，“替换工作区”图标把这一格换成另一个还没铺开的工作区（位置不变），按住标题栏拖到另一个窗格上松手即可交换两格的位置，拖动分隔条改变大小，点击窗格即聚焦并把键盘光标接进它的输入框，Alt+方向键把焦点切到相应方向的窗格。',
       'panel.add': '添加工作区',
       'panel.newWorkspace': '新建工作区…',
       'panel.newWorkspaceHint': '选择文件夹',
@@ -33,6 +33,11 @@ window.__ModuleLoader__.load({
       'pane.creating': '正在创建…',
       'pane.switchSession': '切换会话',
       'pane.close': '关闭窗格',
+      'pane.replaceWorkspace': '替换工作区',
+      'pane.replaceHint': '把这一格换成另一个工作区（位置不变）',
+      'pane.replacing': '正在替换…',
+      'pane.replaceFailed': '替换工作区失败',
+      'pane.replaceAllOpen': '没有别的工作区可换了',
       'pane.openWorkspace': '打开工作区目录',
       'pane.openingWorkspace': '正在打开目录…',
       'pane.openFailed': '打开工作区目录失败',
@@ -74,7 +79,7 @@ window.__ModuleLoader__.load({
 
     const en = {
       'panel.title': 'Split workspaces',
-      'panel.hint': 'One workspace conversation per pane: the pane header’s Split menu asks for a direction and then for the workspace to put in the new pane; drag a header onto another pane and release to swap the two places, drag a divider to resize, click a pane to focus it and put the caret in its input, or press Alt+Arrow to focus the pane in that direction.',
+      'panel.hint': 'One workspace conversation per pane: the pane header’s Split menu asks for a direction and then for the workspace to put in the new pane; the Replace workspace icon swaps this pane to another workspace that is not tiled yet (the place stays); drag a header onto another pane and release to swap the two places, drag a divider to resize, click a pane to focus it and put the caret in its input, or press Alt+Arrow to focus the pane in that direction.',
       'panel.add': 'Add workspace',
       'panel.newWorkspace': 'New workspace…',
       'panel.newWorkspaceHint': 'Choose a folder',
@@ -96,6 +101,11 @@ window.__ModuleLoader__.load({
       'pane.creating': 'Creating…',
       'pane.switchSession': 'Switch session',
       'pane.close': 'Close pane',
+      'pane.replaceWorkspace': 'Replace workspace',
+      'pane.replaceHint': 'Put another workspace in this pane (the place stays)',
+      'pane.replacing': 'Replacing…',
+      'pane.replaceFailed': 'Replacing the workspace failed',
+      'pane.replaceAllOpen': 'No other workspace to swap in',
       'pane.openWorkspace': 'Open the workspace folder',
       'pane.openingWorkspace': 'Opening the folder…',
       'pane.openFailed': 'Opening the workspace folder failed',

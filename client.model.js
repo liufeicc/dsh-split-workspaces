@@ -80,6 +80,24 @@ window.__ModuleLoader__.load({
         .sort((left, right) => Number(left.open) - Number(right.open));
     }
 
+    /**
+     * 「还没铺在棋盘上」的工作区 —— 面板顶部「添加工作区」与窗格标题栏「替换工作区」
+     * 共用同一份候选。
+     *
+     * 两处刻意用同一份：这两个动作的意图都是「让一个**新**工作区出现在棋盘上」，
+     * 只是一个接在右边、一个替掉现有的一格。已经铺开的工作区因此都不在候选里 ——
+     * 想把已经铺开的两个工作区对调，用「拖动标题栏交换位置」那条路（它不重开对话）。
+     *
+     * 保持 Host 给的顺序（`filter` 是稳定的），于是菜单里的排列与侧边栏一致。
+     *
+     * @param items - 工作区列表（`workspaces.list` 快照的 `items`）。
+     * @param openWorkspaceIds - 已经铺在棋盘上的工作区 id。
+     */
+    function unopenedWorkspaces(items, openWorkspaceIds) {
+      const open = new Set(openWorkspaceIds ?? []);
+      return items.filter((item) => !open.has(item.workspaceId));
+    }
+
     /** 造一个叶子节点。 */
     function leafNode(paneKey) {
       return { type: 'leaf', paneKey };
@@ -471,6 +489,41 @@ window.__ModuleLoader__.load({
         },
 
         /**
+         * 把某个窗格换成另一个工作区 —— 「替换工作区」。
+         *
+         * 语义是**位置不变、内容换掉**：只改这一格的记录，布局树一个节点都不动
+         * （分隔条的层级与比例因此原样留着，窗格在屏幕上的位置也不变）。
+         *
+         * 三件事必须一起做，少一件都会留下半截状态：
+         *   1. `workspaceId` 换成新的；
+         *   2. `sessionId` 清成 null —— 不清的话 `resolvePaneSessionId` 会继续把这一格
+         *      钉在**旧工作区的那个会话**上（它还在，能解析出来），于是「工作区换了、
+         *      对话还是上一个工作区的」，看着就像替换没生效；
+         *   3. `follow` 归位成 true —— 与原「添加工作区」同一个语义：跟随新工作区
+         *      最近更新的会话（旧值可能是分屏新窗格的 false，那会让这一格空着等选）。
+         *
+         * 会话引用（`useSessionReference`）由 `sessionId` 的变化自然收尾：旧引用被释放，
+         * 新会话被持有 —— 用户要的「关闭原来的工作区」就是这一步，本存储不自己动引用。
+         *
+         * 暂存的模式（`preset`）**保留**：它是「这个窗格下一个会话用什么模式」的用户选择，
+         * 换工作区不该把它偷偷改回默认。
+         *
+         * @returns 真的换了返回 true；窗格不存在、或换的还是同一个工作区时返回 false
+         *   （两者都不产生新快照，调用方据此决定要不要报错）。
+         */
+        replaceWorkspace(key, workspaceId) {
+          const pane = snapshot.panes.find((candidate) => candidate.key === key);
+          if (pane === undefined || pane.workspaceId === workspaceId) return false;
+          publish({
+            ...snapshot,
+            panes: snapshot.panes.map((candidate) => (candidate.key === key
+              ? { ...candidate, workspaceId, sessionId: null, follow: true }
+              : candidate)),
+          });
+          return true;
+        },
+
+        /**
          * 交换两个窗格的**位置**：布局树里两个叶子的 key 互换，其余一切（工作区、
          * 会话、暂存模式、跟随标记）都跟着各自的窗格走。
          *
@@ -643,6 +696,7 @@ window.__ModuleLoader__.load({
       SPLIT_PLACEMENTS,
       splitPlacement,
       splitCandidates,
+      unopenedWorkspaces,
       leafNode,
       collectLeaves,
       countLeaves,

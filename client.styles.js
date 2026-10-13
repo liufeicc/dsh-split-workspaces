@@ -122,6 +122,18 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_menuItemActive{color:var(--dsw-alias-brand-primary)}',
       '.dshSplitWs_menuItemLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dshSplitWs_menuItemHint{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.dshSplitWs_menuItemCheck{flex:none;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-brand-primary)}',
+      // 「一行两件事」的菜单行（会话列表：左边切过去、右边删掉它）。
+      // 行容器只负责并排；`menuItem` 在行里改成「吃掉剩余宽度」，否则它自带的
+      // width:100% 会把删除按钮挤出可视区。
+      '.dshSplitWs_menuRow{display:flex;align-items:center;gap:2px}',
+      '.dshSplitWs_menuRow .dshSplitWs_menuItem{flex:1 1 auto;width:auto;min-width:0}',
+      // 删除按钮：平时是次要文字色（不抢会话名），悬停才亮成错误色 —— 破坏性动作的
+      // 颜色要在「准备按下去」时出现，而不是让一整列红图标把菜单变成警告牌。
+      // 底色与 menuItem 同一套算法（currentColor 调淡），两种主题都看得见。
+      '.dshSplitWs_menuDelete{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}',
+      '.dshSplitWs_menuDelete:hover{background:color-mix(in srgb,currentColor 8%,transparent);color:var(--dsw-alias-state-error-primary)}',
+      '.dshSplitWs_menuDelete:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
       '.dshSplitWs_menuNote{padding:7px 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
       '.dshSplitWs_glyph{display:block}',
     ].join('');
@@ -168,6 +180,9 @@ window.__ModuleLoader__.load({
       menuItemActive: 'dshSplitWs_menuItemActive',
       menuItemLabel: 'dshSplitWs_menuItemLabel',
       menuItemHint: 'dshSplitWs_menuItemHint',
+      menuItemCheck: 'dshSplitWs_menuItemCheck',
+      menuRow: 'dshSplitWs_menuRow',
+      menuDelete: 'dshSplitWs_menuDelete',
       menuNote: 'dshSplitWs_menuNote',
       glyph: 'dshSplitWs_glyph',
     };

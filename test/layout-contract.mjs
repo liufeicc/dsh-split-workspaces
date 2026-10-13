@@ -23,7 +23,7 @@ import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, re
 const here = dirname(fileURLToPath(import.meta.url));
 
 const mod = await loadBundle(join(here, '..', 'client.js'), { react: ReactStub });
-check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.presets.js,./client.menu.js,./client.pane.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
+check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.presets.js,./client.mcp.js,./client.menu.js,./client.pane.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
 const mods = await mod.test.chunks;
 check('每个代码块都按 loader 规则注册并导出自己的东西', typeof mods.styles.CSS === 'string' && typeof mods.styles.css.pane === 'string' && typeof mods.styles.cx === 'function'
   && typeof mods.dicts.zh['panel.title'] === 'string' && typeof mods.dicts.en['panel.title'] === 'string'

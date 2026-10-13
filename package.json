@@ -19,6 +19,7 @@
     "client.dicts.js",
     "client.model.js",
     "client.presets.js",
+    "client.mcp.js",
     "client.menu.js",
     "client.pane.js",
     "client.view.js",

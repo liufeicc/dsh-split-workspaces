@@ -46,6 +46,24 @@ that currently holds focus is marked by a brand-coloured title bar.
   new workspace's most recently updated session; the pane's staged Agent mode is kept (that is
   a choice about the pane, not about the workspace). It is one icon per pane rather than one
   button in the panel header so that "which pane?" never has to be asked.
+- **Every row of the `Switch session` dropdown carries its own delete button** (the trash
+  icon at the end of the row): it permanently deletes **that row's** session, which need not
+  be the one this pane is currently showing. That is exactly why it is per row instead of one
+  button at the bottom of the menu: the menu is a list of sessions, and the one a user wants
+  to clear is usually a **different** row — a single bottom button would first make them
+  reason about "which one does it delete?". Deletion itself is not implemented here: this
+  plugin hands "which row, under what name" to the **confirmation dialog** that
+  `dsh-session-delete` already ships (the `sessionDeleteUi` service that plugin's Client half
+  publishes with `ctx.provide`; this plugin resolves it **lazily** with `ctx.get` at click
+  time, the same pattern as the MCP policy service). So the confirmation, the "a running
+  session has to be stopped first" branch, and the Session-list bookkeeping all exist exactly
+  once. After a successful deletion this plugin lets go of **every** pane pinned to that
+  session (the same session can be displayed in several panes — a following pane
+  automatically picks the workspace's most recently updated session): a following pane falls
+  back to the newest remaining session in its workspace, while a pane whose session the user
+  picked by hand goes back to its "pick a session / new session" empty state. Without
+  `dsh-session-delete` the button is still there and says so in the pane's error line instead
+  of pretending the deletion happened.
 - **How tiling works**: `Add workspace` always attaches the new pane to the right edge of
   the whole board; the **split menu on each pane's title bar has two steps**: the first step
   picks a direction (left, right, up, down), the second step picks **the workspace to put
@@ -347,7 +365,11 @@ the whole implementation.
   menu / pane / view), registers the slot, injects the styles, registers `Alt+arrow keys` as
   the framework's fixed shortcut and installs its keyboard handling on the document; it also
   provides `openWorkspaceDirectory(path)` (going through
-  `remote.session.openWorkspacePath`) for the pane's "Open directory" button.
+  `remote.session.openWorkspacePath`) for the pane's "Open directory" button, and
+  `requestSessionDelete(sessionId, displayTitle)` — it lazily resolves `dsh-session-delete`'s
+  `sessionDeleteUi` service, hands "delete this row" to that plugin's confirmation dialog,
+  and on success releases every pane pinned to that session with
+  `paneStore.forgetSession`.
 - `client.view.js` — board layer: `Splitter` (the splitter bar), `PaneBody` (the conversation
   inside a pane), `SplitPanel` (renders panes and splitters from the layout tree, the panel's
   top actions, and the "on screen" marker on the board root node), `installPaneKeys` (the
@@ -355,19 +377,24 @@ the whole implementation.
   `focusPaneInput`).
 - `client.pane.js` — pane layer: `PaneFrame` (workspace title, the **open-directory button**,
   the **replace-workspace icon** — its menu contents and the `New workspace…` path — split
-  menu, mode, session, close) and the session reference it holds; the **drag-to-swap on
+  menu, mode, session (**every row ends with a delete button**), close) and the session
+  reference it holds; the **drag-to-swap on
   the title bar** (pointer down grabs → the drag starts only past the threshold → hit testing
   finds the drop target → release swaps positions, plus "the click that just finished
   dragging no longer steals the caret"); plus the whole set of decisions for "lighting up a
   pane hands over the caret" (excluding controls, giving way to a selection, waiting one
   frame on pane close) and `focusPaneInput` (the `Alt+arrow keys` path uses it too).
 - `client.menu.js` — menu parts: `Popover` (including the controlled open switch),
-  `MenuItem`, and the svg icons used in various places (the tile icon, the split icon, the
-  folder icon, the replace icon, the arrows).
+  `MenuItem`, `MenuDeleteButton` (the icon button at the end of a menu row: it sits **beside**
+  a `MenuItem`, never inside it, because a `MenuItem` is itself a `<button>` and a button
+  inside a button is invalid HTML), and the svg icons used in various places (the tile icon,
+  the split icon, the folder icon, the replace icon, the check mark, the trash can, the
+  arrows).
 - `client.model.js` — the pure model: the layout tree (split, collapse, balance, ratio
   clamping, **swapping the key of two leaves**), **pane geometry** (`layoutRects` converts
   the layout tree into rectangles, `neighborPane` finds the neighbour at "the corresponding
-  position" by rectangle), the pane store (including **`replaceWorkspace`** and `swapPanes`),
+  position" by rectangle), the pane store (including **`replaceWorkspace`**, `swapPanes` and
+  **`forgetSession`** — releasing every pane pinned to a session id in one step),
   the drag threshold, the "which session should be shown" decision, and the candidate
   workspaces for the split menu's second step (`splitCandidates`) and the "not tiled yet"
   list both places share (`unopenedWorkspaces`); it does not depend on React and can be
@@ -410,6 +437,10 @@ the whole implementation.
   (`node test/focus-contract.mjs`).
 - `test/preset-contract.mjs` — offline contract tests for the mode selector
   (`node test/preset-contract.mjs`).
+- `test/mcp-contract.mjs` — offline contract tests for the MCP switches
+  (`node test/mcp-contract.mjs`): the degraded branch, the optimistic update and its
+  rollback, and the checkbox state and per-workspace write-back on the **really rendered**
+  pane title bar.
 - `test/open-contract.mjs` — offline contract tests for "opening the workspace directory with
   the file manager" (`node test/open-contract.mjs`): `remote.session` is replaced by a
   recording stand-in, so what is asserted are the calls the plugin **really makes** — first
@@ -418,9 +449,17 @@ the whole implementation.
   service, no graphical environment, the path fails validation, the open command fails, the
   connection dropped) actually says. The button's own structure, key, position and "disabled
   when the workspace is unknown" are here too.
+- `test/delete-contract.mjs` — offline contract tests for **deleting row by row** in the
+  `Switch session` dropdown (`node test/delete-contract.mjs`): one delete button per row, the
+  two buttons side by side rather than nested, the button's label carrying **that row's**
+  session name, a click closing the menu and handing `sessionId` / `displayTitle` to
+  `sessionDeleteUi` (a stand-in lives in `ctx.get`, so the real lazy-resolution path is
+  exercised), a click alone not touching pane state, the pane's error line spelling out "the
+  delete service is missing" when it is, and `forgetSession` releasing **every** pane pinned
+  to the deleted session.
 - `tools/browser-probe.mjs` — a **real-browser** probe (requires a local `google-chrome`): it
   uses CDP trusted mouse input to measure, one by one, the browser default behaviours that
-  "caret ownership" depends on, see pitfall 5. It is not part of the offline tests (those five
+  "caret ownership" depends on, see pitfall 5. It is not part of the offline tests (those
   remain dependency-free); run it by hand before changing this code
   (`node tools/browser-probe.mjs`).
 - `tools/replace-probe.mjs` — a **real-browser** probe: on **its own** separate `dsh web`
@@ -457,7 +496,7 @@ otherwise the browser will neither reload nor drop the cached old version:
 touch client.js
 ```
 
-When changing behaviour, also run the five offline tests (dependency-free, on the order of
+When changing behaviour, also run every offline test (dependency-free, on the order of
 seconds):
 
 ```bash
@@ -466,6 +505,8 @@ node test/drag-contract.mjs
 node test/focus-contract.mjs
 node test/preset-contract.mjs
 node test/open-contract.mjs
+node test/mcp-contract.mjs
+node test/delete-contract.mjs
 ```
 
 When you touch the "caret ownership" part, additionally run the real-browser probe (requires

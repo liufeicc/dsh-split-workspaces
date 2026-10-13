@@ -257,11 +257,12 @@ window.__ModuleLoader__.load({
 
       /** 整块棋盘。 */
       function SplitPanel(props) {
-        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, agentPresets } = props;
+        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets } = props;
         const paneState = useSource(paneStore);
         const workspaceState = useSource(workspaces.list);
         const sessionState = useSource(sessionList);
         const presetState = useSource(presetStore);
+        const mcpState = useSource(mcpStore);
         const items = workspaceState.items;
         const archivedSessionIds = workspaceState.archivedSessionIds;
         const panes = paneState.panes;
@@ -295,6 +296,10 @@ window.__ModuleLoader__.load({
 
         useEffect(() => {
           paneActions.loadPresets();
+        }, [paneActions]);
+
+        useEffect(() => {
+          paneActions.loadMcp();
         }, [paneActions]);
 
         const openWorkspaceIds = useMemo(() => panes.map((pane) => pane.workspaceId), [panes]);
@@ -458,9 +463,14 @@ window.__ModuleLoader__.load({
             createWorkspaceFromDirectory,
             describeAddError,
             openWorkspaceDirectory,
+            requestSessionDelete,
             agentPresets,
             presetOptions,
             presetDefaultId,
+            mcpServers: mcpState.servers,
+            mcpStatus: mcpState.status,
+            mcpError: mcpState.error,
+            mcpByWorkspace: mcpState.byWorkspace,
             SessionProvider,
             renderSlot,
           });

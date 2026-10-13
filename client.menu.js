@@ -143,18 +143,73 @@ window.__ModuleLoader__.load({
             : null);
       }
 
-      /** 弹出菜单里的一行。 */
-      function MenuItem({ label, hint, active, onClick }) {
+      /**
+       * 勾选标记：多选菜单用（本面板的 MCP 开关）。画法与其它图标同一套
+       * （视框小、`stroke: currentColor`），焦点窗格标题栏上的白字配色自动继承。
+       */
+      function CheckGlyph() {
+        return h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true, className: css.glyph },
+          h('path', { d: 'M3.5 8.5 6.5 11.5 12.5 4.5', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round' }));
+      }
+
+      /**
+       * 垃圾桶图标：会话菜单里每行末尾那个「删除这个会话」按钮。
+       *
+       * 画法与另外几个图标同一套（16×16 视框、`stroke: currentColor`），因此按钮自己
+       * 的配色（平时次要文字色、悬停危险色）直接生效，不必为图标单写一条样式。
+       * 画成开盖 + 三条竖线，与侧边栏「…」菜单里那个删除是同一种东西，用户认得。
+       */
+      function TrashGlyph() {
+        return h('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true, className: css.glyph },
+          h('path', {
+            d: 'M3 5h10M6.5 5V3.5h3V5M5 5l.6 8h4.8L11 5M6.8 7.4v4M9.2 7.4v4',
+            stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round',
+          }));
+      }
+
+      /**
+       * 菜单行末尾的图标按钮：删除这一行代表的那个东西。
+       *
+       * 为什么单独一个组件、而不是复用 `MenuItem`：`MenuItem` 是 `<button>`，而它要放在
+       * 一行可点击的会话项**旁边**。一个按钮里套一个按钮是无效 HTML，浏览器会把里面那个
+       * 拆到外面，点击落在谁身上就说不准了。所以两者平级，由调用方放进一个行容器
+       * （`css.menuRow`）里；这里只管「长什么样、点了回调谁」。
+       *
+       * `label` 同时用作 `title` 与 `aria-label`：按钮里只有图标，读屏与悬停提示都得靠它，
+       * 而调用方给的是一整句带会话名的说明（「删除会话“xxx”」），因此不同行不会混淆。
+       */
+      function MenuDeleteButton({ label, onClick }) {
         return h('button', {
           type: 'button',
           role: 'menuitem',
+          className: cx(css.menuDelete),
+          title: label,
+          'aria-label': label,
+          onClick,
+        }, TrashGlyph());
+      }
+
+      /**
+       * 弹出菜单里的一行。
+       *
+       * `checked` 给多选菜单用：传了（true/false 都算）就渲染一个勾选位，
+       * 未勾选时**占位保留**，否则勾来勾去整行文字会左右跳。不传则是原来的单选语义。
+       */
+      function MenuItem({ label, hint, active, checked, onClick }) {
+        return h('button', {
+          type: 'button',
+          role: checked === undefined ? 'menuitem' : 'menuitemcheckbox',
+          'aria-checked': checked === undefined ? undefined : checked === true,
           className: cx(css.menuItem, active && css.menuItemActive),
           onClick,
         },
+          checked === undefined
+            ? null
+            : h('span', { className: css.menuItemCheck, 'aria-hidden': true }, checked === true ? CheckGlyph() : null),
           h('span', { className: css.menuItemLabel, title: label }, label),
           hint === undefined ? null : h('span', { className: css.menuItemHint }, hint));
       }
-      return { Chevron, PanelIcon, SplitGlyph, FolderGlyph, ReplaceGlyph, Popover, MenuItem };
+      return { Chevron, PanelIcon, SplitGlyph, FolderGlyph, ReplaceGlyph, CheckGlyph, TrashGlyph, Popover, MenuItem, MenuDeleteButton };
     }
 
     return { createMenu };

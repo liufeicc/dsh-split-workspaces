@@ -201,3 +201,23 @@ export function replaceMenuOf(dom) {
   const items = findAll(rows, byName('MenuItem'));
   return { popover, rows, items, labels: items.map((item) => item.props.label) };
 }
+
+/**
+ * 一个窗格标题栏里的「切换会话」菜单：会话行（行内左半是会话项、右半是删除按钮）、
+ * 每个会话行末尾那个删除按钮，以及「新建会话」那一项。
+ *
+ * 按元素的 `key === 'session'` 找，理由与 replace 那个一样：title 是说明文字
+ * （「切换会话」），不是识别标识。
+ *
+ * @param dom - 窗格的渲染树。
+ * @param close - 传给菜单 children 渲染函数的关闭函数；测试用它断言「点一下先关菜单」。
+ */
+export function sessionMenuOf(dom, close = () => {}) {
+  const popover = findAll(dom, byName('Popover')).find((node) => node.props.key === 'session');
+  if (popover === undefined) return undefined;
+  const rows = popoverRender(popover)(close);
+  const items = findAll(rows, byName('MenuItem'));
+  const rowNodes = findAll(rows, (node) => typeof node.props.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_menuRow'));
+  const deletes = findAll(rows, byName('MenuDeleteButton'));
+  return { popover, rows, items, rowNodes, deletes };
+}

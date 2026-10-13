@@ -595,6 +595,33 @@ window.__ModuleLoader__.load({
           });
         },
 
+        /**
+         * 松开所有钉在某个会话上的窗格 —— 那个会话已经被永久删除了。
+         *
+         * 为什么不是「删它的那个窗格自己清一下」：同一个会话可以同时显示在好几格上
+         * （跟随型窗格会自动选中本工作区最新的会话，于是很可能与旁边那一格是同一段
+         * 对话），而 `resolvePaneSessionId` 对「钉住的会话已经不在会话表里」是**照样
+         * 返回它**（那一条是给刚建、还没来得及进列表的会话留的）。所以只清自己那一格，
+         * 别的格子会一直指着一个已经不存在的会话，面板就卡在「正在打开会话…」。
+         * 在这里按会话 id 一次清干净，调用方是谁都不影响结果。
+         *
+         * `follow` 刻意不动：跟随型窗格随即回退到本工作区最新的会话（那是它的本分），
+         * 而用户亲手选过会话的分屏窗格回到「选择会话 / 新建会话」的空态 —— 空态问的
+         * 正是「接下来看哪个」，比替用户随手挑一段新对话诚实。
+         *
+         * @param sessionId - 已经被删除的会话 id。
+         * @returns 真的改动了快照返回 true；没有任何窗格钉着它时返回 false。
+         */
+        forgetSession(sessionId) {
+          if (sessionId === null || sessionId === undefined) return false;
+          if (!snapshot.panes.some((pane) => pane.sessionId === sessionId)) return false;
+          publish({
+            ...snapshot,
+            panes: snapshot.panes.map((pane) => (pane.sessionId === sessionId ? { ...pane, sessionId: null } : pane)),
+          });
+          return true;
+        },
+
         /** 记下该窗格下次新建会话要用的模式；null 表示跟随 Host 默认值。 */
         setPreset(key, preset) {
           publish({

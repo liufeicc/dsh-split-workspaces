@@ -17,6 +17,11 @@
  * 工作区（`replaceChoices` 由视图块算好传下来），选中后调 `replaceWorkspace` ——
  * 那一格的**位置**不动，只换里面的工作区与对话。
  *
+ * 「切换会话」下拉里除了「新建会话」与会话列表，每一行末尾还有一个「删除会话」按钮。
+ * 删除本身不在这里实现：入口块惰性解析 `@local/dsh-session-delete` 的客户端服务入口，
+ * 把「哪一行、叫什么名字」交给它那扇确认弹窗（见 `requestSessionDelete`）。删成功后
+ * 窗格怎么收场也由入口块决定 —— 把钉着这个会话的窗格全部松开。
+ *
  * 依赖由入口块注入（DSH 的包内代码块之间不能互相 require）：
  * createPane({ css, cx, errorText, model, presets, menu, paneSlot })。
  *
@@ -41,7 +46,7 @@ window.__ModuleLoader__.load({
      * @param deps.paneSlot - 本插件声明的窗格子槽位名（对话本体挂在这里）。
      */
     function createPane({ css, cx, errorText, model, presets, menu, paneSlot }) {
-      const { SplitGlyph, FolderGlyph, ReplaceGlyph, Popover, MenuItem } = menu;
+      const { SplitGlyph, FolderGlyph, ReplaceGlyph, Popover, MenuItem, MenuDeleteButton } = menu;
       /** 分屏方向 → 词典键，四行菜单的文案。 */
       const SPLIT_LABEL_KEYS = {
         left: 'pane.splitLeft',
@@ -230,7 +235,7 @@ window.__ModuleLoader__.load({
       }
 
       /** 一个窗格：标题栏 + 共享的 Conversation Factory。 */
-      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, agentPresets, presetOptions, presetDefaultId, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
+      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
@@ -306,6 +311,28 @@ window.__ModuleLoader__.load({
               setBusy(false);
             });
         }, [workspace, busy, uiWorkspace, paneActions, pane.key, pane.preset, agentPresets, t]);
+
+        /**
+         * 删除会话列表里的某一项 —— 不必是当前显示的那一个。
+         *
+         * 真正动手的是 `@local/dsh-session-delete` 的确认弹窗（入口块惰性解析后把入口
+         * 当成 `requestSessionDelete` 交下来）：永久删除是不可恢复的破坏性操作，确认、
+         * 「运行中先停止」、删完通知会话列表这几件事都在那一份实现里，这里只负责把
+         * 「哪一行、叫什么名字」告诉它。删成功之后怎么收场由入口块那边决定
+         * （把钉着这个会话的窗格全部松开），窗格这一层不需要知道。
+         *
+         * 服务不在（没装那个插件、或它的客户端半边没挂上）时**不假装删掉了**：在窗格
+         * 自己的错误行里说清楚 —— 与「打开工作区目录」那条路同一个处理方式。
+         *
+         * @param targetId - 要删除的会话 id。
+         * @param displayTitle - 它的显示名，用于确认框；可以是 undefined。
+         */
+        const requestDeleteSession = useCallback((targetId, displayTitle) => {
+          if (targetId === undefined || targetId === null) return;
+          setError(null);
+          if (typeof requestSessionDelete === 'function' && requestSessionDelete(targetId, displayTitle) === true) return;
+          setError(t('pane.deleteUnavailable'));
+        }, [requestSessionDelete, t]);
 
         /**
          * 用系统文件管理器打开这个窗格的工作区目录。
@@ -752,6 +779,62 @@ window.__ModuleLoader__.load({
             })),
           ]));
         }
+        /*
+         * MCP 工具开关：**按工作区**共享。
+         *
+         * 与上面那个「模式」控件的区别是本质的：模式是每窗格暂存、每会话生效；
+         * MCP 可见性是宿主按会话 cwd 施加的策略，所以同一工作区的所有窗格读的是
+         * 同一份选择 —— 在这里勾一下，别的工作区窗格不受影响、同工作区的立刻跟着变。
+         *
+         * 点击**不关闭**菜单：多选要能连着勾几项。
+         */
+        if (mcpStatus === 'ready' || mcpStatus === 'empty' || mcpStatus === 'error') {
+          const workspacePath = workspace === undefined ? undefined : workspace.path;
+          const mcpMap = mcpByWorkspace === undefined || mcpByWorkspace === null ? {} : mcpByWorkspace;
+          const selectedMcp = workspacePath === undefined || !Array.isArray(mcpMap[workspacePath]) ? [] : mcpMap[workspacePath];
+          headChildren.push(h(Popover, {
+            key: 'mcp',
+            label: selectedMcp.length === 0 ? t('pane.mcp') : t('pane.mcp') + ' ' + selectedMcp.length,
+            title: t('pane.mcpHint'),
+            align: 'end',
+            onOpenChange: (next) => {
+              /*
+               * 打开时若状态不健康就重读一次：让「面板启动那一刻策略服务还没挂上」
+               * 或一次瞬时失败能够自愈。否则这块面板会一直挂着错误，用户只能刷新页面。
+               * 已经 ready/empty 时不重读，免得每次开菜单都打一次远端。
+               */
+              if (next === true && mcpStatus !== 'ready' && mcpStatus !== 'empty') paneActions.loadMcp();
+            },
+          }, () => [
+            h('div', { key: 'note', className: css.menuNote }, t('pane.mcpNote')),
+            ...(mcpStatus === 'error' && mcpError !== null && mcpError !== undefined
+              ? [h('div', { key: 'err', className: css.menuNote }, t('pane.mcpFailed') + ': ' + mcpError)]
+              : []),
+            ...(mcpServers.length === 0
+              ? [h('div', { key: 'empty', className: css.menuNote }, t('pane.mcpEmpty'))]
+              : mcpServers.map((server) => {
+                  const on = selectedMcp.includes(server.name);
+                  return h(MenuItem, {
+                    key: server.name,
+                    label: server.name,
+                    hint: String(server.tools),
+                    checked: on,
+                    onClick: () => {
+                      if (workspacePath === undefined) return;
+                      const next = on
+                        ? selectedMcp.filter((name) => name !== server.name)
+                        : [...selectedMcp, server.name];
+                      setError(null);
+                      Promise.resolve(paneActions.setMcpSelection(workspacePath, next)).then((result) => {
+                        if (result !== undefined && result !== null && result.ok === false) {
+                          setError(t('pane.mcpFailed') + ': ' + result.reason);
+                        }
+                      });
+                    },
+                  });
+                })),
+          ]));
+        }
         headChildren.push(h(Popover, {
           key: 'session',
           label: sessionLabel,
@@ -767,16 +850,38 @@ window.__ModuleLoader__.load({
               createSession();
             },
           }),
-          ...rows.map((row) => h(MenuItem, {
-            key: row.id,
-            label: row.displayTitle === undefined || row.displayTitle === '' ? t('pane.untitled') : row.displayTitle,
-            hint: row.blank === true ? t('pane.blank') : (row.running === true ? t('pane.running') : undefined),
-            active: row.id === sessionId,
-            onClick: () => {
-              close();
-              paneActions.setSession(pane.key, row.id);
-            },
-          })),
+          ...rows.map((row) => {
+            const label = row.displayTitle === undefined || row.displayTitle === '' ? t('pane.untitled') : row.displayTitle;
+            /*
+             * 每个会话一行，行尾一个垃圾桶按钮：左边那半还是「切到这个会话」，
+             * 右边那半是「永久删掉它」。
+             *
+             * 为什么删除做在**每一行**上，而不是菜单底部一个「删除会话」：菜单里摆的就是
+             * 一列会话，「删哪一个」在那一行上问最直接。底部放一个按钮，用户得先自己
+             * 推出「它删的是我正看着的那一个」—— 而他想清的往往正是**别的**那一行。
+             *
+             * 两个按钮必须平级：`MenuItem` 自己就是 <button>，把图标按钮塞进去是无效
+             * HTML（浏览器会把内层拆到外面），点击落到谁身上就说不准了。
+             */
+            return h('div', { key: row.id, className: css.menuRow },
+              h(MenuItem, {
+                label,
+                hint: row.blank === true ? t('pane.blank') : (row.running === true ? t('pane.running') : undefined),
+                active: row.id === sessionId,
+                onClick: () => {
+                  close();
+                  paneActions.setSession(pane.key, row.id);
+                },
+              }),
+              // 会话名进按钮的提示语：一列里好几个垃圾桶，只靠位置分不清删的是哪一个。
+              h(MenuDeleteButton, {
+                label: t('pane.deleteSessionNamed', { title: label }),
+                onClick: () => {
+                  close();
+                  requestDeleteSession(row.id, row.displayTitle);
+                },
+              }));
+          }),
         ]));
         headChildren.push(h('button', {
           key: 'close',

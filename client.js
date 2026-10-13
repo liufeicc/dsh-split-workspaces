@@ -55,6 +55,21 @@ window.__ModuleLoader__.load({
     const SESSION_REMOTE_KEY = 'remote.session';
 
     /**
+     * 「删除一个会话」的客户端服务键，由 `@local/dsh-session-delete` 的客户端半边用
+     * `ctx.provide` 发布，形状是 `{ request({ sessionId, displayTitle, onDeleted }) }`。
+     *
+     * 与上面那个 Session 命名空间、以及 MCP 策略服务一样，它**不能**写进本插件的
+     * inject 列表：inject 是「本插件激活的前置条件」，而提供方是另一个插件的客户端
+     * 半边，写进去就成了先有鸡还是先有蛋。因此只在用户真的点了「删除会话」时用
+     * `ctx.get` 惰性解析一次；取不到就明说「删除功能还没准备好」，而不是假装删掉了。
+     *
+     * 为什么删除要绕道那个插件的服务、而不是本插件直接调 `remote.sessionDelete`：
+     * 永久删除不是一次远端调用就完了 —— 确认、运行中先停止、删完通知会话列表都在那扇
+     * 窗后面。这是一条不可恢复的破坏性操作，实现只该有一份。
+     */
+    const SESSION_DELETE_UI_KEY = 'sessionDeleteUi';
+
+    /**
      * `openWorkspacePath` 的失败码 → 词典键。
      *
      * 三个码是网关/控制器自己给的：路径验不过（`bad-request`）、底层打开命令失败
@@ -106,6 +121,7 @@ window.__ModuleLoader__.load({
       './client.dicts.js',
       './client.model.js',
       './client.presets.js',
+      './client.mcp.js',
       './client.menu.js',
       './client.pane.js',
       './client.view.js',
@@ -123,7 +139,7 @@ window.__ModuleLoader__.load({
         return Promise.reject(new Error('client module loader 不支持包内代码块（require.async 缺失）'));
       }
       return Promise.all(CHUNK_FILES.map((file) => require.async(file)))
-        .then(([styles, dicts, model, presets, menu, pane, view]) => ({ styles, dicts, model, presets, menu, pane, view }));
+        .then(([styles, dicts, model, presets, mcp, menu, pane, view]) => ({ styles, dicts, model, presets, mcp, menu, pane, view }));
     }
 
     /** 本次插件实例的代码块装载（每个 factory 执行一次）。 */
@@ -182,6 +198,12 @@ window.__ModuleLoader__.load({
       const paneStore = mods.model.createPaneStore();
       const agentPresets = ctx.remote.agentPresets;
       const presetStore = mods.presets.createPresetStore(agentPresets);
+      /*
+       * MCP 策略服务由 @local/dsh-mcp-workspace-policy 的客户端半边挂载，**不能**写进
+       * 本插件的 inject 列表（那时它还没挂上，会形成先有鸡还是先有蛋）；因此惰性解析：
+       * 每次需要时才 ctx.get 一次，取不到就按「没就绪」静默处理。
+       */
+      const mcpStore = mods.mcp.createMcpStore(() => ctx.get(mods.mcp.MCP_REMOTE_KEY));
       /** 交给组件层的动作集合：组件只调这里，不直接碰存储内部。 */
       const paneActions = {
         addPane: (workspaceId, sessionId) => paneStore.addPane(workspaceId, sessionId),
@@ -191,17 +213,21 @@ window.__ModuleLoader__.load({
         removePane: (key) => paneStore.removePane(key),
         closeAll: () => paneStore.closeAll(),
         setSession: (key, sessionId) => paneStore.setSession(key, sessionId),
+        forgetSession: (sessionId) => paneStore.forgetSession(sessionId),
         setPreset: (key, preset) => paneStore.setPreset(key, preset),
         setActive: (key) => paneStore.setActive(key),
         setRatio: (splitId, ratio) => paneStore.setRatio(splitId, ratio),
         balance: () => paneStore.balance(),
         ensureInitialized: (currentWorkspaceId, workspaceIds) => paneStore.ensureInitialized(currentWorkspaceId, workspaceIds),
         loadPresets: () => presetStore.load(),
+        loadMcp: () => mcpStore.load(),
+        setMcpSelection: (workspacePath, selected) => mcpStore.setSelection(workspacePath, selected),
       };
 
       // 连接重建后 Host 的模式清单可能变了，重新读一次。
       ctx.effect(() => ctx.on('connection/reset', () => {
         presetStore.load();
+        mcpStore.load();
       }), 'split-workspaces: preset roster refresh');
 
       /**
@@ -258,6 +284,33 @@ window.__ModuleLoader__.load({
         }
         if (result.ok === true) return { ok: true };
         return { ok: false, reason: openFailureText(result.error, t) };
+      };
+
+      /**
+       * 请求删除一个会话：交给 `@local/dsh-session-delete` 已经装好的确认弹窗。
+       *
+       * 这里只做三件事，而且都是**同步**的（点一下按钮就出确认框，不该有一次远端往返的
+       * 等待）：惰性取一次服务入口、把请求转给它、顺手挂上「删成功之后」的收尾。
+       *
+       * 收尾为什么是 `paneStore.forgetSession` 而不是「清掉发起删除的那一格」：同一个
+       * 会话可能同时显示在好几格上（跟随型窗格会自动选中本工作区最新的会话），而
+       * `resolvePaneSessionId` 对「钉住的会话已经不在会话表里」照样返回它。按会话 id
+       * 一次松开所有窗格，删除之后才不会有格子卡在「正在打开会话…」。
+       *
+       * @param sessionId - 要删除的会话 id。
+       * @param displayTitle - 它的显示名，给确认框用；可以是 undefined。
+       * @returns 确认框是否已经弹出；服务不在时返回 false，由窗格在自己的错误行里说明。
+       */
+      const requestSessionDelete = (sessionId, displayTitle) => {
+        const ui = ctx.get(SESSION_DELETE_UI_KEY);
+        if (ui === undefined || ui === null || typeof ui.request !== 'function') return false;
+        return ui.request({
+          sessionId,
+          displayTitle,
+          onDeleted: (deletedId) => {
+            paneStore.forgetSession(deletedId === undefined ? sessionId : deletedId);
+          },
+        }) === true;
       };
 
       /*
@@ -322,12 +375,14 @@ window.__ModuleLoader__.load({
           paneStore,
           paneActions,
           presetStore,
+          mcpStore,
           agentPresets,
           sessions: ctx.sessions,
           sessionList: ctx.sessions.list,
           workspaces: ctx.workspaces,
           uiWorkspace: ctx.uiWorkspace,
           openWorkspaceDirectory,
+          requestSessionDelete,
         }),
       }, view.SplitPanel)), 'split-workspaces: main panel');
     }
@@ -345,6 +400,7 @@ window.__ModuleLoader__.load({
         PANE_FOCUS_SHORTCUTS,
         loadChunks,
         SESSION_REMOTE_KEY,
+        SESSION_DELETE_UI_KEY,
         OPEN_ERROR_KEYS,
         openFailureText,
       },

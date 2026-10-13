@@ -131,6 +131,17 @@ export function mount(component, props) {
       }
       return instance.tree;
     },
+    /**
+     * 换一份 props 后重渲染，模拟「父组件传下了新值」。
+     *
+     * 插件的注入面是每次注册时算一次的快照，因此测试要覆盖「一开始没有删除服务、
+     * 后来有了」这类变化，就必须能像真实父组件那样再传一份 props 下来。
+     */
+    updateProps(next) {
+      instance.props = next;
+      instance.render();
+      return instance.tree;
+    },
     /** 在仍有挂起的状态变更时重渲染。 */
     flush() {
       let guard = 0;
@@ -218,7 +229,16 @@ export function createStubContext({ presets = [], respond } = {}) {
         dictionary = dict.zh;
         return () => {};
       },
-      bind: () => (key) => (dictionary[key] === undefined ? key : dictionary[key]),
+      /**
+       * `t(key)` / `t(key, params)`：把词典里那条文案取出来，并按真实框架的
+       * `{name}` 语法替换参数。参数替换照做而不是忽略，是因为「会话名有没有跟着
+       * 按钮走」正是删除这类逐行按钮要断言的东西；忽略参数会让那种断言变成空话。
+       */
+      bind: () => (key, params) => {
+        const template = dictionary[key] === undefined ? key : dictionary[key];
+        if (params === undefined || params === null) return template;
+        return template.replace(/\{(\w+)\}/g, (match, name) => (params[name] === undefined ? match : String(params[name])));
+      },
     },
     slots: {
       inject: (_key, callback) => {

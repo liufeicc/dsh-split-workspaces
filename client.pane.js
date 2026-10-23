@@ -817,7 +817,12 @@ window.__ModuleLoader__.load({
                   return h(MenuItem, {
                     key: server.name,
                     label: server.name,
-                    hint: String(server.tools),
+                    /*
+                     * 与全局 server 一样只显示工具数。会话级 server 的工具数由宿主从
+                     * 挂载了它的活会话里数出来；如果一个都没有（刚重启、还没勾选过），
+                     * 宿主报 null —— 这时**不显示**这一个数，而不是显示 "null"。
+                     */
+                    hint: server.tools === null || server.tools === undefined ? undefined : String(server.tools),
                     checked: on,
                     onClick: () => {
                       if (workspacePath === undefined) return;

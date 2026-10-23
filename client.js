@@ -407,3 +407,11 @@ window.__ModuleLoader__.load({
     };
   },
 });
+
+/*
+ * 2026-10-23：MCP 菜单支持「会话级」server（cc-computer-use 按会话各挂一份进程）。
+ * 清单每项多了 scope 字段，hint 统一显示工具数（不再显示「会话级」字样）。
+ * 改动实际落在 client.pane.js / client.dicts.js —— 这两个是包内代码块，
+ * 而宿主的客户端 HMR 只按**入口产物**的 mtime/size 推 revision，
+ * 所以这里留一条注释：它让入口的 revision 前进，已打开的页面才会重新拉取新的代码块。
+ */

@@ -11,7 +11,6 @@ window.__ModuleLoader__.load({
   factory() {
     const zh = {
       'panel.title': '多工作区平铺',
-      'panel.hint': '每个窗格一个工作区对话；窗格标题栏的“分屏”菜单先选方向、再选要放进新窗格的工作区，“替换工作区”图标把这一格换成另一个还没铺开的工作区（位置不变），按住标题栏拖到另一个窗格上松手即可交换两格的位置，拖动分隔条改变大小，点击窗格即聚焦并把键盘光标接进它的输入框，Alt+方向键把焦点切到相应方向的窗格。',
       'panel.add': '添加工作区',
       'panel.newWorkspace': '新建工作区…',
       'panel.newWorkspaceHint': '选择文件夹',
@@ -21,9 +20,6 @@ window.__ModuleLoader__.load({
       'panel.addAllOpen': '所有工作区都已打开',
       'panel.dismiss': '关闭提示',
       'panel.noWorkspace': '还没有工作区',
-      'panel.closeAll': '全部关闭',
-      'panel.balance': '均分',
-      'panel.balanceHint': '把所有分隔条移回中间位置',
       'board.emptyTitle': '还没有打开的工作区',
       'board.emptyBody': '用右上角的“添加工作区”选择要平铺显示的工作区。',
       'pane.unknownWorkspace': '未知工作区',
@@ -88,7 +84,6 @@ window.__ModuleLoader__.load({
 
     const en = {
       'panel.title': 'Split workspaces',
-      'panel.hint': 'One workspace conversation per pane: the pane header’s Split menu asks for a direction and then for the workspace to put in the new pane; the Replace workspace icon swaps this pane to another workspace that is not tiled yet (the place stays); drag a header onto another pane and release to swap the two places, drag a divider to resize, click a pane to focus it and put the caret in its input, or press Alt+Arrow to focus the pane in that direction.',
       'panel.add': 'Add workspace',
       'panel.newWorkspace': 'New workspace…',
       'panel.newWorkspaceHint': 'Choose a folder',
@@ -98,9 +93,6 @@ window.__ModuleLoader__.load({
       'panel.addAllOpen': 'Every workspace is already open',
       'panel.dismiss': 'Dismiss',
       'panel.noWorkspace': 'No workspace yet',
-      'panel.closeAll': 'Close all',
-      'panel.balance': 'Even out',
-      'panel.balanceHint': 'Move every divider back to the middle',
       'board.emptyTitle': 'No workspace is open',
       'board.emptyBody': 'Use “Add workspace” to pick a workspace to tile here.',
       'pane.unknownWorkspace': 'Unknown workspace',

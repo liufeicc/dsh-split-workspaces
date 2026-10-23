@@ -537,8 +537,7 @@ window.__ModuleLoader__.load({
         return h('div', { className: css.root, [BOARD_MARKER]: 'true' },
           h('header', { className: css.head },
             h('div', { className: css.headMain },
-              h('h1', { className: css.title }, t('panel.title')),
-              h('p', { className: css.hint }, t('panel.hint'))),
+              h('h1', { className: css.title }, t('panel.title'))),
             h('div', { className: css.headActions },
               h(Popover, {
                 label: addBusy ? t('panel.adding') : t('panel.add'),
@@ -568,20 +567,7 @@ window.__ModuleLoader__.load({
                           runAdd(() => adoptWorkspace(item.workspaceId));
                         },
                       }))),
-              ]),
-              h('button', {
-                type: 'button',
-                className: css.button,
-                title: t('panel.balanceHint'),
-                disabled: !model.hasSplit(paneState.layout),
-                onClick: () => paneActions.balance(),
-              }, t('panel.balance')),
-              h('button', {
-                type: 'button',
-                className: css.button,
-                disabled: panes.length === 0,
-                onClick: () => paneActions.closeAll(),
-              }, t('panel.closeAll')))),
+              ]))),
           addError === null ? null : h('div', { className: css.headError, role: 'alert' },
             h('span', { className: css.headErrorText }, addError),
             h('button', {

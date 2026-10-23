@@ -373,9 +373,17 @@ check('把焦点切到另一个窗格后，标题栏结构（类型 + key）完�
   return headShape(focused.tree).join('|') === unfocusedShape.join('|');
 })(), unfocusedShape.join('|'));
 
-check('棋盘上有均分按钮且在有分隔时可用', (() => {
-  const button = findAll(tree, (node) => node.props.title === '把所有分隔条移回中间位置')[0];
-  return button !== undefined && button.props.disabled === false;
+/*
+ * 用户明确要求顶部标题栏只留标题与「添加工作区」：说明小字、「均分」「全部关闭」
+ * 三个入口都删掉。均分仍然可以双击分隔条做到（见 drag-contract.mjs），
+ * 关掉所有窗格仍然可以逐格关，因此这里只守住「这三个入口不再渲染」。
+ */
+check('顶部标题栏只剩标题与「添加工作区」：说明小字、均分、全部关闭都已移除', (() => {
+  const hintGone = findAll(tree, (node) => node.props.className === 'dshSplitWs_hint').length === 0;
+  const balanceGone = findAll(tree, (node) => node.props.title === '把所有分隔条移回中间位置').length === 0;
+  const closeAllGone = findAll(tree, (node) => (node.children ?? []).includes('全部关闭')).length === 0;
+  const addKept = findAll(tree, byName('Popover')).some((node) => node.props.title === '添加工作区');
+  return hintGone && balanceGone && closeAllGone && addKept;
 })());
 
 /*

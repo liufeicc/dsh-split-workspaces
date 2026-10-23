@@ -11,7 +11,7 @@ that currently holds focus is marked by a brand-coloured title bar.
 
 - One row of icons in the sidebar (two tiled squares, right next to the Plugins icon);
   clicking it switches the main area to the **multi-workspace tiled** panel.
-- The panel itself: at the top are `Add workspace` / `Even out` / `Close all`, below is the
+- The panel itself: at the top are the title and `Add workspace`, below is the
   board — every pane has its own title bar (workspace name and path, the `Open directory`
   icon, the `Replace workspace` icon, the `Split` icon, mode selector, session selector,
   close), and inside the pane it

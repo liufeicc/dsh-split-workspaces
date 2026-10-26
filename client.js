@@ -122,6 +122,7 @@ window.__ModuleLoader__.load({
       './client.model.js',
       './client.presets.js',
       './client.mcp.js',
+      './client.skill.js',
       './client.menu.js',
       './client.pane.js',
       './client.view.js',
@@ -139,7 +140,7 @@ window.__ModuleLoader__.load({
         return Promise.reject(new Error('client module loader 不支持包内代码块（require.async 缺失）'));
       }
       return Promise.all(CHUNK_FILES.map((file) => require.async(file)))
-        .then(([styles, dicts, model, presets, mcp, menu, pane, view]) => ({ styles, dicts, model, presets, mcp, menu, pane, view }));
+        .then(([styles, dicts, model, presets, mcp, skill, menu, pane, view]) => ({ styles, dicts, model, presets, mcp, skill, menu, pane, view }));
     }
 
     /** 本次插件实例的代码块装载（每个 factory 执行一次）。 */
@@ -166,6 +167,7 @@ window.__ModuleLoader__.load({
         model: mods.model,
         presets: mods.presets,
         menu,
+        skill: mods.skill,
         paneSlot: PANE_SLOT,
       });
       const view = mods.view.createView({
@@ -204,6 +206,12 @@ window.__ModuleLoader__.load({
        * 每次需要时才 ctx.get 一次，取不到就按「没就绪」静默处理。
        */
       const mcpStore = mods.mcp.createMcpStore(() => ctx.get(mods.mcp.MCP_REMOTE_KEY));
+      /*
+       * 技能库服务同理，由 @local/dsh-skill-workspace 的客户端半边挂载。惰性解析：
+       * 没装那个插件时这里取到 undefined，窗格里的 SKILL 按钮就整体不显示 ——
+       * 与「本来就没有技能库」是同一种静默处理。
+       */
+      const skillStore = mods.skill.createSkillStore(() => ctx.get(mods.skill.SKILL_REMOTE_KEY));
       /** 交给组件层的动作集合：组件只调这里，不直接碰存储内部。 */
       const paneActions = {
         addPane: (workspaceId, sessionId) => paneStore.addPane(workspaceId, sessionId),
@@ -220,12 +228,15 @@ window.__ModuleLoader__.load({
         loadPresets: () => presetStore.load(),
         loadMcp: () => mcpStore.load(),
         setMcpSelection: (workspacePath, selected) => mcpStore.setSelection(workspacePath, selected),
+        loadSkills: () => skillStore.load(),
+        setSkillSelection: (workspacePath, selected) => skillStore.setSelection(workspacePath, selected),
       };
 
-      // 连接重建后 Host 的模式清单可能变了，重新读一次。
+      // 连接重建后 Host 的模式清单可能变了，重新读一次（技能库同理：目录可能刚被改过）。
       ctx.effect(() => ctx.on('connection/reset', () => {
         presetStore.load();
         mcpStore.load();
+        skillStore.load();
       }), 'split-workspaces: preset roster refresh');
 
       /**
@@ -374,6 +385,7 @@ window.__ModuleLoader__.load({
           paneActions,
           presetStore,
           mcpStore,
+          skillStore,
           agentPresets,
           sessions: ctx.sessions,
           sessionList: ctx.sessions.list,
@@ -419,4 +431,12 @@ window.__ModuleLoader__.load({
  * 「新建会话」会先复用本工作区已有的空白会话，不再每点一次就在 Host 里多留一条空壳。
  * 改动落在 client.model.js / client.view.js / client.pane.js，同样用这条注释推进入口
  * 产物的 revision（理由同上）。
+ */
+
+/*
+ * 2026-10-26（二）：SKILL 弹层从「状态不健康才重读」改成**每次打开都重读**。
+ * 起因是实测：在「设置 → 技能」里换了技能目录之后，点开弹层仍是旧清单，必须刷新页面
+ * 才更新 —— 设置页和棋盘是两个客户端模块，那边改目录不会通知这边，而缓存看起来很正常。
+ * 改动落在 client.skill.js；按惯例用这条注释推进入口产物的 revision，已打开的页面
+ * 才会重新拉取新的代码块。
  */

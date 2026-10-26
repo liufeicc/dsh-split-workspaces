@@ -14,6 +14,7 @@
  *
  *   node test/layout-contract.mjs
  */
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ReactStub, byData, byName, findAll, loadBundle, mount, settle } from './harness.mjs';
@@ -23,7 +24,23 @@ import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, re
 const here = dirname(fileURLToPath(import.meta.url));
 
 const mod = await loadBundle(join(here, '..', 'client.js'), { react: ReactStub });
-check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.presets.js,./client.mcp.js,./client.menu.js,./client.pane.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
+check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.menu.js,./client.pane.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
+
+/*
+ * 清单与磁盘必须一一对应。
+ *
+ * 2026-10-26 踩过一次：新增 `client.skill.js` 却漏了 `package.json` 的 `files`，浏览器侧
+ * 整个客户端半边加载失败 —— 症状是**侧边栏的平铺入口直接消失**（`apply` 都没跑到注册那一步），
+ * 而所有离线测试照样全绿（测试直接从磁盘 import 代码块，不看 `files`）。
+ * 这条断言把「入口列了什么」与「清单声明了什么」钉在一起，下次漏了就红。
+ */
+const manifest = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8'));
+const declared = new Set(manifest.files);
+const missing = mod.test.CHUNK_FILES
+  .map((file) => file.replace(/^\.\//, ''))
+  .filter((file) => !declared.has(file));
+check('每个代码块都写进了 package.json 的 files 清单', missing.length === 0, missing.join(','));
+
 const mods = await mod.test.chunks;
 check('每个代码块都按 loader 规则注册并导出自己的东西', typeof mods.styles.CSS === 'string' && typeof mods.styles.css.pane === 'string' && typeof mods.styles.cx === 'function'
   && typeof mods.dicts.zh['panel.title'] === 'string' && typeof mods.dicts.en['panel.title'] === 'string'

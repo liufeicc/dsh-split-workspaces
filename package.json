@@ -20,6 +20,7 @@
     "client.model.js",
     "client.presets.js",
     "client.mcp.js",
+    "client.skill.js",
     "client.menu.js",
     "client.pane.js",
     "client.view.js",

@@ -257,12 +257,13 @@ window.__ModuleLoader__.load({
 
       /** 整块棋盘。 */
       function SplitPanel(props) {
-        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets } = props;
+        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, skillStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets } = props;
         const paneState = useSource(paneStore);
         const workspaceState = useSource(workspaces.list);
         const sessionState = useSource(sessionList);
         const presetState = useSource(presetStore);
         const mcpState = useSource(mcpStore);
+        const skillState = useSource(skillStore);
         const items = workspaceState.items;
         const archivedSessionIds = workspaceState.archivedSessionIds;
         const panes = paneState.panes;
@@ -300,6 +301,15 @@ window.__ModuleLoader__.load({
 
         useEffect(() => {
           paneActions.loadMcp();
+        }, [paneActions]);
+
+        /*
+         * 技能清单也必须**挂载时就读一次**：标题栏那个 SKILL 按钮只在 store 已经不是
+         * `idle` 时才渲染（没装技能库插件时整块消失），而它自己的「打开时重读」要靠
+         * 按钮已经被渲染出来。少了这一句就成了先有鸡还是先有蛋 —— 按钮永远不出现。
+         */
+        useEffect(() => {
+          paneActions.loadSkills();
         }, [paneActions]);
 
         const openWorkspaceIds = useMemo(() => panes.map((pane) => pane.workspaceId), [panes]);
@@ -482,6 +492,12 @@ window.__ModuleLoader__.load({
             mcpStatus: mcpState.status,
             mcpError: mcpState.error,
             mcpByWorkspace: mcpState.byWorkspace,
+            skillStatus: skillState.status,
+            skills: skillState.skills,
+            skillDir: skillState.dir,
+            skillErrors: skillState.errors,
+            skillError: skillState.error,
+            skillByWorkspace: skillState.byWorkspace,
             SessionProvider,
             renderSlot,
           });

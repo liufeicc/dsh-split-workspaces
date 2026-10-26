@@ -202,16 +202,19 @@ function mcpControlOf(board, title) {
     .find((node) => node.props.workspace !== undefined && node.props.workspace.title === title);
   if (frame === undefined) return undefined;
   const pane = mount(frame.type, frame.props);
+  // 2026-10-26：MCP 开关改成**纯图标**（标题栏空间不够），所以按 icon 而不是 label 认。
   return findAll(pane.tree, byName('Popover'))
-    .find((node) => typeof node.props.label === 'string' && node.props.label.startsWith('MCP'));
+    .find((node) => node.props.icon !== undefined
+      && typeof node.props.title === 'string'
+      && node.props.title.startsWith('这个工作区里哪些 MCP'));
 }
 
 const board = await renderBoard();
 const alpha = mcpControlOf(board, 'alpha');
 const beta = mcpControlOf(board, 'beta');
 check('两个工作区的窗格标题栏都有 MCP 开关', alpha !== undefined && beta !== undefined);
-check('已配置工作区显示已选数量', alpha.props.label === 'MCP 1', alpha.props.label);
-check('未配置工作区显示不带数量（默认全不选）', beta.props.label === 'MCP', beta.props.label);
+check('已配置工作区在悬停提示里显示已选数量', alpha.props.title.endsWith('（已选 1）'), alpha.props.title);
+check('未配置工作区不带数量（默认全不选）', beta.props.title.endsWith('跟着变）'), beta.props.title);
 
 const menuItems = findAll(childrenRender(alpha)(() => {}), byName('MenuItem'));
 check('菜单列出宿主报告的全部服务器', menuItems.map((item) => item.props.label).join(',') === 'rea,blender');
@@ -230,8 +233,8 @@ check(
   JSON.stringify(board.namespace.calls),
 );
 check('共享快照按工作区路径记录', board.injected.mcpStore.getSnapshot().byWorkspace['/tmp/alpha'].join(',') === 'rea,blender');
-check('重开这一格读到的还是同一份选择（选择属于工作区，不属于窗格）', mcpControlOf(board, 'alpha').props.label === 'MCP 2');
-check('别的工作区不受影响', mcpControlOf(board, 'beta').props.label === 'MCP');
+check('重开这一格读到的还是同一份选择（选择属于工作区，不属于窗格）', mcpControlOf(board, 'alpha').props.title.endsWith('（已选 2）'));
+check('别的工作区不受影响', mcpControlOf(board, 'beta').props.title.endsWith('跟着变）'));
 
 console.log('');
 if (failures.length === 0) {

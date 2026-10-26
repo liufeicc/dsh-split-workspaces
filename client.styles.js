@@ -134,6 +134,15 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_menuDelete:hover{background:color-mix(in srgb,currentColor 8%,transparent);color:var(--dsw-alias-state-error-primary)}',
       '.dshSplitWs_menuDelete:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
       '.dshSplitWs_menuNote{padding:7px 8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+      // 技能勾选行：比普通菜单行高一点，因为要排两行（名字 + 描述）。
+      // 勾选位复用 menuItemCheck，所以和 MCP 那几行看起来是同一套多选控件。
+      '.dshSplitWs_skillRow{display:flex;align-items:flex-start;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;text-align:left;cursor:pointer}',
+      '.dshSplitWs_skillRow:hover{background:color-mix(in srgb,currentColor 8%,transparent)}',
+      '.dshSplitWs_skillRow:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-1px}',
+      '.dshSplitWs_skillRow .dshSplitWs_menuItemCheck{margin-top:2px}',
+      '.dshSplitWs_skillText{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}',
+      '.dshSplitWs_skillName{font-size:12.5px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dshSplitWs_skillDesc{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}',
       '.dshSplitWs_glyph{display:block}',
     ].join('');
 
@@ -182,6 +191,11 @@ window.__ModuleLoader__.load({
       menuRow: 'dshSplitWs_menuRow',
       menuDelete: 'dshSplitWs_menuDelete',
       menuNote: 'dshSplitWs_menuNote',
+      skillRow: 'dshSplitWs_skillRow',
+      skillRowOn: 'dshSplitWs_skillRowOn',
+      skillText: 'dshSplitWs_skillText',
+      skillName: 'dshSplitWs_skillName',
+      skillDesc: 'dshSplitWs_skillDesc',
       glyph: 'dshSplitWs_glyph',
     };
 

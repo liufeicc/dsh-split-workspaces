@@ -45,8 +45,13 @@ window.__ModuleLoader__.load({
      * @param deps.menu - 菜单块（弹出菜单与图标）。
      * @param deps.paneSlot - 本插件声明的窗格子槽位名（对话本体挂在这里）。
      */
-    function createPane({ css, cx, errorText, model, presets, menu, paneSlot }) {
-      const { SplitGlyph, FolderGlyph, ReplaceGlyph, Popover, MenuItem, MenuDeleteButton } = menu;
+    function createPane({ css, cx, errorText, model, presets, menu, skill, paneSlot }) {
+      const { SplitGlyph, FolderGlyph, ReplaceGlyph, Popover, MenuItem, MenuDeleteButton, McpGlyph } = menu;
+      /*
+       * 技能勾选列表由 `client.skill.js` 造。依赖从外面递进去（而不是那个块自己去 require
+       * 菜单块）：DSH 的包内代码块之间不能互相 require，只能由入口装配。
+       */
+      const skillControl = skill.createSkillControl({ css, cx, menu });
       /** 分屏方向 → 词典键，四行菜单的文案。 */
       const SPLIT_LABEL_KEYS = {
         left: 'pane.splitLeft',
@@ -235,7 +240,7 @@ window.__ModuleLoader__.load({
       }
 
       /** 一个窗格：标题栏 + 共享的 Conversation Factory。 */
-      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
+      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
@@ -831,8 +836,14 @@ window.__ModuleLoader__.load({
           const selectedMcp = workspacePath === undefined || !Array.isArray(mcpMap[workspacePath]) ? [] : mcpMap[workspacePath];
           headChildren.push(h(Popover, {
             key: 'mcp',
-            label: selectedMcp.length === 0 ? t('pane.mcp') : t('pane.mcp') + ' ' + selectedMcp.length,
-            title: t('pane.mcpHint'),
+            /*
+             * 纯图标：标题栏里已经排了「分屏 / 模式 / 会话」几个控件，MCP 再占一段文字就把
+             * 窗格标题挤没了。选中数量放 `title`（悬停提示）里，不丢信息。
+             */
+            icon: h(McpGlyph, null),
+            title: selectedMcp.length === 0
+              ? t('pane.mcpHint')
+              : t('pane.mcpHint') + '（' + t('pane.mcpSelected') + ' ' + selectedMcp.length + '）',
             align: 'end',
             onOpenChange: (next) => {
               /*
@@ -876,6 +887,41 @@ window.__ModuleLoader__.load({
                   });
                 })),
           ]));
+        }
+        /*
+         * SKILL 开关：与 MCP 完全同构 —— **按工作区**共享的一份宿主策略。
+         *
+         * 两个入口分工要记清楚（用户容易问「为什么设置里没有勾选」）：
+         *   - 「设置 → 技能」管**目录**：技能文件放在哪儿；
+         *   - 这里管**本工作区用哪些**：目录里勾上的才进模型目录，没勾的连上下文都不占。
+         *
+         * 只有技能库插件的客户端半边挂上来了（`skillStatus` 有值）才渲染这个按钮：
+         * 没装那个插件时，窗格标题栏看起来与从前完全一样，不会多出一个点不动的图标。
+         *
+         * 按钮与弹层本身在 `client.skill.js`（`skillPopover`），这里只负责接线。
+         */
+        if (skillStatus !== undefined && skillStatus !== 'idle' && skillStatus !== 'unavailable') {
+          const workspacePath = workspace === undefined ? undefined : workspace.path;
+          const skillMap = skillByWorkspace === undefined || skillByWorkspace === null ? {} : skillByWorkspace;
+          headChildren.push(skillControl.skillPopover({
+            workspacePath,
+            skills,
+            byWorkspace: skillMap,
+            status: skillStatus,
+            error: skillError,
+            dir: skillDir,
+            fileErrors: skillErrors,
+            t,
+            onToggle: (path, next) => {
+              setError(null);
+              Promise.resolve(paneActions.setSkillSelection(path, next)).then((result) => {
+                if (result !== undefined && result !== null && result.ok === false) {
+                  setError(t('pane.skillFailed') + ': ' + result.reason);
+                }
+              });
+            },
+            onReload: () => paneActions.loadSkills(),
+          }));
         }
         headChildren.push(h(Popover, {
           key: 'session',

@@ -153,6 +153,42 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * MCP 图标：一个插头 —— 「外部服务器接到本工作区」最直白的样子。
+       *
+       * 标题栏改成纯图标之后，这个图形是用户区分「MCP」与「技能」的唯一线索，所以两者
+       * 的轮廓要有明显差别：插头是**带两根针的圆角块**，技能是**一颗四角星**。
+       */
+      function McpGlyph() {
+        return h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true, className: css.glyph },
+          h('path', {
+            d: 'M5.2 2.2v2.4M10.8 2.2v2.4',
+            stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round',
+          }),
+          h('path', {
+            d: 'M3.6 4.6h8.8v2.1a4.4 4.4 0 0 1-4.4 4.4 4.4 4.4 0 0 1-4.4-4.4z',
+            stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round',
+          }),
+          h('path', {
+            d: 'M8 11.1v2.7',
+            stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round',
+          }));
+      }
+
+      /**
+       * 技能图标：一颗四角星。
+       *
+       * 与「设置 → 技能」页里的技能库图标同源（那边是一叠卡片加一颗星），标题栏太小
+       * 画不下卡片，就只留星 —— 用户在两处看到的是同一个符号。
+       */
+      function SkillGlyph() {
+        return h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true, className: css.glyph },
+          h('path', {
+            d: 'M8 1.9 9.9 6.1 14.1 8 9.9 9.9 8 14.1 6.1 9.9 1.9 8 6.1 6.1Z',
+            stroke: 'currentColor', strokeWidth: 1.4, strokeLinejoin: 'round',
+          }));
+      }
+
+      /**
        * 垃圾桶图标：会话菜单里每行末尾那个「删除这个会话」按钮。
        *
        * 画法与另外几个图标同一套（16×16 视框、`stroke: currentColor`），因此按钮自己
@@ -209,7 +245,7 @@ window.__ModuleLoader__.load({
           h('span', { className: css.menuItemLabel, title: label }, label),
           hint === undefined ? null : h('span', { className: css.menuItemHint }, hint));
       }
-      return { Chevron, PanelIcon, SplitGlyph, FolderGlyph, ReplaceGlyph, CheckGlyph, TrashGlyph, Popover, MenuItem, MenuDeleteButton };
+      return { Chevron, PanelIcon, SplitGlyph, FolderGlyph, ReplaceGlyph, CheckGlyph, McpGlyph, SkillGlyph, TrashGlyph, Popover, MenuItem, MenuDeleteButton };
     }
 
     return { createMenu };

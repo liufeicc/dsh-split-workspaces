@@ -317,6 +317,10 @@
 - `test/preset-contract.mjs` —— 模式选择器的离线契约测试（`node test/preset-contract.mjs`）。
 - `test/mcp-contract.mjs` —— MCP 开关的离线契约测试（`node test/mcp-contract.mjs`）：
   降级分支、乐观更新与回滚，以及**真实渲染出来的窗格标题栏**上的勾选状态与按工作区写回。
+- `test/skill-contract.mjs` —— SKILL 开关的离线契约测试（`node test/skill-contract.mjs`）：
+  与 MCP 同构的那套（降级分支、乐观更新与回滚、按工作区写回），外加两条本块特有的
+  产品决定 —— 技能库服务没挂上时标题栏**不出现**这个按钮、目录为空时弹层给出去处
+  而不是一片空白；并断言每行都带得出技能描述。
 - `test/open-contract.mjs` —— 「用文件管理器打开工作区目录」的离线契约测试
   （`node test/open-contract.mjs`）：`remote.session` 被换成记账的替身，因此断言的是
   插件**真正发出去的调用** —— 先问 `canOpenWorkspacePath`（只问一次），再把该窗格的

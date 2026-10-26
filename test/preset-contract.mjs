@@ -128,6 +128,12 @@ async function renderBoard({ respond } = {}) {
   const paneStore = injected.paneStore;
   paneStore.addPane('ws-a');
   paneStore.addPane('ws-b');
+  /*
+   * 第一个窗格钉在空白会话 s-a 上：真实界面里新建会话后 `setSession` 就是这么做的。
+   * 空白会话现在不出现在会话菜单里（见 `selectableSessions`），但窗格仍然显示它，
+   * 于是这里验证的「空白会话立刻接受模式选择」依旧成立。
+   */
+  paneStore.setSession('pane-1', 's-a');
 
   const workspaces = source({
     items: [

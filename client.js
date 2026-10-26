@@ -413,3 +413,10 @@ window.__ModuleLoader__.load({
  * 而宿主的客户端 HMR 只按**入口产物**的 mtime/size 推 revision，
  * 所以这里留一条注释：它让入口的 revision 前进，已打开的页面才会重新拉取新的代码块。
  */
+
+/*
+ * 2026-10-26：会话菜单不再列空白会话（建了会话但一条消息都没发过的「新会话」）；
+ * 「新建会话」会先复用本工作区已有的空白会话，不再每点一次就在 Host 里多留一条空壳。
+ * 改动落在 client.model.js / client.view.js / client.pane.js，同样用这条注释推进入口
+ * 产物的 revision（理由同上）。
+ */

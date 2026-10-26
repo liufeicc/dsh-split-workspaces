@@ -683,18 +683,74 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 某个工作区里「可以选」的会话：非归档、非子代理，最近更新的排前面。 */
+    /**
+     * 某个工作区里「可以选」的会话：非归档、非子代理、**已经聊过内容**，
+     * 最近更新的排前面。
+     *
+     * 空白会话（`summary.blank === true`，用户建了会话但一条消息都没发过）刻意不列：
+     * 它在 Host 里只是一条「新会话占位」，没有历史可回看。DSH 原生侧边栏对空白会话的
+     * 规则是「只显示当前选中的那一个」，但平铺面板的会话菜单第一项本来就是「新建会话」，
+     * 再列一堆同名占位行只会让菜单变成一长串「新会话」—— 用户要的是历史对话，不是
+     * 每次误点留下的空壳。
+     *
+     * 跟随型窗格也吃这条规则：它显示的「本工作区最新会话」只会在真实对话里挑，
+     * 于是新铺开一格时看到的是上一段对话，而不是一个空的「新会话」。
+     *
+     * @param workspace - 工作区行（含 `sessionIds`）。
+     * @param sessionState - 会话快照（`sessions.list` 的 `byId`）。
+     * @param archivedSessionIds - 归档会话 id。
+     */
     function selectableSessions(workspace, sessionState, archivedSessionIds) {
       if (workspace === undefined) return [];
       const rows = [];
       for (const id of workspace.sessionIds) {
         const summary = sessionState.byId[id];
         if (summary === undefined || summary.origin === 'subagent') continue;
+        if (summary.blank === true) continue;
         if (archivedSessionIds.includes(id)) continue;
         rows.push(summary);
       }
       rows.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
       return rows;
+    }
+
+    /**
+     * 本工作区里「可以复用的空白会话」—— 点「新建会话」时优先切到它，而不是再让
+     * Host 新建一条。
+     *
+     * 为什么需要它：`uiWorkspace.connectWorkspace` 每次调用都走 `sessions.create`，
+     * 即使工作区里已经躺着一个没人用过的空白会话。于是「点新建 → 不输入 → 再点新建」
+     * 会一条条堆出永远不用的空会话（它们不再出现在会话菜单里，但确实占着 Host 的
+     * 会话表与磁盘）。复用之后，反复点「新建会话」最多只回到同一个空白会话。
+     *
+     * 判定条件（全部满足才算候选）：
+     *   1. 是空白会话、没归档、不是子代理会话；
+     *   2. **没有被别的窗格钉住** —— 正在某一格里显示的空白会话不能被抢走，
+     *      否则那一格会被悄悄换成别的对话；
+     *   3. 最近更新的优先（与 `selectableSessions` 同一套排序，行为可预期）。
+     *
+     * 当前窗格自己钉着的空白会话**算**候选：那一格本来就是一个新会话，再建一条
+     * 没有意义；调用方据返回值与自己当前的 `sessionId` 相等就能直接收手。
+     *
+     * @param workspace - 工作区行。
+     * @param sessionState - 会话快照。
+     * @param archivedSessionIds - 归档会话 id。
+     * @param occupiedSessionIds - 其它窗格钉住的会话 id（可以包含当前窗格自己）。
+     * @returns 可复用的空白会话 id；没有时返回 undefined。
+     */
+    function reusableBlankSession(workspace, sessionState, archivedSessionIds, occupiedSessionIds) {
+      if (workspace === undefined) return undefined;
+      const occupied = new Set(occupiedSessionIds ?? []);
+      let best;
+      for (const id of workspace.sessionIds) {
+        const summary = sessionState.byId[id];
+        if (summary === undefined || summary.origin === 'subagent') continue;
+        if (summary.blank !== true) continue;
+        if (archivedSessionIds.includes(id)) continue;
+        if (occupied.has(id)) continue;
+        if (best === undefined || (summary.updatedAt ?? 0) > (best.updatedAt ?? 0)) best = summary;
+      }
+      return best === undefined ? undefined : best.id;
     }
 
     /**
@@ -744,6 +800,7 @@ window.__ModuleLoader__.load({
       neighborPane,
       createPaneStore,
       selectableSessions,
+      reusableBlankSession,
       resolvePaneSessionId,
     };
   },

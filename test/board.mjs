@@ -103,7 +103,7 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
 
   const workspaces = source({
     items: [
-      { workspaceId: 'ws-a', title: 'alpha', path: '/tmp/alpha', sessionIds: ['s-a'] },
+      { workspaceId: 'ws-a', title: 'alpha', path: '/tmp/alpha', sessionIds: ['s-a', 's-blank'] },
       { workspaceId: 'ws-b', title: 'beta', path: '/tmp/beta', sessionIds: ['s-b'] },
       // 第三个工作区故意不铺开：分屏菜单第二步应当把它排在已铺开的前面。
       { workspaceId: 'ws-c', title: 'gamma', path: '/tmp/gamma', sessionIds: [] },
@@ -111,15 +111,18 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
     archivedSessionIds: [],
   });
   const sessions = source({
-    ids: ['s-a', 's-b'],
+    ids: ['s-a', 's-b', 's-blank'],
     byId: {
-      's-a': { id: 's-a', displayTitle: 'a', blank: true, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
-      's-b': { id: 's-b', displayTitle: 'b', blank: true, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
+      's-a': { id: 's-a', displayTitle: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
+      's-b': { id: 's-b', displayTitle: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
+      // 没发过消息的空白会话：会话菜单不该列它，但「新建会话」应当优先复用它。
+      's-blank': { id: 's-blank', displayTitle: '', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
     },
   });
-  /** 记录 `workspaces.create` 收到的参数与 `pickDirectory` 的调用次数。 */
+  /** 记录 `workspaces.create` 收到的参数、`connectWorkspace` 的调用次数与 `pickDirectory` 的次数。 */
   const createdWith = [];
   let pickCount = 0;
+  let connectCount = 0;
   const render = () => mount(main.component, {
     ...injected,
     t: stub.ctx.locale.bind('split-workspaces'),
@@ -134,7 +137,10 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
       },
     },
     uiWorkspace: {
-      connectWorkspace: () => Promise.resolve('s-new'),
+      connectWorkspace: () => {
+        connectCount += 1;
+        return Promise.resolve('s-new');
+      },
       pickDirectory: () => {
         pickCount += 1;
         return pickerThrows ? Promise.reject(new Error('no picker')) : Promise.resolve(pickedPath);
@@ -145,7 +151,7 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
     // 这样「窗格空白时提示先选会话」这类断言检查的就是真实渲染结果。
     SessionProvider: function SessionProvider(props) { return props.session === undefined ? props.empty() : null; },
   });
-  return { stub, paneStore: injected.paneStore, render, createdWith, pickCount: () => pickCount };
+  return { stub, paneStore: injected.paneStore, render, createdWith, pickCount: () => pickCount, connectCount: () => connectCount };
 }
 
 /** 打开某个窗格的分屏菜单并点掉第一步的方向，返回停在第二步的窗格挂载。 */

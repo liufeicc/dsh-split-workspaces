@@ -59,11 +59,11 @@ that currently holds focus is marked by a brand-coloured title bar.
   session has to be stopped first" branch, and the Session-list bookkeeping all exist exactly
   once. After a successful deletion this plugin lets go of **every** pane pinned to that
   session (the same session can be displayed in several panes — a following pane
-  automatically picks the workspace's most recently updated session): a following pane falls
-  back to the newest remaining session in its workspace, while a pane whose session the user
-  picked by hand goes back to its "pick a session / new session" empty state. Without
-  `dsh-session-delete` the button is still there and says so in the pane's error line instead
-  of pretending the deletion happened.
+  automatically picks the workspace's most recently updated real conversation): a following
+  pane falls back to the newest remaining real conversation in its workspace, while a pane
+  whose session the user picked by hand goes back to its "pick a session / new session" empty
+  state. Without `dsh-session-delete` the button is still there and says so in the pane's
+  error line instead of pretending the deletion happened.
 - **How tiling works**: `Add workspace` always attaches the new pane to the right edge of
   the whole board; the **split menu on each pane's title bar has two steps**: the first step
   picks a direction (left, right, up, down), the second step picks **the workspace to put
@@ -158,12 +158,25 @@ that currently holds focus is marked by a brand-coloured title bar.
   empty area.
 - How a pane decides which session to show:
   - **Following** panes (those spread out by `Add workspace`) follow that workspace's most
-    recently updated session;
+    recently updated **real conversation**;
   - once a session is chosen manually (or a new one is created), the pane is pinned to that
     session;
   - **A freshly split** pane starts empty and prompts "Pick an existing session for this
     pane, or start a new one" — so two panes will not inexplicably show the same
     conversation. Which workspace it shows is what the split menu's second step selected.
+- **Blank sessions never enter the list**: a session that exists but has never been sent a
+  message (`blank: true` on the Host) does not appear in the `Switch session` menu and is not
+  followed as a workspace's "latest session" — otherwise a few stray clicks on `New session`
+  would pile up a row of identically named "New session" entries. This follows the same idea
+  as the native DSH sidebar ("only the currently selected blank session is visible"), just
+  taken further: the menu's first item already is `New session`, so a placeholder row adds
+  nothing.
+- **`New session` reuses a blank session first**: when this workspace already has a blank
+  session that no other pane is pinned to, the pane switches to it right away (still applying
+  the pane's staged mode) instead of asking the Host to create another empty record; only when
+  there is nothing to reuse does it really create one. So repeated clicks on `New session`
+  return to the same empty session instead of leaving a trail of unused shells in the Host's
+  session table and on disk.
 - **The candidates in the split menu's second step**: it lists **all** workspaces, but those
   not yet tiled come first (the primary intent of splitting is to spread another workspace
   out), while those already tiled in other panes come later with the hint on the right

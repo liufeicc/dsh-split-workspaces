@@ -235,7 +235,7 @@ window.__ModuleLoader__.load({
       }
 
       /** 一个窗格：标题栏 + 共享的 Conversation Factory。 */
-      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
+      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
@@ -290,18 +290,55 @@ window.__ModuleLoader__.load({
           });
         }, [summary, paneActions, pane.key, agentPresets, t]);
 
-        /** 在这个窗格里新建一个会话，并把暂存的模式带上。 */
+        /**
+         * 在这个窗格里新建一个会话，并把暂存的模式带上。
+         *
+         * 「新建」分两种情况，关键差别是**要不要让 Host 真的创建一条记录**：
+         *   1. 本工作区已有可复用的空白会话（`reusableBlankId`）—— 直接切过去，
+         *      仍应用暂存模式。这样反复点「新建会话」最多只回到同一个空会话，
+         *      不会在 Host 的会话表里堆出一串没人用的空壳；
+         *   2. 没有可复用的 —— 才调 `uiWorkspace.connectWorkspace` 真正新建。
+         *
+         * 当前这一格本来就是一个空白会话时（`reusable === sessionId`）直接收手：
+         * 它已经是一个「新会话」，再建一条或再切回自己都不会产生任何可见变化。
+         */
         const createSession = useCallback(() => {
           if (workspace === undefined || busy) return;
+          const staged = pane.preset;
+          /**
+           * 把暂存的模式应用到目标会话上；没有暂存值就什么都不做。
+           * 包一层 `Promise.resolve()`：`selectPreset` 同步抛错时也能走同一条 `.catch`。
+           */
+          const applyStagedPreset = (targetId) => {
+            if (staged === null || staged === undefined || staged === '') return Promise.resolve();
+            return Promise.resolve()
+              .then(() => presets.selectPreset(agentPresets, targetId, staged))
+              .then((result) => {
+                if (!result.ok) setError(t('pane.presetFailed') + ': ' + result.reason);
+              });
+          };
+          const reusable = reusableBlankId;
+          if (reusable !== undefined && reusable !== null) {
+            if (reusable === sessionId) return;
+            setBusy(true);
+            setError(null);
+            applyStagedPreset(reusable)
+              .then(() => {
+                paneActions.setSession(pane.key, reusable);
+              })
+              .catch((reason) => {
+                setError(t('pane.failed') + ': ' + errorText(reason));
+              })
+              .finally(() => {
+                setBusy(false);
+              });
+            return;
+          }
           setBusy(true);
           setError(null);
-          const staged = pane.preset;
           uiWorkspace.connectWorkspace(workspace.workspaceId)
             .then(async (createdId) => {
-              if (staged !== null && staged !== undefined && staged !== '') {
-                const result = await presets.selectPreset(agentPresets, createdId, staged);
-                if (!result.ok) setError(t('pane.presetFailed') + ': ' + result.reason);
-              }
+              await applyStagedPreset(createdId);
               paneActions.setSession(pane.key, createdId);
             })
             .catch((reason) => {
@@ -310,7 +347,7 @@ window.__ModuleLoader__.load({
             .finally(() => {
               setBusy(false);
             });
-        }, [workspace, busy, uiWorkspace, paneActions, pane.key, pane.preset, agentPresets, t]);
+        }, [workspace, busy, uiWorkspace, paneActions, pane.key, pane.preset, agentPresets, t, reusableBlankId, sessionId]);
 
         /**
          * 删除会话列表里的某一项 —— 不必是当前显示的那一个。
@@ -871,7 +908,9 @@ window.__ModuleLoader__.load({
             return h('div', { key: row.id, className: css.menuRow },
               h(MenuItem, {
                 label,
-                hint: row.blank === true ? t('pane.blank') : (row.running === true ? t('pane.running') : undefined),
+                // 列表里只会有真实对话（空白会话被 selectableSessions 过滤掉了），
+                // 因此行尾只提示「运行中」这一种状态。
+                hint: row.running === true ? t('pane.running') : undefined,
                 active: row.id === sessionId,
                 onClick: () => {
                   close();

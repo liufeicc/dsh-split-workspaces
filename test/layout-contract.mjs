@@ -18,7 +18,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ReactStub, byData, byName, findAll, loadBundle, mount, settle } from './harness.mjs';
 // 断言记录、棋盘挂载、颜色对比度与元素查找的小工具；另外三个契约测试用的是同一份。
-import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, replaceMenuOf, openWorkspaceStep, popoverRender, paneHeadOf, contrastRatio, mixWithBlack } from './board.mjs';
+import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, replaceMenuOf, sessionMenuOf, openWorkspaceStep, popoverRender, paneHeadOf, contrastRatio, mixWithBlack } from './board.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -62,6 +62,8 @@ const {
   splitPlacement,
   splitCandidates,
   unopenedWorkspaces,
+  selectableSessions,
+  reusableBlankSession,
 } = mods.model;
 
 /** 造一个「左右分屏」节点，供纯函数断言使用。 */
@@ -310,6 +312,26 @@ const sessionState = { byId: { 's-1': { id: 's-1', origin: 'user' } } };
 check('跟随型窗格显示工作区的最新会话', resolvePaneSessionId({ sessionId: null, follow: true }, rows, sessionState, []) === 's-1');
 check('分屏新窗格在选中会话前保持空白', resolvePaneSessionId({ sessionId: null, follow: false }, rows, sessionState, []) === undefined);
 check('已钉住的会话始终优先', resolvePaneSessionId({ sessionId: 's-1', follow: false }, [], sessionState, []) === 's-1');
+
+// --- 空白会话：不列进菜单，但「新建会话」优先复用它 --------------------------------
+
+const blankState = {
+  byId: {
+    's-real': { id: 's-real', displayTitle: 'real', blank: false, origin: 'user', updatedAt: 1 },
+    's-empty': { id: 's-empty', displayTitle: '', blank: true, origin: 'user', updatedAt: 9 },
+    's-arch': { id: 's-arch', displayTitle: 'arch', blank: false, origin: 'user', updatedAt: 2 },
+    's-sub': { id: 's-sub', displayTitle: 'sub', blank: false, origin: 'subagent', updatedAt: 3 },
+  },
+};
+const blankWorkspace = { workspaceId: 'w', sessionIds: ['s-empty', 's-real', 's-arch', 's-sub'] };
+check('会话菜单不列空白会话，子代理与归档照旧过滤', (() => {
+  const rows = selectableSessions(blankWorkspace, blankState, ['s-arch']);
+  return rows.length === 1 && rows[0].id === 's-real';
+})());
+check('「新建会话」优先复用本工作区最近更新的空白会话', reusableBlankSession(blankWorkspace, blankState, [], []) === 's-empty');
+check('被别的窗格占用的空白会话不会被抢走', reusableBlankSession(blankWorkspace, blankState, [], ['s-empty']) === undefined);
+check('归档的空白会话不复用', reusableBlankSession(blankWorkspace, blankState, ['s-empty'], []) === undefined);
+check('只有非空白会话时没有可复用的空会话', reusableBlankSession({ workspaceId: 'w2', sessionIds: ['s-real'] }, blankState, [], []) === undefined);
 
 // --- 渲染出的棋盘 -------------------------------------------------------------------
 
@@ -738,5 +760,47 @@ check('替换时选择器打不开：这一格与整个棋盘都保持原样', (
   const state = repFailBoard.paneStore.getSnapshot();
   return state.panes.length === 2 && state.panes[0].workspaceId === 'ws-a' && repFailBoard.createdWith.length === 0;
 })());
+
+// --- 会话菜单不出现「新会话」，点新建优先复用空白会话 -----------------------------
+
+const blankBoard = await renderBoard(mod);
+const blankPane = paneDom(blankBoard.render().tree, 'pane-1');
+const blankMenu = sessionMenuOf(blankPane.tree, () => {});
+check('会话菜单只有「新建会话」与真实会话，不列空白会话',
+  blankMenu.items.map((item) => item.props.label).join(',') === '新建会话,a',
+  blankMenu.items.map((item) => item.props.label).join(','));
+
+/*
+ * 点「新建会话」：ws-a 里躺着一个没发过消息的 s-blank，插件应当直接切过去，
+ * 而不是让 Host 再建一条永远不用的空会话。
+ */
+blankMenu.items.find((item) => item.props.label === '新建会话').props.onClick();
+await settle();
+const reused = blankBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1');
+check('「新建会话」复用本工作区已有的空白会话，不惊动 Host',
+  reused.sessionId === 's-blank' && blankBoard.connectCount() === 0,
+  'sessionId=' + String(reused.sessionId) + ' connect=' + String(blankBoard.connectCount()));
+
+// 已经是空白会话时再点一次：什么都不用做，尤其不能再新建。
+const selfPane = paneDom(blankBoard.render().tree, 'pane-1');
+sessionMenuOf(selfPane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
+await settle();
+check('这一格本来就是空白会话时，再点「新建会话」不产生新会话',
+  blankBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1').sessionId === 's-blank'
+  && blankBoard.connectCount() === 0);
+
+/*
+ * 空白会话正被另一格显示时不能复用：否则那一格会被悄悄换成别的对话。
+ * 这时才真的调 `connectWorkspace` 新建。
+ */
+const occupiedBoard = await renderBoard(mod);
+occupiedBoard.paneStore.setSession('pane-2', 's-blank');
+const occupiedPane = paneDom(occupiedBoard.render().tree, 'pane-1');
+sessionMenuOf(occupiedPane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
+await settle();
+check('空白会话正被别的窗格占用时，才真正调用 Host 新建',
+  occupiedBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1').sessionId === 's-new'
+  && occupiedBoard.connectCount() === 1,
+  'connect=' + String(occupiedBoard.connectCount()));
 
 report();

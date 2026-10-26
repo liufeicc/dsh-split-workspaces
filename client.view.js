@@ -417,16 +417,26 @@ window.__ModuleLoader__.load({
           });
         }, [runAdd, createWorkspaceFromDirectory, adoptWorkspace]);
 
-        /** 每个窗格该显示哪个会话、有哪些可选会话，一次算好。 */
+        /** 每个窗格该显示哪个会话、有哪些可选会话、可复用哪个空白会话，一次算好。 */
         const panePlan = useMemo(() => {
           const index = new Map();
           for (const pane of panes) {
-            const rows = model.selectableSessions(workspaceById.get(pane.workspaceId), sessionState, archivedSessionIds);
+            const workspace = workspaceById.get(pane.workspaceId);
+            const rows = model.selectableSessions(workspace, sessionState, archivedSessionIds);
             const sessionId = model.resolvePaneSessionId(pane, rows, sessionState, archivedSessionIds);
+            /*
+             * 「可复用的空白会话」要把**别的**窗格钉住的会话排除掉：那些会话正在
+             * 另一格里显示，抢过来会把它悄悄换掉。当前窗格自己钉住的不排除 ——
+             * 那一格本来就是空会话时，再建一条毫无意义（见 reusableBlankSession）。
+             */
+            const occupiedByOthers = panes
+              .filter((other) => other.key !== pane.key && other.sessionId !== null && other.sessionId !== undefined)
+              .map((other) => other.sessionId);
             index.set(pane.key, {
               rows,
               sessionId,
               summary: sessionId === undefined ? undefined : sessionState.byId[sessionId],
+              reusableBlankId: model.reusableBlankSession(workspace, sessionState, archivedSessionIds, occupiedByOthers),
             });
           }
           return index;
@@ -450,6 +460,7 @@ window.__ModuleLoader__.load({
             rows: plan === undefined ? [] : plan.rows,
             sessionId: plan === undefined ? undefined : plan.sessionId,
             summary: plan === undefined ? undefined : plan.summary,
+            reusableBlankId: plan === undefined ? undefined : plan.reusableBlankId,
             active: pane.key === activeKey,
             dragging: dragFrom === pane.key,
             dropTarget: dragOver === pane.key && dragFrom !== pane.key,

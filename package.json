@@ -14,6 +14,12 @@
   },
   "files": [
     "index.js",
+    "host.constants.js",
+    "host.store.js",
+    "host.service.js",
+    "host.message.js",
+    "host.wait.js",
+    "host.tool.js",
     "client.js",
     "client.graph.view.js",
     "client.graph.model.js",

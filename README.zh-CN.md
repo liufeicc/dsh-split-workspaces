@@ -390,8 +390,15 @@ A 的模型多了一个 `dispatch_task` 工具：
   （含乐观更新与失败回滚；远端命名空间是别的包挂的，所以只能惰性解析）。
 - `client.styles.js` —— 样式表与 class 名；颜色只用主题 token（`--dsw-*`）。
 - `client.dicts.js` —— 中英文案。
-- `index.js` —— **Host 半边**：`paneDispatch` 服务（存「谁能派给谁」）+ `dispatch_task`
-  工具（投递、等目标那一轮结束、取回复）。「打开目录」那条路仍然不需要 Host 支持 ——
+- `index.js` —— **Host 半边的入口**：装配 `paneDispatch` 服务与 `dispatch_task` 工具、
+  维护生命周期，并把公共符号原样转出。实现按职责放在同目录的 `host.*.js`：
+  - `host.constants.js` —— 服务键、远端方法清单、超时与长度上限；
+  - `host.store.js` —— 绑定表的落盘与读回（唯一的目标形状构造点）；
+  - `host.service.js` —— `PaneDispatchService`（绑定表、派单状态、诊断计数）；
+  - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取助手文本）；
+  - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路，含取消联动）；
+  - `host.tool.js` —— 面向模型的 `dispatch_task` 工具描述与执行。
+  「打开目录」那条路仍然不需要 Host 支持 ——
   它调用的是已经装好的 Session 远端命名空间。
 - `client.dispatch.js` —— 把设计模式下画出来的箭头换算成绑定，并**只把变了的那几个
   发起方**推给 Host（手写远端描述符，范式同 `dsh-mcp-workspace-policy`）。

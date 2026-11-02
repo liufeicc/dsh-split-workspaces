@@ -144,6 +144,66 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_skillName{font-size:12.5px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dshSplitWs_skillDesc{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}',
       '.dshSplitWs_glyph{display:block}',
+      // ── 顶部模式切换（平铺 / 设计）──
+      // 两个互斥选项的段控件。选中项用强调色底 + 白字，未选中是透明的次要文字。
+      // 底色用 --dshSplitWs-accent（见文件头），不用 --dsw-alias-brand-primary ——
+      // 后者在深色主题里是近白填充色，配白字会白底白字。
+      '.dshSplitWs_modes{display:inline-flex;align-items:center;gap:2px;padding:2px;border-radius:8px;background:var(--dsw-alias-bg-layer-2)}',
+      '.dshSplitWs_mode{padding:4px 10px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12.5px;line-height:18px;cursor:pointer;white-space:nowrap}',
+      '.dshSplitWs_mode:hover{color:var(--dsw-alias-label-primary)}',
+      '.dshSplitWs_mode[aria-pressed=true]{background:var(--dshSplitWs-accent);color:var(--dsw-static-neutral-00)}',
+      '.dshSplitWs_mode:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
+      // ── 设计模式：委派图 ──
+      // 画布左下角的一行自诊断：构建标记 / 关系数 / 会话数 / 同步状态。
+      '.dshSplitWs_graphDiagnostic{position:sticky;left:0;bottom:0;display:inline-block;margin:6px 0 0 4px;padding:2px 8px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap}',
+      '.dshSplitWs_graphWrap{flex:1;min-height:0;display:flex;flex-direction:column}',
+      '.dshSplitWs_graphBar{flex:none;display:flex;align-items:center;gap:12px;padding:8px 20px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);border-bottom:.5px solid var(--dsw-alias-border-l1)}',
+      '.dshSplitWs_graphHint{flex:1;min-width:0}',
+      '.dshSplitWs_graphReject{flex:none;color:var(--dsw-alias-state-error-primary)}',
+      '.dshSplitWs_graphDegraded{flex:none;color:var(--dsw-alias-state-warning-primary,#b8860b)}',
+      '.dshSplitWs_graphScroll{flex:1;min-height:0;overflow:auto;padding:10px}',
+      '.dshSplitWs_graphCanvas{position:relative;min-width:100%;min-height:100%}',
+      // SVG 层是纯装饰（不接收指针），所以整块 `pointer-events:none`；唯一例外是每条边
+      // 中点那个删除按钮 —— 它要能点，单独把指针事件打开。
+      '.dshSplitWs_graphSvg{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}',
+      '.dshSplitWs_graphEdge{stroke:var(--dsw-alias-border-l2);stroke-width:1.6;stroke-linecap:round}',
+      '.dshSplitWs_graphEdgePending{stroke:var(--dshSplitWs-accent);stroke-dasharray:5 4}',
+      '.dshSplitWs_graphArrow{fill:var(--dsw-alias-label-secondary)}',
+      '.dshSplitWs_graphEdgeEdit{pointer-events:auto;cursor:pointer}',
+      '.dshSplitWs_graphEdgeEdit circle:first-child{fill:var(--dsw-alias-bg-layer-2);stroke:var(--dsw-alias-border-l2);stroke-width:1}',
+      '.dshSplitWs_graphEdgeEdit circle:not(:first-child){fill:var(--dsw-alias-label-secondary)}',
+      '.dshSplitWs_graphEdgeEdit:hover circle:first-child{fill:var(--dshSplitWs-accent);stroke:var(--dshSplitWs-accent)}',
+      '.dshSplitWs_graphEdgeEdit:hover circle:not(:first-child){fill:var(--dsw-static-neutral-00)}',
+      // 箭头上的说明标签：只是说明，不接收指针（点击要落到箭头或卡片上）。
+      '.dshSplitWs_graphEdgeNote{position:absolute;transform:translate(-50%,-50%);max-width:220px;padding:2px 8px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}',
+      // 说明编辑面板：位置就是那条边中点，用户不会搞不清在改哪一条。
+      '.dshSplitWs_graphEdgeEditor{position:absolute;transform:translate(-50%,8px);width:280px;display:flex;flex-direction:column;gap:6px;padding:10px;border:.5px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.24);z-index:2}',
+      '.dshSplitWs_graphEdgeEditorTitle{font-size:12.5px;line-height:18px;font-weight:550}',
+      '.dshSplitWs_graphEdgeEditorHint{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+      '.dshSplitWs_graphEdgeEditorInput{width:100%;min-height:64px;resize:vertical;box-sizing:border-box;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px}',
+      '.dshSplitWs_graphEdgeEditorInput:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
+      '.dshSplitWs_graphEdgeEditorActions{display:flex;align-items:center;gap:6px}',
+      '.dshSplitWs_graphEdgeEditorActions .dshSplitWs_button{flex:1 1 auto;width:auto;min-width:0}',
+      '.dshSplitWs_graphEdgeDelete{pointer-events:auto;cursor:pointer}',
+      '.dshSplitWs_graphEdgeDelete circle{fill:var(--dsw-alias-bg-layer-2);stroke:var(--dsw-alias-border-l2);stroke-width:1}',
+      '.dshSplitWs_graphEdgeDelete path{stroke:var(--dsw-alias-label-secondary);stroke-width:1.4;stroke-linecap:round}',
+      '.dshSplitWs_graphEdgeDelete:hover circle{fill:var(--dsw-alias-state-error-primary);stroke:var(--dsw-alias-state-error-primary)}',
+      '.dshSplitWs_graphEdgeDelete:hover path{stroke:var(--dsw-static-neutral-00)}',
+      '.dshSplitWs_graphCard{position:absolute;display:flex;flex-direction:column;gap:4px;box-sizing:border-box;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;overflow:hidden}',
+      '.dshSplitWs_graphCard:hover{border-color:var(--dshSplitWs-accent)}',
+      '.dshSplitWs_graphCard[data-running=true]{border-color:var(--dshSplitWs-accent)}',
+      '.dshSplitWs_graphCardEmpty{cursor:default;opacity:.62}',
+      '.dshSplitWs_graphCardEmpty:hover{border-color:var(--dsw-alias-border-l1)}',
+      '.dshSplitWs_graphCardWorkspace{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.dshSplitWs_graphCardTitle{font-size:13px;line-height:19px;font-weight:550;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}',
+      '.dshSplitWs_graphCardMeta{display:flex;align-items:center;gap:6px;margin-top:auto;font-size:11px;line-height:16px}',
+      '.dshSplitWs_graphCardRunning{color:var(--dshSplitWs-accent)}',
+      // 出线端口：右边缘中点上那个圆点，拖动起点。命中区比看上去大（14px），
+      // 因为 6px 的圆在触控板上很难一次按准。
+      '.dshSplitWs_graphPort{position:absolute;right:-7px;top:50%;transform:translateY(-50%);width:14px;height:14px;padding:0;border:.5px solid var(--dsw-alias-border-l2);border-radius:50%;background:var(--dsw-alias-bg-base);cursor:crosshair;touch-action:none}',
+      '.dshSplitWs_graphCard:hover .dshSplitWs_graphPort{border-color:var(--dshSplitWs-accent);background:var(--dshSplitWs-accent)}',
+      '.dshSplitWs_graphPort:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
+      '.dshSplitWs_graphEmpty{position:absolute;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary)}',
     ].join('');
 
     /** class 名对照表：组件里统一用这里的名字，避免散落的裸字符串。 */
@@ -197,6 +257,36 @@ window.__ModuleLoader__.load({
       skillName: 'dshSplitWs_skillName',
       skillDesc: 'dshSplitWs_skillDesc',
       glyph: 'dshSplitWs_glyph',
+      modes: 'dshSplitWs_modes',
+      mode: 'dshSplitWs_mode',
+      graphWrap: 'dshSplitWs_graphWrap',
+      graphBar: 'dshSplitWs_graphBar',
+      graphHint: 'dshSplitWs_graphHint',
+      graphReject: 'dshSplitWs_graphReject',
+      graphDegraded: 'dshSplitWs_graphDegraded',
+      graphScroll: 'dshSplitWs_graphScroll',
+      graphCanvas: 'dshSplitWs_graphCanvas',
+      graphSvg: 'dshSplitWs_graphSvg',
+      graphEdge: 'dshSplitWs_graphEdge',
+      graphEdgePending: 'dshSplitWs_graphEdgePending',
+      graphArrow: 'dshSplitWs_graphArrow',
+      graphDiagnostic: 'dshSplitWs_graphDiagnostic',
+      graphEdgeEdit: 'dshSplitWs_graphEdgeEdit',
+      graphEdgeNote: 'dshSplitWs_graphEdgeNote',
+      graphEdgeEditor: 'dshSplitWs_graphEdgeEditor',
+      graphEdgeEditorTitle: 'dshSplitWs_graphEdgeEditorTitle',
+      graphEdgeEditorHint: 'dshSplitWs_graphEdgeEditorHint',
+      graphEdgeEditorInput: 'dshSplitWs_graphEdgeEditorInput',
+      graphEdgeEditorActions: 'dshSplitWs_graphEdgeEditorActions',
+      graphEdgeDelete: 'dshSplitWs_graphEdgeDelete',
+      graphCard: 'dshSplitWs_graphCard',
+      graphCardEmpty: 'dshSplitWs_graphCardEmpty',
+      graphCardWorkspace: 'dshSplitWs_graphCardWorkspace',
+      graphCardTitle: 'dshSplitWs_graphCardTitle',
+      graphCardMeta: 'dshSplitWs_graphCardMeta',
+      graphCardRunning: 'dshSplitWs_graphCardRunning',
+      graphPort: 'dshSplitWs_graphPort',
+      graphEmpty: 'dshSplitWs_graphEmpty',
     };
 
     /** 把若干 class 名拼成一个字符串，自动丢掉空值。 */

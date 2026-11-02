@@ -16,9 +16,50 @@ let currentRender;
 
 /** React 替身：createElement 生成普通树，Hook 只做记录。 */
 export const ReactStub = {
+  /** 是否真的执行 `useEffect`。默认 false，见下面那段的说明。 */
+  effectsEnabled: false,
   createElement: (type, props, ...children) => ({ type, props: props ?? {}, children }),
   useCallback: (callback) => callback,
-  useEffect: () => {},
+  /**
+   * `useEffect` 的替身：**真的会跑**。
+   *
+   * 原来这里是空实现，于是「挂载时读一次绑定表、把上次画的箭头恢复出来」这类行为
+   * 在离线测试里根本没被执行过 —— 2026-11-02「重启后箭头没了」就是这么漏出去的。
+   *
+   * 语义按真实 React 的最小集实现：
+   *   - 依赖数组按项比较，没变就不重跑；
+   *   - 没有依赖数组（undefined）每次渲染都跑；
+   *   - 返回的函数作为清理，在重跑之前与卸载时调用。
+   * 卸载那条目前只有 `mount()` 暴露的 `unmount()` 会触发（组件树整体丢弃时才需要）。
+   */
+  useEffect: (effect, deps) => {
+    /*
+     * 默认**不执行**：很多既有用例的断言建立在「副作用没跑过」之上，一旦全跑会让
+     * 那些用例进入渲染循环。需要验证「挂载时做了什么」的用例把 `effectsEnabled`
+     * 打开即可。
+     */
+    if (ReactStub.effectsEnabled !== true) return;
+    const owner = currentRender;
+    const slot = owner.cursor++;
+    const previous = owner.hooks[slot];
+    const changed = previous === undefined
+      || deps === undefined
+      || previous.deps === undefined
+      || deps.length !== previous.deps.length
+      || deps.some((value, index) => !Object.is(value, previous.deps[index]));
+    if (!changed) return;
+    if (previous !== undefined && typeof previous.cleanup === 'function') {
+      try {
+        previous.cleanup();
+      } catch {
+        /* 清理抛错不该拦住新的副作用 */
+      }
+    }
+    const record = { deps: deps === undefined ? undefined : deps.slice(), cleanup: undefined };
+    owner.hooks[slot] = record;
+    const cleanup = effect();
+    if (typeof cleanup === 'function') record.cleanup = cleanup;
+  },
   useMemo: (compute) => compute(),
   useRef: (initial) => {
     const owner = currentRender;
@@ -142,6 +183,20 @@ export function mount(component, props) {
       instance.render();
       return instance.tree;
     },
+    /** 卸载：按逆序调用所有 effect 的清理函数，模拟组件树被丢弃。 */
+    unmount() {
+      for (let index = instance.hooks.length - 1; index >= 0; index -= 1) {
+        const record = instance.hooks[index];
+        if (record !== null && typeof record === 'object' && typeof record.cleanup === 'function') {
+          try {
+            record.cleanup();
+          } catch {
+            /* ignore */
+          }
+          record.cleanup = undefined;
+        }
+      }
+    },
     /** 在仍有挂起的状态变更时重渲染。 */
     flush() {
       let guard = 0;
@@ -193,6 +248,15 @@ export function createStubContext({ presets = [], respond } = {}) {
   const calls = [];
   /** 插件通过 `registerFixed` 登记的固定快捷键（按登记顺序）。 */
   const fixedShortcuts = [];
+  /**
+   * 远端命名空间的处理函数表：`{ paneDispatch: { list: () => ... } }`。
+   * 用例在渲染前往里放，`$mount` 之后由服务表转发过去。
+   */
+  const remoteHandlers = {};
+  /** 远端命名空间挂载记录（`ctx.remote.$mount` 的替身往里写）。 */
+  const mounted = [];
+  /** 卸载记录（disposer 被调用时写）。 */
+  const unmounted = [];
   /** 装上的副作用（含标签与卸载函数）：`ctx.effect` 一调用就执行，并记在这里。 */
   const effects = [];
   /**
@@ -249,7 +313,42 @@ export function createStubContext({ presets = [], respond } = {}) {
         return () => {};
       },
     },
-    remote: { agentPresets },
+    /*
+     * 远端网关替身：`$mount` 记下这次挂载的描述符，测试据此断言
+     * 「paneDispatch 命名空间真的挂上去了、方法就那两个」。
+     * 返回的 disposer 也记下来，让卸载路径能被检查。
+     */
+    remote: {
+      agentPresets,
+      /*
+       * 真实实现会在挂载后把命名空间登记成 `remote.<namespace>`，客户端随后用
+       * `ctx.get('remote.<namespace>')` 拿到方法。替身照做 —— 否则「读一次绑定表」
+       * 这类路径在测试里永远走到 `notMounted`，测不到真问题。
+       */
+      $mount: (options) => {
+        mounted.push(options);
+        const namespace = Array.isArray(options?.descriptors) && options.descriptors.length > 0
+          ? options.descriptors[0].namespace
+          : undefined;
+        if (namespace !== undefined) {
+          const service = {};
+          for (const descriptor of options.descriptors) {
+            service[descriptor.method] = async (request) => {
+              const handler = remoteHandlers[namespace]?.[descriptor.method];
+              if (typeof handler !== 'function') {
+                return { ok: false, error: { code: 'gateway/invocation-unavailable', message: 'no handler' } };
+              }
+              return handler(request);
+            };
+          }
+          services.set('remote.' + namespace, service);
+        }
+        return Promise.resolve(() => {
+          unmounted.push(options);
+          if (namespace !== undefined) services.delete('remote.' + namespace);
+        });
+      },
+    },
     /** 服务查找：只认测试往里放的替身（`ctx.get` 是 Cordis 的原生 API）。 */
     get: (key) => services.get(key),
     /**
@@ -275,5 +374,5 @@ export function createStubContext({ presets = [], respond } = {}) {
     workspaces: { list: source({ items: [], archivedSessionIds: [] }) },
     uiWorkspace: { pickDirectory: () => Promise.resolve(null) },
   };
-  return { ctx, registered, calls, connection, fixedShortcuts, effects, services };
+  return { ctx, registered, calls, connection, fixedShortcuts, effects, services, mounted, unmounted, remoteHandlers };
 }

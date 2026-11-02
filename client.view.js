@@ -22,6 +22,15 @@ window.__ModuleLoader__.load({
     /** 稳定的 subscribe 函数缓存：每个可观察源只绑定一次，避免 uSES 反复订阅。 */
     const sourceSubscriptions = new WeakMap();
 
+    /**
+     * 客户端构建标记。
+     *
+     * 每次改客户端就把它往后推一位。它是排障时的可靠锚点：页面跑的是不是最新代码，
+     * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
+     * 正是「无法确认浏览器到底加载了哪一版」。
+     */
+    const CLIENT_BUILD = '2026-11-02a';
+
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
       let bound = sourceSubscriptions.get(source);
@@ -51,8 +60,10 @@ window.__ModuleLoader__.load({
      * @param deps.menu - 菜单块（弹出菜单与菜单行）。
      * @param deps.pane - 窗格块（`PaneFrame` 与「把光标送进某个窗格输入框」的 `focusPaneInput`）。
      */
-    function createView({ css, cx, errorText, model, menu, pane }) {
+    function createView({ css, cx, errorText, model, menu, pane, graph }) {
       const { Popover, MenuItem } = menu;
+      // 设计模式画布：只画卡片和箭头，校验与布局都在 `client.graph.model.js` 里算好。
+      const { GraphBoard } = graph;
       // 窗格块同时给出「把光标送进某个窗格的输入框」这件事：键盘切窗格与窗格被点亮
       // 两条路用的是同一份实现，只有一份「找不到输入框 / 宿主不可编辑就放手」的守卫。
       const { PaneFrame, focusPaneInput } = pane;
@@ -257,13 +268,16 @@ window.__ModuleLoader__.load({
 
       /** 整块棋盘。 */
       function SplitPanel(props) {
-        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, skillStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets } = props;
+        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, skillStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets, viewModeStore, graphStore, graphModel, dispatchStore, graphActions } = props;
         const paneState = useSource(paneStore);
         const workspaceState = useSource(workspaces.list);
         const sessionState = useSource(sessionList);
         const presetState = useSource(presetStore);
         const mcpState = useSource(mcpStore);
         const skillState = useSource(skillStore);
+        const modeState = useSource(viewModeStore);
+        const graphState = useSource(graphStore);
+        const dispatchState = useSource(dispatchStore);
         const items = workspaceState.items;
         const archivedSessionIds = workspaceState.archivedSessionIds;
         const panes = paneState.panes;
@@ -311,6 +325,48 @@ window.__ModuleLoader__.load({
         useEffect(() => {
           paneActions.loadSkills();
         }, [paneActions]);
+
+        /*
+         * 绑定表也必须**挂载时读一次**：Host 那边的绑定活在它自己的内存里，Host 重启
+         * 之后是空的，而页面上可能还画着箭头。读一次让同步器知道「已经推过什么」，
+         * 然后由下面那个同步效果把两边对齐 —— 对齐的方向永远是「以页面上的箭头为准」。
+         */
+        useEffect(() => {
+          /*
+           * 读完把**上次画的那棵树**恢复出来。
+           *
+           * 绑定表存在 Host 上（`~/.dsh/storages/pane_dispatch_bindings.json`），所以
+           * 刷新页面、甚至重启 Host 之后，箭头都还在。客户端要做的只是把它反推成边。
+           *
+           * 只在「本地一条边都没有」时采纳：否则会盖掉用户在这次会话里刚画的改动。
+           */
+          let cancelled = false;
+          let timer = null;
+          /*
+           * 带重试：远端命名空间是异步挂载的，第一次读很可能还没挂上。
+           * 只读到就停；读不到就隔一会儿再试，最多试 10 次（约 3 秒），之后放弃并让
+           * 画布顶部的状态说明接管。
+           */
+          const attempt = (round) => {
+            Promise.resolve(paneActions.loadDispatch())
+              .then((loaded) => {
+                if (cancelled) return;
+                if (loaded === undefined || loaded === null) {
+                  if (round < 10) timer = setTimeout(() => attempt(round + 1), 300);
+                  return;
+                }
+                if (graphStore.getSnapshot().edges.length > 0) return;
+                const restored = graphModel.edgesFromBindings(loaded);
+                if (restored.length > 0) graphStore.setEdges(restored);
+              })
+              .catch(() => undefined);
+          };
+          attempt(0);
+          return () => {
+            cancelled = true;
+            if (timer !== null) clearTimeout(timer);
+          };
+        }, [paneActions, graphStore, graphModel]);
 
         const openWorkspaceIds = useMemo(() => panes.map((pane) => pane.workspaceId), [panes]);
         /*
@@ -452,6 +508,154 @@ window.__ModuleLoader__.load({
           return index;
         }, [panes, workspaceById, sessionState, archivedSessionIds]);
 
+        /**
+         * 任务分派里的卡片 = **会话**，不是窗格。
+         *
+         * 候选范围是「当前铺开在棋盘上的那些工作区里的全部真实会话」（空白会话、归档、
+         * 子代理会话都不算）。这样：
+         *   - 同一个会话开在两格里只出现一张卡片；
+         *   - 关掉窗格、换掉某格的会话，卡片与箭头都不受影响；
+         *   - **没在棋盘上打开的会话也能被连上** —— 第一版把卡片绑在窗格上时，
+         *     「A 没开在棋盘里就连不出箭头」是真实踩过的坑。
+         *
+         * `inPane` 只决定「点卡片能不能跳过去看」，与能不能连箭头无关。
+         */
+        const graphCards = useMemo(() => {
+          const inPane = new Set();
+          for (const pane of panes) {
+            const plan = panePlan.get(pane.key);
+            if (plan !== undefined && plan.sessionId !== undefined) inPane.add(plan.sessionId);
+          }
+          const seen = new Set();
+          const rows = [];
+          /*
+           * 候选是**全部已存在的会话**，不再限于「当前铺在棋盘上的工作区」。
+           *
+           * 理由：委派关系是会话之间的事，跟哪个工作区现在开着没关系。真实需求里常见
+           * 「A 在 dsh 目录、B 在 rea 目录，两个工作区都只开了其中一个会话」—— 按铺开的
+           * 工作区过滤时，同目录下别的会话根本选不到。
+           *
+           * 仍然排除三类：空白会话（没有内容可派）、归档会话（用户已经收起来了）、
+           * 子代理会话（不是给人用的对话）。
+           */
+          for (const workspace of items) {
+            for (const row of model.selectableSessions(workspace, sessionState, archivedSessionIds)) {
+              if (seen.has(row.id)) continue;
+              seen.add(row.id);
+              rows.push({ row, workspace });
+            }
+          }
+          /*
+           * 不属于任何已注册工作区的会话也要算进来（比如工作区被删了、会话还留着）。
+           * 它们只出现在会话表里，所以从 `sessionState` 补一遍。
+           */
+          for (const id of sessionState.ids) {
+            if (seen.has(id)) continue;
+            const summary = sessionState.byId[id];
+            if (summary === undefined || summary.origin === 'subagent') continue;
+            if (summary.blank === true) continue;
+            if (archivedSessionIds.includes(id)) continue;
+            seen.add(id);
+            const owner = items.find((item) => item.path === summary.cwd);
+            rows.push({ row: summary, workspace: owner });
+          }
+          /*
+           * 全局按「最近更新」排序，而不是按工作区分组。
+           *
+           * 布局会把「没有任何箭头」的会话排在左边第一列，所以这一列实际上就是会话
+           * 花名册 —— 按最近用过的顺序排，用户要找的那个通常就在最上面。
+           */
+          rows.sort((left, right) => (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0));
+          return rows.map(({ row, workspace }) => {
+            const title = row.displayTitle;
+            return {
+              key: row.id,
+              label: title === undefined || title === '' ? t('pane.untitled') : title,
+              workspaceTitle: workspace === undefined ? t('pane.unknownWorkspace') : workspace.title,
+              running: row.running === true,
+              inPane: inPane.has(row.id),
+            };
+          });
+        }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t]);
+
+        /** 卡片（按会话 id）的索引，换算绑定表时用它取显示名。 */
+        const graphCardById = useMemo(() => {
+          const index = new Map();
+          for (const card of graphCards) index.set(card.key, card);
+          return index;
+        }, [graphCards]);
+
+        /**
+         * 布局用的节点顺序：**有箭头的会话排前面**，没连过的排在后面。
+         *
+         * 布局会把「没有任何入边」的节点都放在第一列（根），顺序就是这里给的顺序。
+         * 于是第一列前半段是当前这棵树的根，后半段是会话花名册 —— 树在上面、候选在下面，
+         * 不用在一大堆孤立卡片里找自己画的那个。
+         */
+        const graphLayout = useMemo(() => {
+          const connected = new Set();
+          for (const edge of graphState.edges) {
+            connected.add(edge.from);
+            connected.add(edge.to);
+          }
+          const keys = [
+            ...graphCards.filter((card) => connected.has(card.key)).map((card) => card.key),
+            ...graphCards.filter((card) => !connected.has(card.key)).map((card) => card.key),
+          ];
+          return graphModel.layoutGraph(graphState.edges, keys);
+        }, [graphState.edges, graphCards, graphModel]);
+
+        /**
+         * 把画出来的箭头换算成 Host 的绑定表，并在它变化时同步过去。
+         *
+         * 边两端就是会话 id，所以这里只需要「这个会话还在不在册、叫什么名字」——
+         * 不再有「窗格 → 会话」那一层解析，换会话、关窗格都不会影响结果。
+         */
+        const bindings = useMemo(() => graphModel.bindingsFromEdges(
+          graphState.edges,
+          (sessionId) => graphCardById.get(sessionId),
+        ), [graphState.edges, graphCardById]);
+
+        /*
+         * 会话表到了没有。
+         *
+         * 刷新页面时，**箭头和会话表是两条各自异步的线**：箭头从 Host 读回来（快），
+         * 会话表从会话服务读回来（慢一点）。如果箭头先回来、会话表还没到，算绑定表时
+         * 两端都会「查无此会话」→ 算出来是空表 → 同步器以为用户把箭头全删了，于是把
+         * Host 上存好的树清掉。**这就是「刷新一次就没了」的真正原因。**
+         *
+         * 所以在会话表到达之前，一次同步都不发。
+         */
+        const rosterReady = sessionState.ids.length > 0;
+
+        useEffect(() => {
+          if (!rosterReady) return;
+          /*
+           * `syncBindings` 返回 Promise。这里必须接住它：一个没人处理的 rejected
+           * Promise 在浏览器里只会变成控制台的一条警告，界面上什么都不会发生 ——
+           * 而这条链上任何一次失败都意味着「箭头没生效」，恰恰是最不该静默的。
+           * 失败原因由同步器自己写进 `dispatchState.error`，这里只负责不丢。
+           */
+          Promise.resolve(graphActions.syncBindings(bindings)).catch(() => undefined);
+        }, [bindings, graphActions, rosterReady]);
+
+        /**
+         * 任务分派里点一张卡片：切回平铺并聚焦「正在显示这个会话」的那一格。
+         *
+         * 一个会话可能同时开在好几格里，取第一格即可（用户想看的都是同一段对话）。
+         * 这个会话没在任何窗格里打开时什么也不做 —— 画布那边不会给出可点的提示。
+         */
+        const openPaneFromGraph = useCallback((sessionId) => {
+          for (const pane of panes) {
+            const plan = panePlan.get(pane.key);
+            if (plan !== undefined && plan.sessionId === sessionId) {
+              viewModeStore.setMode(graphModel.MODE_TILES);
+              paneActions.setActive(pane.key);
+              return;
+            }
+          }
+        }, [panes, panePlan, viewModeStore, graphModel, paneActions]);
+
         /** 渲染一个窗格元素；`grow` 是它在分屏里占的比例（整块棋盘上只有一个窗格时为空）。 */
         const renderPane = (pane, grow) => {
           const plan = panePlan.get(pane.key);
@@ -561,11 +765,65 @@ window.__ModuleLoader__.load({
             renderChild(node.b, node.id + '-b', 1 - node.ratio));
         };
 
+        /*
+         * 顶部两个模式按钮。
+         *
+         * 用 `aria-pressed` 表达选中而不是换一套 class：读屏会念「已按下」，视觉上由
+         * `.dshSplitWs_mode[aria-pressed=true]` 上色 —— 两件事同一个真值来源。
+         */
+        const modeSwitch = h('div', { className: css.modes, role: 'group', 'aria-label': t('mode.tilesHint') },
+          h('button', {
+            key: 'tiles',
+            type: 'button',
+            className: css.mode,
+            'aria-pressed': modeState.mode === graphModel.MODE_TILES,
+            title: t('mode.tilesHint'),
+            onClick: () => viewModeStore.setMode(graphModel.MODE_TILES),
+          }, t('mode.tiles')),
+          h('button', {
+            key: 'graph',
+            type: 'button',
+            className: css.mode,
+            'aria-pressed': modeState.mode === graphModel.MODE_GRAPH,
+            title: t('mode.graphHint'),
+            onClick: () => viewModeStore.setMode(graphModel.MODE_GRAPH),
+          }, t('mode.graph')));
+
+        const graphBoard = h(GraphBoard, {
+          key: 'graph',
+          cards: graphCards,
+          edges: graphState.edges,
+          /*
+           * 一行自诊断。用户报「箭头没了」时，这一行能直接分清是：
+           *   构建没更新（build 标记对不上）/ 读不到 Host 绑定表（状态不是 ready）/
+           *   读到了但没恢复出来（关系数是 0）。
+           */
+          diagnostic: 'build ' + CLIENT_BUILD
+            + ' · 关系 ' + String(graphState.edges.length)
+            + ' · 会话 ' + String(graphCards.length)
+            + ' · 同步 ' + dispatchState.status
+            + (dispatchState.error === null || dispatchState.error === undefined ? '' : '（' + dispatchState.error + '）'),
+          layout: graphLayout,
+          graph: graphModel,
+          actions: {
+            addEdge: graphActions.addEdge,
+            removeEdge: graphActions.removeEdge,
+            // 少了这一行：编辑器打开后点「保存」会调一个 undefined —— 什么都不发生。
+            setNote: graphActions.setNote,
+            openPane: openPaneFromGraph,
+          },
+          t,
+          css,
+          cx,
+          degraded: dispatchState.status === 'unavailable',
+        });
+
         return h('div', { className: css.root, [BOARD_MARKER]: 'true' },
           h('header', { className: css.head },
             h('div', { className: css.headMain },
               h('h1', { className: css.title }, t('panel.title'))),
             h('div', { className: css.headActions },
+              modeSwitch,
               h(Popover, {
                 label: addBusy ? t('panel.adding') : t('panel.add'),
                 title: t('panel.add'),
@@ -609,8 +867,10 @@ window.__ModuleLoader__.load({
             ? h('div', cx(css.board, css.boardEmpty),
                 h('strong', null, t('board.emptyTitle')),
                 h('span', null, t('board.emptyBody')))
-            : h('div', { className: css.board },
-                h('div', { className: css.boardTree }, renderNode(paneState.layout))));
+            : modeState.mode === graphModel.MODE_GRAPH
+              ? graphBoard
+              : h('div', { className: css.board },
+                  h('div', { className: css.boardTree }, renderNode(paneState.layout))));
       }
       SplitPanel.displayName = 'SplitPanel';
 

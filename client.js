@@ -123,6 +123,9 @@ window.__ModuleLoader__.load({
       './client.presets.js',
       './client.mcp.js',
       './client.skill.js',
+      './client.dispatch.js',
+      './client.graph.model.js',
+      './client.graph.view.js',
       './client.menu.js',
       './client.pane.js',
       './client.view.js',
@@ -140,7 +143,9 @@ window.__ModuleLoader__.load({
         return Promise.reject(new Error('client module loader 不支持包内代码块（require.async 缺失）'));
       }
       return Promise.all(CHUNK_FILES.map((file) => require.async(file)))
-        .then(([styles, dicts, model, presets, mcp, skill, menu, pane, view]) => ({ styles, dicts, model, presets, mcp, skill, menu, pane, view }));
+        .then(([styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, view]) => ({
+          styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, view,
+        }));
     }
 
     /** 本次插件实例的代码块装载（每个 factory 执行一次）。 */
@@ -177,6 +182,7 @@ window.__ModuleLoader__.load({
         model: mods.model,
         menu,
         pane,
+        graph: mods.graphView,
       });
 
       // 样式表：同一个页面重复加载时只插一次。
@@ -212,15 +218,63 @@ window.__ModuleLoader__.load({
        * 与「本来就没有技能库」是同一种静默处理。
        */
       const skillStore = mods.skill.createSkillStore(() => ctx.get(mods.skill.SKILL_REMOTE_KEY));
+      /*
+       * 设计模式的三个零件，各自的职责边界很清楚：
+       *   - `viewModeStore`  当前看的是「平铺」还是「设计」；
+       *   - `graphStore`     箭头本身（只存窗格 key 对，不认识会话）；
+       *   - `dispatchSync`   把箭头换算出来的绑定表推给 Host。
+       * 之所以拆成三个而不是一个：模式与图是两种完全不同的状态，绑定的去向又是第三种
+       * （远端），混在一起会让每个改动都牵连一片重算。
+       */
+      const viewModeStore = mods.graphModel.createViewModeStore();
+      const graphStore = mods.graphModel.createGraphStore();
+      const dispatchSync = mods.dispatch.createDispatchSync(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY));
+
+      /*
+       * 挂载 `remote.paneDispatch` 命名空间（Host 那一半由 index.js 提供）。
+       *
+       * 与 MCP / SKILL 两个服务一样**不能**写进 inject：那样插件激活会依赖远端挂载完成，
+       * 而远端挂载又发生在本插件 apply 之后，形成死锁。所以这里自己挂、自己卸，
+       * 调用点再用 `ctx.get` 惰性解析。
+       */
+      ctx.effect(() => {
+        let disposed = false;
+        let unmount;
+        Promise.resolve(ctx.remote.$mount({ package: PLUGIN_ID, descriptors: mods.dispatch.REMOTE_DESCRIPTORS }))
+          .then((dispose) => {
+            if (disposed) void dispose();
+            else unmount = dispose;
+          }, (error) => {
+            console.error('[split-workspaces] 挂载 paneDispatch 命名空间失败:', error);
+          });
+        return () => {
+          disposed = true;
+          if (unmount !== undefined) void unmount();
+        };
+      }, 'split-workspaces: paneDispatch namespace');
+
       /** 交给组件层的动作集合：组件只调这里，不直接碰存储内部。 */
       const paneActions = {
         addPane: (workspaceId, sessionId) => paneStore.addPane(workspaceId, sessionId),
         splitPane: (key, dir, workspaceId) => paneStore.splitPane(key, dir, workspaceId),
         replaceWorkspace: (key, workspaceId) => paneStore.replaceWorkspace(key, workspaceId),
         swapPanes: (keyA, keyB) => paneStore.swapPanes(keyA, keyB),
+        /*
+         * 关窗格**不动箭头**。
+         *
+         * 节点是会话不是窗格：窗口关掉并不改变「谁能派给谁」。第一版在这里清边，结果
+         * 用户关掉一格就把委派关系一起弄没了 —— 而那条关系跟他开不开窗格毫无关系。
+         */
         removePane: (key) => paneStore.removePane(key),
         setSession: (key, sessionId) => paneStore.setSession(key, sessionId),
-        forgetSession: (sessionId) => paneStore.forgetSession(sessionId),
+        /*
+         * 会话被**删除**时才清掉它牵涉的箭头 —— 这时那条边真的失去意义了。
+         * （关窗格是另一回事，见上面 removePane。）
+         */
+        forgetSession: (sessionId) => {
+          paneStore.forgetSession(sessionId);
+          graphStore.removeSession(sessionId);
+        },
         setPreset: (key, preset) => paneStore.setPreset(key, preset),
         setActive: (key) => paneStore.setActive(key),
         setRatio: (splitId, ratio) => paneStore.setRatio(splitId, ratio),
@@ -230,13 +284,30 @@ window.__ModuleLoader__.load({
         setMcpSelection: (workspacePath, selected) => mcpStore.setSelection(workspacePath, selected),
         loadSkills: () => skillStore.load(),
         setSkillSelection: (workspacePath, selected) => skillStore.setSelection(workspacePath, selected),
+        loadDispatch: () => dispatchSync.load(),
+      };
+
+      /**
+       * 设计模式的三个动作。
+       *
+       * `syncBindings` 直接透传给同步器：它自己做「只发变了的那些发起方」的差量，
+       * 视图层每渲染一次都调它也没关系（没变化就一个请求都不发）。
+       */
+      const graphActions = {
+        addEdge: (from, to) => graphStore.addEdge(from, to),
+        removeEdge: (from, to) => graphStore.removeEdge(from, to),
+        setNote: (from, to, note) => graphStore.setNote(from, to, note),
+        syncBindings: (bindings) => dispatchSync.sync(bindings),
       };
 
       // 连接重建后 Host 的模式清单可能变了，重新读一次（技能库同理：目录可能刚被改过）。
+      // 绑定表也要重读：Host 重启后内存里的绑定是空的，而页面上还画着箭头 ——
+      // 不重读的话「箭头在、工具说没绑定」会一直卡到下次改边。
       ctx.effect(() => ctx.on('connection/reset', () => {
         presetStore.load();
         mcpStore.load();
         skillStore.load();
+        dispatchSync.load();
       }), 'split-workspaces: preset roster refresh');
 
       /**
@@ -316,8 +387,14 @@ window.__ModuleLoader__.load({
         return ui.request({
           sessionId,
           displayTitle,
+          /*
+           * 删成功之后两个 store 都要收尾：窗格松手 + 清掉这个会话牵涉的委派箭头。
+           * 这里必须走 `paneActions.forgetSession`（它带 graphStore 清理），而不是直接
+           * 调 `paneStore.forgetSession` —— 后者会把箭头留在图里，成为一个指向已删会话
+           * 的悬空节点。
+           */
           onDeleted: (deletedId) => {
-            paneStore.forgetSession(deletedId === undefined ? sessionId : deletedId);
+            paneActions.forgetSession(deletedId === undefined ? sessionId : deletedId);
           },
         }) === true;
       };
@@ -393,6 +470,11 @@ window.__ModuleLoader__.load({
           uiWorkspace: ctx.uiWorkspace,
           openWorkspaceDirectory,
           requestSessionDelete,
+          viewModeStore,
+          graphStore,
+          graphModel: mods.graphModel,
+          dispatchStore: dispatchSync,
+          graphActions,
         }),
       }, view.SplitPanel)), 'split-workspaces: main panel');
     }

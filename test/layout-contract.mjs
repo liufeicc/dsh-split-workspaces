@@ -24,7 +24,7 @@ import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, re
 const here = dirname(fileURLToPath(import.meta.url));
 
 const mod = await loadBundle(join(here, '..', 'client.js'), { react: ReactStub });
-check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.menu.js,./client.pane.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
+check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.dispatch.js,./client.graph.model.js,./client.graph.view.js,./client.menu.js,./client.pane.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
 
 /*
  * 清单与磁盘必须一一对应。
@@ -47,6 +47,24 @@ check('每个代码块都按 loader 规则注册并导出自己的东西', typeo
   && typeof mods.model.createPaneStore === 'function' && typeof mods.presets.createPresetStore === 'function'
   && typeof mods.menu.createMenu === 'function' && typeof mods.pane.createPane === 'function'
   && typeof mods.view.createView === 'function');
+
+/*
+ * 「代码里用到的键」必须在词典里。
+ *
+ * 上面那条只比两份词典**彼此**是否一致 —— 两边都缺同一个键时它是绿的。2026-11-01 就
+ * 这么漏过一次：`client.graph.view.js` 用了 `pane.dispatchUnavailable`，两份词典都没有，
+ * 于是「Host 没加载」这条降级路径上，用户看到的是字面的键名。
+ */
+check('代码里 t() 用到的键都在词典里', (() => {
+  const used = new Set();
+  for (const name of ['client.view.js', 'client.graph.view.js', 'client.pane.js', 'client.dispatch.js']) {
+    const text = readFileSync(join(here, '..', name), 'utf8');
+    for (const match of text.matchAll(/\bt\('([a-zA-Z][a-zA-Z.]*)'/g)) used.add(match[1]);
+  }
+  const known = new Set([...Object.keys(mods.dicts.zh), ...Object.keys(mods.dicts.en)]);
+  const missing = [...used].filter((key) => !known.has(key));
+  return missing.length === 0 ? true : missing.join(',');
+})());
 
 check('中文与英文的词典键一一对应（新增的「替换工作区」那几条两边都齐）', (() => {
   const zh = Object.keys(mods.dicts.zh).sort().join(',');
@@ -721,10 +739,17 @@ const repAfter = repBoard.paneStore.getSnapshot();
 check('选中一行就把这一格换成它：窗格数不变、布局树原样（还在原位）',
   repAfter.panes.length === 2 && repAfter.layout === repLayoutBefore
   && repAfter.panes[0].workspaceId === 'ws-c', JSON.stringify(repAfter.panes.map((pane) => pane.workspaceId)));
-check('替换后这一格显示的是新工作区的状态，不是旧工作区的会话', (() => {
-  const provider = findAll(paneDom(repBoard.render().tree, 'pane-1').tree, byName('SessionProvider'))[0];
-  return provider !== undefined
-    && findAll(provider.props.empty(), (node) => node.children.includes('该工作区还没有会话')).length === 1;
+check('替换后这一格跟随的是新工作区的会话，不是旧工作区的', (() => {
+  /*
+   * 原断言是「显示『该工作区还没有会话』」，因为测试台里 gamma 那时一个会话都没有。
+   * 2026-11-01 给 gamma 加了一个会话（用来守住「任务分派列全部已存在的会话」），
+   * 于是这一格应当**跟随 gamma 的会话**。判据等价且更强：显示的必须正是 gamma 那个，
+   * 不能还是 alpha 的 s-a。
+   */
+  const frame = frameOf(repBoard.render().tree, 'pane-1');
+  return frame !== undefined
+    && frame.props.summary !== undefined
+    && frame.props.summary.id === 's-c';
 })());
 check('替换后新工作区从候选里消失，旧工作区回到候选里', (() => {
   const menu = replaceMenuOf(paneDom(repBoard.render().tree, 'pane-1').tree);

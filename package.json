@@ -15,6 +15,9 @@
   "files": [
     "index.js",
     "client.js",
+    "client.graph.view.js",
+    "client.graph.model.js",
+    "client.dispatch.js",
     "client.styles.js",
     "client.dicts.js",
     "client.model.js",

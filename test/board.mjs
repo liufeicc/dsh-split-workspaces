@@ -106,15 +106,18 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
       { workspaceId: 'ws-a', title: 'alpha', path: '/tmp/alpha', sessionIds: ['s-a', 's-blank'] },
       { workspaceId: 'ws-b', title: 'beta', path: '/tmp/beta', sessionIds: ['s-b'] },
       // 第三个工作区故意不铺开：分屏菜单第二步应当把它排在已铺开的前面。
-      { workspaceId: 'ws-c', title: 'gamma', path: '/tmp/gamma', sessionIds: [] },
+      // 第四个会话属于 ws-c：这个工作区**没有**铺到棋盘上，用来验证「任务分派列的是
+      // 全部已存在的会话」，而不是「只列当前铺开的工作区里的」。
+      { workspaceId: 'ws-c', title: 'gamma', path: '/tmp/gamma', sessionIds: ['s-c'] },
     ],
     archivedSessionIds: [],
   });
   const sessions = source({
-    ids: ['s-a', 's-b', 's-blank'],
+    ids: ['s-a', 's-b', 's-blank', 's-c'],
     byId: {
       's-a': { id: 's-a', displayTitle: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
       's-b': { id: 's-b', displayTitle: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
+      's-c': { id: 's-c', displayTitle: 'c', blank: false, origin: 'user', updatedAt: 0, retainedBy: {}, projectionValues: {} },
       // 没发过消息的空白会话：会话菜单不该列它，但「新建会话」应当优先复用它。
       's-blank': { id: 's-blank', displayTitle: '', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
     },

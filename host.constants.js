@@ -50,6 +50,19 @@ export const DISPATCH_TIMEOUT_MS = 20 * 60 * 1000;
 /** 单次任务正文的长度上限（字符）。超出直接拒绝，避免把一条超大消息塞进别人的会话。 */
 export const MAX_TASK_CHARS = 20000;
 
+/**
+ * 一次调用最多同时派给几个目标。
+ *
+ * 上限不只是防滥用：每个目标都会挂一条 `session/event` 订阅与一个切片定时器，
+ * 一次几十个会让这一轮的收尾变得很重；而真要用到 8 个以上并行子任务时，
+ * 更合适的是分几批派（每批的结论也更清楚）。
+ */
+export const MAX_BATCH_TARGETS = 8;
+
+/** `wait` 的两档：等全部到终态，还是第一个到终态就返回。 */
+export const WAIT_ALL = 'all';
+export const WAIT_ANY = 'any';
+
 /** 一条委派说明的最大长度（字符）—— 与客户端 `EDGE_NOTE_MAX` 保持一致。 */
 export const EDGE_NOTE_MAX = 200;
 

@@ -274,9 +274,10 @@ check('清空目标等于解除绑定', (() => {
   emit('s-b', turnEndEvent(12, 'completed'));
 
   const value = await running;
-  check('目标那一轮结束后工具返回它的回复', value.reply === '已经清完了，删了 42 个文件', JSON.stringify(value));
-  check('不会误取目标会话上一轮的回复', !value.reply.includes('旧结论'));
-  check('返回里带着目标显示名与结束状态', value.target === 'B 会话' && value.status === 'completed');
+  check('目标那一轮结束后工具返回它的回复', value.results[0].reply === '已经清完了，删了 42 个文件', JSON.stringify(value));
+  check('不会误取目标会话上一轮的回复', !value.results[0].reply.includes('旧结论'));
+  check('返回里带着目标显示名与结束状态',
+    value.results[0].target === 'B 会话' && value.results[0].status === 'completed');
   check('工具的渲染结果里有目标与结论', (() => {
     const blocks = tool.output.render({}, value);
     return blocks[0].type === 'text' && blocks[0].text.includes('B 会话') && blocks[0].text.includes('42 个文件');
@@ -325,7 +326,7 @@ check('清空目标等于解除绑定', (() => {
   const firstValue = await first;
 
   check('到一段的尽头还没做完时，状态是 running 而不是超时失败', firstValue.status === 'running', JSON.stringify(firstValue));
-  check('返回里带着目前的进度', firstValue.reply.includes('已经拆到第三个结构'), firstValue.reply);
+  check('返回里带着目前的进度', firstValue.results[0].reply.includes('已经拆到第三个结构'), JSON.stringify(firstValue));
   check('note 告诉模型接着等怎么做', firstValue.note.includes('接着等') && firstValue.note.includes('省略 task'), firstValue.note);
 
   /*
@@ -344,7 +345,7 @@ check('清空目标等于解除绑定', (() => {
   emit('s-b', assistantEvent(3, '完成：新增三节规格'));
   const secondValue = await second;
   check('接着等到了终态就返回完整结论',
-    secondValue.status === 'complete' && secondValue.reply === '完成：新增三节规格', JSON.stringify(secondValue));
+    secondValue.status === 'complete' && secondValue.results[0].reply === '完成：新增三节规格', JSON.stringify(secondValue));
   check('终态之后 note 是空的（不再让人等）', secondValue.note === '');
 
   // 终态之后 pending 被清掉，下次调用回到「新派一单」
@@ -393,8 +394,8 @@ function fakeGoals({ failCreate = false } = {}) {
   emit('s-b', assistantEvent(11, '已经清完了，删了 42 个文件'));
   const value = await running;
   check('目标达成后工具返回 complete 与最后一轮结论',
-    value.status === 'complete' && value.reply === '已经清完了，删了 42 个文件', JSON.stringify(value));
-  check('不会把中途那一轮的半成品当成结论', !value.reply.includes('还剩 dist'));
+    value.status === 'complete' && value.results[0].reply === '已经清完了，删了 42 个文件', JSON.stringify(value));
+  check('不会把中途那一轮的半成品当成结论', !value.results[0].reply.includes('还剩 dist'));
 }
 
 {
@@ -407,8 +408,9 @@ function fakeGoals({ failCreate = false } = {}) {
   goals.done('blocked', '连续三轮卡在同一个权限问题上');
   emit('s-b', { type: 'goal/change', seq: 2, time: 3, data: {} });
   const value = await running;
-  check('目标卡住时状态是 blocked', value.status === 'blocked');
-  check('卡住原因会附在结论里', value.reply.includes('连续三轮卡在同一个权限问题上'), value.reply);
+  check('目标卡住时，它自己的状态是 blocked', value.results[0].status === 'blocked', JSON.stringify(value));
+  check('整批状态是 partial（有结论，但不算做成）', value.status === 'partial', JSON.stringify(value));
+  check('卡住原因会附在结论里', value.results[0].reply.includes('连续三轮卡在同一个权限问题上'), value.results[0].reply);
 }
 
 {
@@ -516,7 +518,7 @@ function fakeGoals({ failCreate = false } = {}) {
   ctx.get('paneDispatch').set({ owner: 's-a', targets: [{ id: 's-b', label: '修登录 / web' }, { id: 's-c', label: '跑测试 / web' }] });
 
   const controller = new AbortController();
-  const running = tool.execute({ task: '做事', target: '2' }, { agent: { id: 's-a' }, signal: controller.signal });
+  const running = tool.execute({ task: '做事', targets: ['2'] }, { agent: { id: 's-a' }, signal: controller.signal });
   await settle();
   check('绑定多个目标时可以用界面上的序号指定', promptCalls[0]?.request.sessionId === 's-c');
   controller.abort();
@@ -529,11 +531,228 @@ function fakeGoals({ failCreate = false } = {}) {
   ctx.get('paneDispatch').set({ owner: 's-a', targets: [{ id: 's-b', label: '修登录 / web' }, { id: 's-c', label: '跑测试 / web' }] });
   // 这一条只关心「投给了谁」，所以投完就取消，别让等待挂在那里。
   const controller = new AbortController();
-  const running = tool.execute({ task: '做事', target: '跑测试' }, { agent: { id: 's-a' }, signal: controller.signal });
+  const running = tool.execute({ task: '做事', targets: ['跑测试'] }, { agent: { id: 's-a' }, signal: controller.signal });
   await settle();
   check('也可以用标题的一部分指定（模型复述标题时不会逐字照抄）', promptCalls[0]?.request.sessionId === 's-c');
   controller.abort();
   await running;
+}
+
+// ────────────────────── 一次派给多个目标（批处理） ──────────────────────
+
+/**
+ * 多目标版的目标服务替身：每个会话一个独立的 goal 视图。
+ *
+ * 单目标那版只有一个 `view`，两个目标会互相覆盖 —— 多目标用例必须按会话分开。
+ *
+ * @param options.failFor - 这些会话在创建目标时抛错，用来验证「部分失败」。
+ */
+function fakeMultiGoals({ failFor = new Set() } = {}) {
+  const views = new Map();
+  return {
+    created: [],
+    create(agent, request) {
+      const id = agent.session.id;
+      if (failFor.has(id)) throw new Error('an active goal already exists');
+      this.created.push({ id, objective: request.objective });
+      views.set(id, { phase: 'active', objective: request.objective, blockedReason: undefined });
+      return views.get(id);
+    },
+    get(agent) {
+      return views.get(agent.session.id);
+    },
+    done(id, phase, explanation) {
+      views.set(id, {
+        ...views.get(id),
+        phase,
+        blockedReason: explanation === undefined ? undefined : { code: 'round-limit', explanation },
+      });
+    },
+  };
+}
+
+/** 两个可派目标的公共布景。 */
+const twoTargets = () => [
+  { id: 's-b', label: '乙会话' },
+  { id: 's-c', label: '丙会话' },
+];
+
+{
+  /*
+   * 主路径：一次调用派两个目标。要求「两个都真的建了目标」且「两个同时在等」，
+   * 而不是派完第一个才开始第二个。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  let returned = false;
+  const running = tool
+    .execute({ task: '分头办事', targets: ['乙会话', '丙会话'] }, { agent: { id: 's-a' }, signal: new AbortController().signal })
+    .then((value) => { returned = true; return value; });
+  await settle();
+
+  check('一次调用给两个目标都建了目标', goals.created.length === 2, JSON.stringify(goals.created.map((x) => x.id)));
+  check('两个目标同时进入等待（pending 有两条）', service.pending.size === 2, String(service.pending.size));
+
+  // 只让乙完成：默认 all 语义下整批不该返回。
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '乙做完了'));
+  await settle();
+  check('默认 wait=all：一个目标完成时整批还没返回', returned === false);
+
+  // 丙也完成，整批收尾。
+  goals.done('s-c', 'complete');
+  emit('s-c', assistantEvent(1, '丙也做完了'));
+  const value = await running;
+
+  check('两个目标都到终态后整批状态是 complete', value.status === 'complete', JSON.stringify(value));
+  check('结果里两个目标都在', value.results.length === 2);
+  check('结果按用户请求的顺序排列', value.results[0].target === '乙会话' && value.results[1].target === '丙会话');
+  check('每个目标各自带回自己的结论',
+    value.results[0].reply === '乙做完了' && value.results[1].reply === '丙也做完了', JSON.stringify(value.results));
+  check('全部结束后没有还在跑的目标', value.stillRunning === 0);
+  check('全部结束后 pending 清空', service.pending.size === 0);
+}
+
+{
+  /*
+   * wait=any：第一个有结论就返回，其余留到下一次续等。
+   * 同时要验证「留下的那条 pending 没被清掉」—— 不然续等会变成「新派一单」。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const running = tool.execute(
+    { task: '分头办事', wait: 'any', targets: ['乙会话', '丙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  check('wait=any 同样是两个目标一起开工', goals.created.length === 2);
+
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '乙先回来了'));
+  const first = await running;
+
+  check('wait=any 在第一个目标有结论时就返回', first.status === 'running', JSON.stringify(first));
+  check('返回里点明还有几个在做', first.stillRunning === 1, String(first.stillRunning));
+  check('已完成的那个带着结论',
+    first.results.find((item) => item.target === '乙会话')?.reply === '乙先回来了', JSON.stringify(first.results));
+  check('没完成的那个标成 running',
+    first.results.find((item) => item.target === '丙会话')?.status === 'running', JSON.stringify(first.results));
+  check('没完成的目标保留 pending，可以接着等', service.pending.size === 1, String(service.pending.size));
+  check('running 时 note 告诉模型继续调用', first.note.includes('继续调用'), first.note);
+
+  // 续等：省略 task 与 targets，只等还没结束的那个。
+  const second = tool.execute({}, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  await settle();
+  check('续等不会给已完成的目标重建目标', goals.created.length === 2, String(goals.created.length));
+
+  goals.done('s-c', 'complete');
+  emit('s-c', assistantEvent(1, '丙也做完了'));
+  const rest = await second;
+  check('续等等到了剩下那个目标的结论',
+    rest.status === 'complete' && rest.results[0].target === '丙会话' && rest.results[0].reply === '丙也做完了',
+    JSON.stringify(rest));
+  check('全部结束后 pending 清空', service.pending.size === 0, String(service.pending.size));
+}
+
+{
+  /*
+   * 预检：有一个目标在忙，就**一个都不派**。
+   * 少了这条会出现「派出去一半」—— 模型拿着半截状态，还得自己猜哪些生效了。
+   */
+  const agents = new Map([['s-c', { status: 'running' }]]);
+  const goals = fakeMultiGoals();
+  const { tool, ctx } = boot({ agents, goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  let message = null;
+  try {
+    await tool.execute({ task: '分头办事', targets: ['乙会话', '丙会话'] }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  } catch (error) {
+    message = error.message;
+  }
+  check('批量派单里有一个目标在忙时整批被拒', typeof message === 'string' && message.includes('正在跑'), message);
+  check('被拒时一个目标都没建（不会派出去一半）', goals.created.length === 0, String(goals.created.length));
+}
+
+{
+  /*
+   * 部分失败：丙的目标建不出来（对方已有未结束目标），乙必须照常跑完。
+   * 整批不抛 —— 抛了就把已经跑起来的乙也一起丢了。
+   */
+  const goals = fakeMultiGoals({ failFor: new Set(['s-c']) });
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const running = tool.execute({ task: '分头办事', targets: ['乙会话', '丙会话'] }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  await settle();
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '乙做完了'));
+  const value = await running;
+
+  check('部分目标没派出去时整批不抛异常', value !== undefined && Array.isArray(value.results), JSON.stringify(value));
+  check('整批状态是 partial', value.status === 'partial', JSON.stringify(value));
+  check('派出去的那个照常带回结论',
+    value.results.find((item) => item.target === '乙会话')?.reply === '乙做完了', JSON.stringify(value.results));
+  const failed = value.results.find((item) => item.target === '丙会话');
+  check('没派出去的那个标成 failed 并说明原因',
+    failed?.status === 'failed' && failed.reply.includes('没法替换'), JSON.stringify(failed));
+  check('没派出去的目标不会留下 pending', service.pending.size === 0, String(service.pending.size));
+}
+
+{
+  /*
+   * 给一个「还在跑上件事」的目标再派新任务 → 明确拒绝。
+   * 猜错的代价是模型以为新任务派出去了，而对方其实还在做上一件。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  const running = tool.execute({ task: '第一件事' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  await settle();
+
+  let message = null;
+  try {
+    await tool.execute({ task: '第二件事' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  } catch (error) {
+    message = error.message;
+  }
+  check('给正在跑的目标再派新任务会被明确拒绝',
+    typeof message === 'string' && message.includes('还在跑'), message);
+  check('被拒时没有建第二个目标', goals.created.length === 1, String(goals.created.length));
+
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '第一件事做完了'));
+  await running;
+}
+
+{
+  /*
+   * 删除箭头 = 撤回授权：还在等这个目标的那条记录必须一起作废，
+   * 否则模型下次「接着等」会等一个用户已经撤销的目标。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const controller = new AbortController();
+  const running = tool.execute({ task: '分头办事', targets: ['乙会话', '丙会话'] }, { agent: { id: 's-a' }, signal: controller.signal });
+  await settle();
+  check('两个目标都已挂起', service.pending.size === 2, String(service.pending.size));
+
+  service.set({ owner: 's-a', label: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+  check('删掉一条箭头后，对应目标的待等记录被清掉', service.pending.size === 1, String(service.pending.size));
+
+  controller.abort();
+  await running.catch(() => undefined);
 }
 
 report();

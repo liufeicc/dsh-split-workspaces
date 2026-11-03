@@ -140,6 +140,17 @@ export class PaneDispatchService {
       this.bindings.delete(owner);
       this.labels.delete(owner);
     } else this.bindings.set(owner, next);
+    /*
+     * 箭头被删掉就是授权被撤回，「还在等这个目标」也必须一起作废。
+     *
+     * 不清的话，模型下次「省略 task 接着等」会等一个已经不该再等的目标 —— 而用户在
+     * 界面上看到的是「这条箭头我已经删了」。
+     */
+    const kept = new Set(next.map((item) => item.id));
+    for (const key of [...this.pending.keys()]) {
+      const [pendingOwner, target] = key.split('\u0000');
+      if (pendingOwner === owner && !kept.has(target)) this.pending.delete(key);
+    }
     // 每次改动都落盘：箭头是人工一条条画的，频率极低，不值得为它做防抖。
     this.saved = saveStore(this.snapshotOwners());
     for (const listener of [...this.listeners]) {

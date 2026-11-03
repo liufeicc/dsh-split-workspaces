@@ -19,6 +19,7 @@
     "host.service.js",
     "host.message.js",
     "host.wait.js",
+    "host.batch.js",
     "host.tool.js",
     "client.js",
     "client.graph.view.js",

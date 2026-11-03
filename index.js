@@ -11,11 +11,13 @@
  *   2. `dispatch_task` 工具 —— A 的模型调用它时，Host 负责把任务投进目标会话、
  *      等目标那一轮跑完、把它的回复原样交回去。
  *
- * ## 一次只派一个任务，但可以预先绑定多个目标
+ * ## 一次可以派给多个目标
  *
- * 界面允许 A 同时勾上 B、C 两个窗格，但每次工具调用**只向一个会话投递**：同时向两个
- * 会话投递、再把两份回复揉成一段，会让「这次干完了没有」变得没法回答。绑定多个目标
- * 时，模型用 `target` 参数指定这一次派给谁（序号 / 标题都可以，见 `matchBinding`）。
+ * 界面允许 A 同时连出多条箭头，一次调用也可以把同一件事拆给多个目标（`targets` 数组，
+ * 见 `matchBinding` 的解析规则）。这些目标**同时**开工，每个目标一条独立等待。
+ *
+ * 「什么时候算这一批结束」由 `wait` 决定：`all`（默认）等全部有结论，`any` 第一个有
+ * 结论就返回、其余留给下一次续等。两种都只是同一批等待的收尾方式不同，不是两套实现。
  *
  * ## 投递与等待的机制
  *
@@ -34,7 +36,8 @@
  *
  *   - `turn/end` 只说明「这一轮停了」，不说明「任务做成了」。B 如果反问，反问就是
  *     这一轮的回复；所以任务包装里明确要求它别反问（见 `wrapTask`）。
- *   - 同一时刻 A 最多挂一个等待（工具默认独占执行）；不同会话之间互不影响。
+ *   - 同一个目标一次只接一件事：它还在跑上一件时再派会被直接拒绝，不会排队。
+ *   - 同一时刻 A 只挂一次派单调用（工具默认独占执行）；不同会话之间互不影响。
  *   - 绑定表落盘在 Host 的 storages 下：重启 Host 与刷新页面都不会丢（前者靠启动时读盘，
  *     后者靠客户端挂载时 `list()` 一遍再采纳）。
  *
@@ -47,6 +50,7 @@
  *   - `host.service.js` —— `PaneDispatchService`（绑定表与派单状态）；
  *   - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取文本）；
  *   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路）；
+ *   - `host.batch.js` —— 一批目标的调度与收尾（预检、并发等待、all/any）；
  *   - `host.tool.js` —— 面向模型的 `dispatch_task` 工具定义。
  *
  * 下面仍把原有的公共符号原样转出去，`test/dispatch-contract.mjs` 等既有用例
@@ -199,3 +203,11 @@ export {
   dispatchDescription,
   explainNoTarget,
 } from './host.tool.js';
+export {
+  batchStatus,
+  isSuccessStatus,
+  isTerminalStatus,
+  normalizeWait,
+  runBatch,
+} from './host.batch.js';
+export { resolveRequested } from './host.tool.js';

@@ -195,7 +195,8 @@ export function fakeGoals({ failCreate = false } = {}) {
       return this.view ?? undefined;
     },
     done(phase, explanation) {
-      this.view = { ...this.view, phase, blockedReason: explanation === undefined ? undefined : { code: 'round-limit', explanation } };
+      // 真实形状是 { code, message }；早先的替身误写成了 explanation，把 bug 一起藏住了。
+      this.view = { ...this.view, phase, blockedReason: explanation === undefined ? undefined : { code: 'round-limit', message: explanation } };
     },
   };
 }
@@ -225,7 +226,7 @@ export function fakeMultiGoals({ failFor = new Set() } = {}) {
       views.set(id, {
         ...views.get(id),
         phase,
-        blockedReason: explanation === undefined ? undefined : { code: 'round-limit', explanation },
+        blockedReason: explanation === undefined ? undefined : { code: 'round-limit', message: explanation },
       });
     },
   };

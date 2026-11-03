@@ -120,6 +120,77 @@ function composeItemNote(outcome) {
 }
 
 /**
+ * 把一个「受阻」视图里的人话取出来。
+ *
+ * 真实形状是 `{ code, message }`（code 是稳定分类码，message 是给人看的那句话）。
+ * **不能用 `explanation`** —— 那个字段不存在，取出来永远是 undefined，于是只能退回去
+ * 显示 `round-limit` 这类码，而不是真正的原因。
+ *
+ * @param view - 目标视图。
+ * @returns 原因文本；没有就返回空串。
+ */
+function blockReasonText(view) {
+  const reason = view === undefined || view === null ? undefined : view.blockedReason;
+  if (reason === undefined || reason === null) return '';
+  if (typeof reason.message === 'string' && reason.message !== '') return reason.message;
+  return typeof reason.code === 'string' ? reason.code : '';
+}
+
+/**
+ * 建一个新目标；如果对方有一个**已经停住但不可直接替换**的旧目标，先清掉它。
+ *
+ * `goals.create` 的契约是「已 complete 的目标可以被替换；其余阶段必须先 clear 或
+ * resume」。所以对方一旦 `blocked` 或 `paused`，直接 create 必然失败 —— 这正是
+ * 「B 受阻之后 A 再也派不进去」的根因。
+ *
+ * 只清 `blocked` / `paused` 两种**已经停了**的阶段：
+ *   - `active` 不清：对方真的在干活，那属于「忙」，应该拒绝；
+ *   - `complete` 不用清：create 自己就能替换。
+ * 清除会留下 durable tombstone 与历史，不是把记录抹掉。
+ *
+ * @param support - `goalSupport()` 的返回值。
+ * @param agent - 目标的活 agent。
+ * @param objective - 写进新目标的目标描述。
+ * @returns `{ view, replaced }`；`replaced` 非空表示清掉过一个旧目标。
+ */
+function createGoalFor(support, agent, objective) {
+  try {
+    return { view: support.goals.create(agent, { objective }), replaced: null };
+  } catch (reason) {
+    let current;
+    try {
+      current = support.goals.get(agent);
+    } catch {
+      current = undefined;
+    }
+    if (current === undefined || current === null) throw reason;
+    if (current.phase !== 'blocked' && current.phase !== 'paused') throw reason;
+    try {
+      support.goals.clear(agent, { id: current.id, revision: current.revision });
+    } catch {
+      // 清不掉（比如 revision 又变了）：保留原始错误，让调用方看到真实原因。
+      throw reason;
+    }
+    return {
+      view: support.goals.create(agent, { objective }),
+      replaced: { phase: current.phase, reason: blockReasonText(current) },
+    };
+  }
+}
+
+/**
+ * 结果里那句「派单前清掉过旧目标」的说明。
+ * @param replaced - `createGoalFor()` 返回的 `replaced`。
+ * @returns 说明文本；没清过就返回空串。
+ */
+function replacedNote(replaced) {
+  if (replaced === undefined || replaced === null) return '';
+  const what = replaced.phase === 'paused' ? '暂停' : '受阻';
+  const why = replaced.reason === '' ? '' : '（原因：' + replaced.reason + '）';
+  return '派单前已清除对方一个' + what + '的旧目标' + why + '，本次是新的目标。';
+}
+
+/**
  * 这一批整体算什么状态。
  *
  * 词汇刻意与单个目标分开：`complete` 表示「这一批全部做成」，`partial` 表示「有结论
@@ -155,8 +226,15 @@ export function batchStatus(results, aborted) {
  */
 function explainConflicts(conflicts) {
   const running = conflicts.filter((item) => item.why === 'running').map((item) => '「' + item.binding.label + '」');
+  const uncollected = conflicts.filter((item) => item.why === 'uncollected').map((item) => '「' + item.binding.label + '」');
   const idle = conflicts.filter((item) => item.why === 'idle').map((item) => '「' + item.binding.label + '」');
   const lines = [];
+  if (uncollected.length > 0) {
+    lines.push(
+      '这些目标上一次派单的**结果还没取**：' + uncollected.join('、') + '。',
+      '先省略 task 把它们取回来（结果只会交付一次），再派新的。',
+    );
+  }
   if (running.length > 0) {
     lines.push(
       '这些目标还在跑上一次派出去的那件事：' + running.join('、') + '。',
@@ -254,7 +332,7 @@ function watchDetached(ctx, service, key, agent) {
       if (view === undefined || view === null) return { phase: 'cleared', reason: '' };
       const reason = view.blockedReason === undefined || view.blockedReason === null
         ? ''
-        : (view.blockedReason.explanation ?? view.blockedReason.code ?? '');
+        : (view.blockedReason.message ?? view.blockedReason.code ?? '');
       return { phase: view.phase, reason };
     } catch {
       return null;
@@ -387,7 +465,10 @@ export async function runBatch(options) {
     const pending = service.pending.get(key);
     if (task !== '') {
       if (pending === undefined) fresh.push({ binding, key });
-      else conflicts.push({ binding, why: 'running' });
+      // 有结论却没收 = 「结果还没取」，与「还在跑」是两回事，得分开说。
+      else if (pending.settled !== null && pending.settled !== undefined) {
+        conflicts.push({ binding, why: 'uncollected' });
+      } else conflicts.push({ binding, why: 'running' });
     } else if (pending === undefined) {
       conflicts.push({ binding, why: 'idle' });
     } else {
@@ -428,8 +509,9 @@ export async function runBatch(options) {
       failures.push({ binding: item.binding, reply: errorText(reason) });
       continue;
     }
+    let created;
     try {
-      support.goals.create(agent, { objective: wrapTask(task, ownerLabel) });
+      created = createGoalFor(support, agent, wrapTask(task, ownerLabel));
     } catch (reason) {
       failures.push({
         binding: item.binding,
@@ -439,6 +521,8 @@ export async function runBatch(options) {
       continue;
     }
     service.pending.set(item.key, {
+      /** 建本单之前清掉过一个受阻/暂停的旧目标时会记在这里。 */
+      replaced: created.replaced,
       /** 后台监视写进来的结论；null 表示还在跑。 */
       settled: null,
       /** 后台监视的取消把手（撤箭头、卸载时掐掉）。 */
@@ -476,10 +560,15 @@ export async function runBatch(options) {
           target: binding.label,
           status: settled.status,
           reply: composeReply(settled),
-          note: '',
+          note: replacedNote(entry.replaced),
         });
       } else {
-        byId.set(binding.id, { target: binding.label, status: 'running', reply: '', note: '' });
+        byId.set(binding.id, {
+          target: binding.label,
+          status: 'running',
+          reply: '',
+          note: replacedNote(entry.replaced),
+        });
       }
     }
     for (const failure of failures) {
@@ -568,8 +657,8 @@ export async function runBatch(options) {
     if (collectedItem.item === null || collectedItem.item === undefined) continue;
     const item = collectedItem.item;
     const outcome = { ...collectedItem.outcome };
+    const record = support === null ? undefined : service.pending.get(item.key);
     if (support !== null) {
-      const record = service.pending.get(item.key);
       /*
        * 后台监视从**派出那一刻**就在听，比「这一次阻塞等待」看到的历史更长。
        * 目标恰好在阻塞期间结束时，两边会同时结算：这时必须以后台攒下的文本为准。
@@ -588,7 +677,9 @@ export async function runBatch(options) {
       target: item.binding.label,
       status: outcome.status,
       reply: composeReply(outcome),
-      note: composeItemNote(outcome),
+      note: [composeItemNote(outcome), replacedNote(record === undefined || record === null ? null : record.replaced)]
+        .filter((text) => text !== '')
+        .join(' '),
     });
   }
   for (const failure of failures) {

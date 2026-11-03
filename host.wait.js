@@ -174,7 +174,7 @@ export function waitForGoal(ctx, agent, signal, options) {
         if (view === undefined || view === null) return { phase: 'cleared', rounds: 0, reason: '' };
         const reason = view.blockedReason === undefined || view.blockedReason === null
           ? ''
-          : (view.blockedReason.explanation ?? view.blockedReason.code ?? '');
+          : (view.blockedReason.message ?? view.blockedReason.code ?? '');
         return { phase: view.phase, rounds: view.roundsStarted ?? 0, reason };
       } catch {
         return { phase: null, rounds: 0, reason: '' };

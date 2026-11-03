@@ -470,4 +470,116 @@ import {
 
 report();
 
+// ────────────────── 受阻之后还能不能再派 ──────────────────
+
+/**
+ * 按真实 `goals` 契约实现的替身：
+ *   - `create` 只在「没有目标」或「旧目标已 complete」时成功，其余阶段必须 clear；
+ *   - `clear` 之后当前目标消失；
+ *   - `blockedReason` 用真实的 `{ code, message }` 形状。
+ */
+function realishGoals() {
+  const views = new Map();
+  return {
+    created: [],
+    cleared: [],
+    create(agent, request) {
+      const id = agent.session.id;
+      const current = views.get(id);
+      if (current !== undefined && current.phase !== 'complete') {
+        throw new Error('goal create rejected: current phase is ' + current.phase);
+      }
+      this.created.push({ id, objective: request.objective });
+      const view = {
+        id: 'g-' + String(this.created.length),
+        revision: 1,
+        phase: 'active',
+        objective: request.objective,
+        blockedReason: undefined,
+      };
+      views.set(id, view);
+      return view;
+    },
+    get(agent) {
+      return views.get(agent.session.id);
+    },
+    clear(agent, ref) {
+      this.cleared.push({ id: ref.id, revision: ref.revision });
+      views.delete(agent.session.id);
+      return { id: ref.id, revision: ref.revision + 1 };
+    },
+    block(id, message) {
+      const current = views.get(id);
+      views.set(id, { ...current, phase: 'blocked', blockedReason: { code: 'needs-input', message }, revision: 2 });
+    },
+    complete(id) {
+      const current = views.get(id);
+      views.set(id, { ...current, phase: 'complete', revision: 2 });
+    },
+  };
+}
+
+{
+  /*
+   * 真机反馈：A 派给 B，B 的目标受阻之后，A 再也派不进去了。
+   * 根因是 `goals.create` 只允许替换 complete 的旧目标；blocked 必须先 clear。
+   */
+  const goals = realishGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  const first = tool.execute({ task: '第一件事', targets: ['乙会话'] }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  await settle();
+  goals.block('s-b', '连续三轮卡在同一个权限问题上');
+  emit('s-b', assistantEvent(1, '卡在权限上了'));
+  emit('s-b', { type: 'goal/change', seq: 2, time: 2, data: {} });
+  const blocked = await first;
+
+  check('受阻时状态是 blocked', blocked.results[0]?.status === 'blocked', JSON.stringify(blocked.results));
+  check('卡住原因取的是 message（那句人话），不是 code',
+    blocked.results[0]?.reply.includes('连续三轮卡在同一个权限问题上'), JSON.stringify(blocked.results[0]?.reply));
+  check('不会把 code 当成原因显示出来', !blocked.results[0]?.reply.includes('needs-input'), blocked.results[0]?.reply);
+
+  // 关键：受阻之后 A 应该还能再派
+  const second = await tool.execute(
+    { task: '第二件事', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('B 受阻之后 A 仍然可以再派', goals.created.length === 2, String(goals.created.length));
+  check('派单前清掉了那个受阻的旧目标', goals.cleared.length === 1, String(goals.cleared.length));
+  check('结果里说明了清掉受阻旧目标这件事',
+    typeof second.results[0]?.note === 'string' && second.results[0].note.includes('受阻'), second.results[0]?.note);
+}
+
+{
+  /*
+   * 「还在跑」与「结果还没取」是两件事：后者不该被说成前者。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  await tool.execute(
+    { task: '第一件事', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '第一件事的结论'));
+  await settle();
+
+  let message = null;
+  try {
+    await tool.execute({ task: '第二件事', targets: ['乙会话'] }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  } catch (error) {
+    message = error.message;
+  }
+  check('结果还没取时，明确说是「结果还没取」而不是「还在跑」',
+    typeof message === 'string' && message.includes('结果还没取'), message);
+  check('并且告诉模型先取再派', typeof message === 'string' && message.includes('先省略 task'), message);
+}
+
 report();

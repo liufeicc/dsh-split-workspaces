@@ -352,6 +352,14 @@ export async function runBatch(options) {
   const ownerLabel = service.labels.get(ownerId) ?? ownerId;
   const support = goalSupport(ctx);
   const nonBlocking = wait === WAIT_NONE;
+  /*
+   * 「派完就走」依赖目标服务：后台监视要读 goal 的 phase，结果也记在 pending 里。
+   * 老部署没有 goals 时这条路根本走不通 —— 必须当场拒绝，不能假装派成了。
+   * （踩过：少了这条判断，老部署上会返回 status: dispatched，而一条消息都没投出去。）
+   */
+  if (nonBlocking && support === null) {
+    throw new Error('这个部署没有目标服务，做不到「派完就走」：请省略 wait（默认 all），同步等到结论。');
+  }
 
   // ── 1. 分流：哪些是新派、哪些是续等 ──────────────────────────────────
   const fresh = [];

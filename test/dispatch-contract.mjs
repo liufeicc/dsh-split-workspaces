@@ -940,4 +940,25 @@ const twoTargets = () => [
   check('状态是 complete', value.results[0]?.status === 'complete', JSON.stringify(value.results));
 }
 
+{
+  /*
+   * 老部署没有目标服务，「派完就走」走不通（后台监视要读 goal 的 phase）。
+   * 这里必须当场拒绝 —— 曾经少判这一条，会返回 status: dispatched 而一条消息都没投出去。
+   */
+  const { tool, promptCalls, ctx } = boot();
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+  let message = null;
+  try {
+    await tool.execute(
+      { task: '干活', targets: ['乙会话'], wait: 'none' },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    message = error.message;
+  }
+  check('没有目标服务时明确拒绝「派完就走」，而不是假装派成了',
+    typeof message === 'string' && message.includes('派完就走'), message);
+  check('被拒时一条消息都没投出去', promptCalls.length === 0, String(promptCalls.length));
+}
+
 report();

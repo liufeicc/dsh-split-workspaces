@@ -130,13 +130,17 @@ function composeItemNote(outcome) {
  * @returns 批次状态。
  */
 export function batchStatus(results, aborted) {
-  if (aborted) return 'cancelled';
   if (results.length === 0) return 'failed';
   if (results.some((item) => item.status === 'running')) return 'running';
   const failed = results.filter((item) => item.status === 'failed').length;
   if (failed === results.length) return 'failed';
   const succeeded = results.filter((item) => isSuccessStatus(item.status)).length;
   if (failed === 0 && succeeded === results.length) return 'complete';
+  /*
+   * 取消放在最后判：用户可能在结果已经全部到手的瞬间按了停止，那时这一批其实是成功的，
+   * 报 cancelled 会让模型以为没拿到结果、白白重派一次。
+   */
+  if (aborted && results.some((item) => item.status === 'cancelled')) return 'cancelled';
   return 'partial';
 }
 
@@ -162,7 +166,7 @@ function explainConflicts(conflicts) {
   if (idle.length > 0) {
     lines.push(
       '这些目标当前没有进行中的派单：' + idle.join('、') + '，没什么可等的。',
-      '要派任务就给 task；只给 task 不给 targets 时，会派给这个会话全部可派目标。',
+      '要派任务就给 task；可派目标多于一个时还要用 targets 指明派给谁。',
     );
   }
   return lines.join('\n');
@@ -233,7 +237,20 @@ function watchDetached(ctx, service, key, agent) {
    */
   const readPhase = () => {
     try {
-      const view = goals.get(agent);
+      /*
+       * 必须用**当前活着的** agent：`goals.get()` 会校验 agent 是不是活的，会话被重新
+       * 唤醒（重载、恢复）之后，派单时拿到的那个引用已经失效，一直拿它去问只会永远
+       * 抛错 —— 于是明明做完的目标要等满兜底时长才被记成 unknown。
+       */
+      const registry = ctx.get('agents');
+      const candidate = registry !== undefined && registry !== null && typeof registry.get === 'function'
+        ? registry.get(sessionId)
+        : undefined;
+      // 只认「看起来是活 agent」的那个（有 session）；否则退回派单时那个引用。
+      const live = candidate !== undefined && candidate !== null && candidate.session !== undefined
+        ? candidate
+        : agent;
+      const view = goals.get(live);
       if (view === undefined || view === null) return { phase: 'cleared', reason: '' };
       const reason = view.blockedReason === undefined || view.blockedReason === null
         ? ''
@@ -411,9 +428,8 @@ export async function runBatch(options) {
       failures.push({ binding: item.binding, reply: errorText(reason) });
       continue;
     }
-    let created;
     try {
-      created = support.goals.create(agent, { objective: wrapTask(task, ownerLabel) });
+      support.goals.create(agent, { objective: wrapTask(task, ownerLabel) });
     } catch (reason) {
       failures.push({
         binding: item.binding,
@@ -423,8 +439,6 @@ export async function runBatch(options) {
       continue;
     }
     service.pending.set(item.key, {
-      goalId: created === undefined || created === null ? undefined : created.id,
-      startedAt: Date.now(),
       /** 后台监视写进来的结论；null 表示还在跑。 */
       settled: null,
       /** 后台监视的取消把手（撤箭头、卸载时掐掉）。 */
@@ -540,6 +554,8 @@ export async function runBatch(options) {
   });
 
   const collected = await collect(waiters, wait, links);
+  // 这一次调用不再需要听调用方的取消了；留着监听等于把 signal 一直挂在外面。
+  for (const link of links) link.release();
   for (const item of ready) {
     const entry = service.pending.get(item.key);
     if (entry === undefined || entry === null) continue;
@@ -548,11 +564,23 @@ export async function runBatch(options) {
 
   // ── 5. 整理结果、清理 pending ──────────────────────────────────────
   const byId = new Map();
-  for (const entry of collected) {
-    if (entry.item === null || entry.item === undefined) continue;
-    const item = entry.item;
-    const outcome = entry.outcome;
+  for (const collectedItem of collected) {
+    if (collectedItem.item === null || collectedItem.item === undefined) continue;
+    const item = collectedItem.item;
+    const outcome = { ...collectedItem.outcome };
     if (support !== null) {
+      const record = service.pending.get(item.key);
+      /*
+       * 后台监视从**派出那一刻**就在听，比「这一次阻塞等待」看到的历史更长。
+       * 目标恰好在阻塞期间结束时，两边会同时结算：这时必须以后台攒下的文本为准。
+       * 否则「结论早说、终态晚到且不带文本」会把结论覆盖成空串 —— 真机可复现。
+       */
+      if (record !== undefined && record !== null
+        && record.settled !== null && record.settled !== undefined) {
+        if (outcome.reply === undefined || outcome.reply === '') outcome.reply = record.settled.reply;
+        if ((outcome.reason === undefined || outcome.reason === '')
+          && typeof record.settled.reason === 'string') outcome.reason = record.settled.reason;
+      }
       // 还在跑就留着 pending，下一轮接着等；有结论了就结清（并掐掉后台监视）。
       if (isTerminalStatus(outcome.status)) service.forget(item.key);
     }

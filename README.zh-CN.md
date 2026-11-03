@@ -441,12 +441,15 @@ A 的模型多了一个 `dispatch_task` 工具：
   以及**点亮窗格时的光标归属**（点控件不抢、点内容送光标、拖选让路、关窗格等一帧）的
   离线契约测试（`node test/focus-contract.mjs`）。
 - `test/preset-contract.mjs` —— 模式选择器的离线契约测试（`node test/preset-contract.mjs`）。
+- `test/dispatch-harness.mjs` —— 分派相关的测试脚手架：宿主上下文替身、目标服务替身、
+  事件注入与断言记录，被下面两个用例文件共用。
 - `test/dispatch-contract.mjs` —— **Host 半边**的离线契约测试（`node test/dispatch-contract.mjs`）：
   `dispatch_task` 真的被注册、真的用正确的参数调了会话服务（**第二个参数必须是
   AbortSignal** —— 传成消息来源会得到 `signal.throwIfAborted is not a function`）、
   能等到目标那一轮结束并取回回复、不会误取目标上一轮的回复，以及没有绑定 / 多目标没
   指定 / 目标正忙 / 投递失败 / 空任务五条拒绝路径各自说了什么。
-  批处理那部分另有一组：一次派两个目标时两个都真的建了目标、`wait: all` 在一个目标完成
+- `test/dispatch-batch-contract.mjs` —— 批处理与异步的契约测试
+  （`node test/dispatch-batch-contract.mjs`）：一次派两个目标时两个都真的建了目标、`wait: all` 在一个目标完成
   时不会提前返回、`wait: any` 第一个有结论就返回且把其余留成 `running`（`pending` 不被
   清掉，续等能接着等）、有一个目标在忙时**整批一个都不派**、部分目标建目标失败时其余
   照常跑完且整批是 `partial`、给正在跑的目标再派新任务会被拒、删箭头会清掉待等记录。

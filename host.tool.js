@@ -167,7 +167,7 @@ export function dispatchDescription(service, ownerId) {
     '中途想看一眼也可以随时调用（同样省略 task 与 targets，配 wait: none 就不会阻塞）。',
     '',
     '## 调用行为',
-    '每次调用最多等 5 分钟一段：',
+    '每次调用最多等 5 分钟一段（wait: none 不等，立刻返回）：',
     '- 这一批在这段时间内都有了结论 → 直接返回，status 是 complete / partial / failed；',
     '- 还没完 → 返回**目前的进度**，status 是 running；',
     '只要状态还是 running，就**必须继续调用**（省略 task 与 targets）接着等，直到状态不再是 running。',

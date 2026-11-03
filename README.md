@@ -145,11 +145,72 @@ that currently holds focus is marked by a brand-coloured title bar.
   custom presets): it uses the same Host roster as creating a new task from the sidebar
   (`remote.agentPresets.list`), and shows both the mode the pane's current session is running
   in and the mode preselected for the next session.
+- **Design mode + task dispatch**: a second panel mode that draws each **session** as a card
+  and connects them with arrows into a directed tree — the graph *is* the authorization. Sessions
+  with outgoing arrows get an agent-scoped `dispatch_task` tool and can hand work to another
+  session, one target or several in parallel, with `wait: all | any | none`. See the dedicated
+  section below.
 - The `Add workspace` dropdown lists "workspaces that are not tiled yet" and also supports
   **creating** a workspace from the folder picker (`uiWorkspace.pickDirectory()`, or through
   the preload bridge under Desktop). The same "pick a directory → register a workspace"
   implementation also serves `New workspace…` in the split menu's second step, so there is
   only one picker and one failure handling in both places.
+
+## Design mode: draw the delegation tree as arrows
+
+The panel has two modes: **tile** (the default, everything described above) and **design**.
+Design mode draws every **session** as a card and connects them with arrows into a directed
+tree — the arrow direction *is* the delegation direction, and deleting an arrow revokes the
+authorization. There is no second configuration: the graph is the permission.
+
+- **Draw one**: drag from the dot on a card's right edge onto another card.
+- **Delete one**: click the small cross at the arrow's midpoint.
+- **Sessions, not panes**: the same session opened in two panes still has one card, and
+  closing a pane never deletes an arrow. Only deleting the session drops its edges.
+
+Two invariants keep it a tree: no cycles, and at most one parent per session. Both are
+enforced by a pure function (`validateEdge`) before the edge is added.
+
+### The `dispatch_task` tool
+
+A session with outgoing arrows gets an **agent-scoped** copy of `dispatch_task` (it shadows
+the global one) whose description lists the available targets.
+
+| Parameter | Meaning |
+|---|---|
+| `task` | Task body. The target cannot see A's history, so background **and verifiable acceptance criteria** belong here. Omit it when waiting for a previous dispatch |
+| `targets` | Array of targets. Each item may be an index, full title, title fragment, or session id. Required when more than one target is available; omitted with no `task`, it means "keep waiting on everything still running" |
+| `wait` | `all` (default) / `any` (return on the first conclusion) / `none` (do not wait) |
+
+The call returns a batch: `{ status, results, stillRunning, note }`, where `results` holds one
+`{ target, status, reply, note }` per target in request order.
+
+What happens: split new dispatches from continuations → **preflight every new target's
+idleness (one busy target rejects the whole batch)** → create a **goal** on the target session
+via `goals.create` (so it keeps working across rounds instead of replying once) → wait
+according to `wait` → shape the results. A call waits at most 5 minutes at a time and returns
+`running` with progress; the model calls again with no arguments to keep waiting.
+
+`wait: 'none'` returns immediately with `dispatched` and keeps a background watcher that
+records the conclusion. Because a dispatch must not be forgotten, the owner is nudged once
+per turn at `agent/turn-stopping` — injected into the next step, so the same turn continues
+one more step and collects the result instead of requiring user input.
+
+### Boundaries worth knowing
+
+- **Multiple targets run in parallel**, each with its own waiter; results come back in request
+  order. The tool never guesses "probably all of them" — name them when there is more than one.
+- **One task per target at a time**, and the target must be idle. Queueing is refused: it would
+  make "that round ended" an unreliable completion signal.
+- **Blocked / paused targets stay reusable.** `goals.create` only replaces a `complete` goal,
+  so a `blocked` or `paused` one is cleared first (keeping its tombstone and history) and the
+  result says so.
+- **Uncollected results are never overwritten.** Dispatching again while a result is still
+  unclaimed is refused with "the previous result has not been collected yet".
+- **Delivery asks for evidence, A reviews it.** The target is told to break the objective into
+  checkable items, attach evidence to each, and not to declare completion without it; A must
+  verify against the acceptance criteria and re-dispatch with the *specific gaps* when it falls
+  short. This is prompt-level only — completion is still self-assessed by the executor.
 
 ## Behaviour details
 
@@ -422,6 +483,22 @@ the whole implementation.
   (`canOpenWorkspacePath` / `openWorkspacePath`), and adding a row of Host code to this
   plugin would only duplicate that implementation while also making the user restart once for
   it to take effect.
+- `index.js` — the **Host entry**: mounts the `paneDispatch` service and the `dispatch_task`
+  tool, owns their lifecycle, and re-exports the public symbols. The implementation lives in
+  sibling `host.*.js` modules:
+  - `host.constants.js` — service key, remote method list, timeouts and size limits;
+  - `host.store.js` — binding-table persistence (the only constructor of the target shape);
+  - `host.service.js` — `PaneDispatchService` (bindings, dispatch state, diagnostics);
+  - `host.message.js` — pure helpers (task wrapping, target matching, assistant text);
+  - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
+  - `host.batch.js` — batch scheduling: preflight, concurrent waiting, `all`/`any`/`none`
+    completion, the background watcher, clearing blocked goals, honest partial failures;
+  - `host.tool.js` — the model-facing `dispatch_task` description and execution.
+- `REVIEW-2026-11-01.md` / `REVIEW-2026-11-03.md` — the two code-review reports.
+- `test/dispatch-harness.mjs` — shared fixtures for the dispatch tests.
+- `test/dispatch-contract.mjs` / `test/dispatch-batch-contract.mjs` — the Host-side contract
+  tests for single-target delivery, batching, `wait: none`, the background watcher and the
+  end-of-turn nudge.
 - `cordis.patch.yml` — inserts the single Host row.
 - `locale/{en,zh}.json` — the display name and description on the plugin management page.
 - `test/harness.mjs` — the offline test harness: simulates the browser module loader
@@ -520,6 +597,9 @@ node test/preset-contract.mjs
 node test/open-contract.mjs
 node test/mcp-contract.mjs
 node test/delete-contract.mjs
+node test/graph-contract.mjs
+node test/dispatch-contract.mjs
+node test/dispatch-batch-contract.mjs
 ```
 
 When you touch the "caret ownership" part, additionally run the real-browser probe (requires

@@ -9,6 +9,8 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { DISPATCH_TAG } from './host.constants.js';
+
 /**
  * 把任意抛出物转成一句能放进错误里的文字。
  * @param reason - 捕获到的异常。
@@ -58,7 +60,7 @@ export function wrapTask(task, sourceLabel) {
     ? '另一个会话'
     : '会话「' + sourceLabel + '」';
   return [
-    '[任务分派]',
+    DISPATCH_TAG,
     '这条任务由' + from + '通过平铺面板的委派箭头派给你，不是当前用户输入的。',
     '',
     task,

@@ -2,9 +2,10 @@
  * 「任务分派」Host 半边的离线测试脚手架：宿主上下文替身、目标服务替身、事件注入，
  * 以及 `check` / `report` 这套断言记录。
  *
- * 两个用例文件共用它：
+ * 三个用例文件共用它：
  *   - `dispatch-contract.mjs` —— 单目标、投递与等待、拒绝路径；
- *   - `dispatch-batch-contract.mjs` —— 批量、`wait: none`、后台监视、收尾提醒。
+ *   - `dispatch-batch-contract.mjs` —— 批量、`wait: none`、后台监视、收尾提醒；
+ *   - `dispatch-restart-contract.mjs` —— Host 重启后把派出去没取回的单子认回来。
  *
  * **DSH_HOME 必须在 import 插件之前指到临时目录**：Host 半边会把绑定表落到
  * `$DSH_HOME/storages/`，跑在真实目录上会吃到这台机器的在线配置。
@@ -148,6 +149,23 @@ export function freshHome() {
 /** 装好插件，返回工具、服务与派事件的入口。 */
 export function boot(options) {
   freshHome();
+  const harness = createHostContext(options);
+  host.apply(harness.ctx);
+  const tool = harness.registered.find((definition) => definition.name === host.TOOL_NAME);
+  return { ...harness, tool };
+}
+
+/**
+ * 在**同一个 DSH_HOME** 下再装一次插件 —— 模拟 Host 进程重启。
+ *
+ * 与 `boot` 的唯一区别就是不换目录：绑定表必须从磁盘读回来，而内存里的派单状态
+ * （`pending`）会像真实重启那样归零。`options.goals` 要传**同一个目标服务实例**，
+ * 因为它代表「不在本进程里、重启也不会消失」的 DSH 目标服务。
+ *
+ * @param options - 同 `boot`。
+ * @returns 同 `boot`。
+ */
+export function reboot(options) {
   const harness = createHostContext(options);
   host.apply(harness.ctx);
   const tool = harness.registered.find((definition) => definition.name === host.TOOL_NAME);

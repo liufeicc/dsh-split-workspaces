@@ -14,6 +14,7 @@
 
 import { MAX_BATCH_TARGETS, MAX_TASK_CHARS, TOOL_NAME } from './host.constants.js';
 import { normalizeWait, runBatch } from './host.batch.js';
+import { adoptOrphanGoals } from './host.watch.js';
 import { describeCandidates, matchBinding } from './host.message.js';
 
 /**
@@ -295,6 +296,16 @@ export function createDispatchTool(service, ownerId) {
 
       const bindings = service.bindings.get(ownerId) ?? [];
       const hasTask = task !== '';
+      /*
+       * 续等（不给 task）时先认领一次「可能因 Host 重启而丢掉的记录」。
+       *
+       * `pending` 只在内存里，而目标会话的 goal 在 DSH 的目标服务里、重启不丢。少了这一步，
+       * 重启后回来收结果会被当成「从没派过」而直接报错 —— 活已经干完，结论却永远拿不到。
+       *
+       * 放在这里而不是插件启动时：目标服务此刻一定就绪，而且只有真要用的时候才付
+       * 「唤醒绑定目标」这笔成本。
+       */
+      if (!hasTask) await adoptOrphanGoals(service.ctx, service, ownerId);
       const requested = resolveRequested(service, ownerId, bindings, args?.targets, hasTask);
       if (requested.length === 0) {
         /*
@@ -302,7 +313,10 @@ export function createDispatchTool(service, ownerId) {
          * 话，后者才走 explainNoTarget 那三条病因。
          */
         if (!hasTask) {
-          throw new Error('第一次派任务必须给出 task；省略 task 只用于「接着等上一次派出去的那件事」。');
+          throw new Error(
+            '没有可接着等的派单：这个会话当前没有已派出、还没取结果的任务。'
+            + '要派新任务就必须给出 task；省略 task 只用于「接着等上一次派出去的那件事」。',
+          );
         }
         throw new Error(explainNoTarget(service, ownerId, bindings));
       }

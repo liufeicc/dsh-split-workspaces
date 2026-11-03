@@ -228,6 +228,14 @@ one more step and collects the result instead of requiring user input.
   checkable items, attach evidence to each, and not to declare completion without it; A must
   verify against the acceptance criteria and re-dispatch with the *specific gaps* when it falls
   short. This is prompt-level only — completion is still self-assessed by the executor.
+- **A Host restart does not orphan dispatched work.** `pending` lives in memory while the goal
+  lives in DSH's goal service and survives a restart; when the two drift apart, a resume would be
+  answered with "you never dispatched that" even though the work is done. So before resuming we
+  reclaim the dispatch by matching the fixed `[任务分派]` objective prefix: still-running goals
+  are watched again, finished ones are reported honestly as "the conclusion could not be
+  recovered, read it in that session". Nothing is persisted for this — the goal is the source of
+  truth, and a corrupted store file cannot break it. The cost: a goal that finished before the
+  restart keeps its conclusion only in the session history.
 
 ### Pitfalls we hit while building this
 
@@ -242,6 +250,7 @@ None of these were architecture problems — they were boundary problems, and tw
 | State unreadable after a session restart | a finished goal waited the full 24-hour fallback before being recorded as `unknown` | `goals.get()` validates that the agent is live; the closed-over reference dies with the session, so every read threw and was treated as "not readable yet" |
 | Un-dispatchable after a target blocks | once B was `blocked`, A could never dispatch again | `goals.create` only replaces a `complete` goal; `blocked` / `paused` must be cleared first |
 | Conclusion and terminal state split across two windows | the watcher had the text but could not hand it over | the watcher used to re-subscribe every 5 minutes; the text arrived in one window and the terminal state in the next. A single long-lived subscription removed it |
+| Orphaned results after a Host restart | the work finished, but resuming answered "you never dispatched that"; the end-of-turn nudge counted the same empty table and stayed silent | `pending` lives only in memory, so a restart zeroes it while the target's goal keeps running. Neither side recognises the dispatch any more. Fixed by not persisting it: reclaim on demand from the `[任务分派]` goal prefix — the goal is the source of truth |
 
 The common thread: **the same fact was stored twice without saying which copy is authoritative.**
 After the fixes the rule is: the background watcher starts at dispatch time, always sees more,
@@ -530,13 +539,18 @@ the whole implementation.
   - `host.message.js` — pure helpers (task wrapping, target matching, assistant text);
   - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
   - `host.batch.js` — batch scheduling: preflight, concurrent waiting, `all`/`any`/`none`
-    completion, the background watcher, clearing blocked goals, honest partial failures;
+    completion, clearing blocked goals, honest partial failures;
+  - `host.watch.js` — what happens after dispatch: the background watcher behind `wait: none`
+    (one long-lived subscription) and `adoptOrphanGoals`, which reclaims dispatched-but-lost
+    work after a Host restart by matching the goal objective prefix;
   - `host.tool.js` — the model-facing `dispatch_task` description and execution.
 - `REVIEW-2026-11-01.md` / `REVIEW-2026-11-03.md` — the two code-review reports.
 - `test/dispatch-harness.mjs` — shared fixtures for the dispatch tests.
 - `test/dispatch-contract.mjs` / `test/dispatch-batch-contract.mjs` — the Host-side contract
   tests for single-target delivery, batching, `wait: none`, the background watcher and the
   end-of-turn nudge.
+- `test/dispatch-restart-contract.mjs` — the cross-process contract: a Host restart must not
+  orphan dispatched work.
 - `cordis.patch.yml` — inserts the single Host row.
 - `locale/{en,zh}.json` — the display name and description on the plugin management page.
 - `test/harness.mjs` — the offline test harness: simulates the browser module loader
@@ -661,6 +675,7 @@ node test/skill-contract.mjs
 node test/graph-contract.mjs
 node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs
+node test/dispatch-restart-contract.mjs
 ```
 
 When you touch the "caret ownership" part, additionally run the real-browser probe (requires

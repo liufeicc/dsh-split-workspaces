@@ -50,6 +50,21 @@ export class PaneDispatchService {
      * 领取（或撤箭头、卸载）之后条目被删掉，于是下一次调用又回到「新派」。
      */
     this.pending = new Map();
+    /**
+     * 已经结清过的派单（`ownerId\u0000targetId`）。
+     *
+     * 只用来挡住「重启认领」的误判：正常领取之后 pending 会空，但目标上的 goal 还在，
+     * 没有这份墓碑就会被重新认成孤儿。它**不跨进程** —— 重启后清空，正是想要的语义：
+     * 只有跨进程丢掉的才算孤儿。
+     */
+    this.concluded = new Set();
+    /**
+     * 正在进行「重启认领」的发起方会话。
+     *
+     * 认领要读目标状态、还要挂后台监视，重入会挂出第二条监视。所以同一个发起方同时
+     * 只允许一次认领在跑；后到的那次直接跳过（它要的结果前一次会算出来）。
+     */
+    this.adopting = new Set();
     /** 一段等多久。测试里会把它压到几十毫秒。 */
     this.sliceMs = DISPATCH_SLICE_MS;
     /*
@@ -216,6 +231,17 @@ export class PaneDispatchService {
       /* 掐监视失败不该拦着把记录删掉 */
     }
     this.pending.delete(key);
+    /*
+     * 留一个「已经结清」的墓碑。
+     *
+     * 为什么需要：`adoptOrphanGoals` 靠「pending 里没有 + 目标上还有本插件的 goal」
+     * 来判断「这是 Host 重启丢掉的单子」。但**正常领取**之后 pending 也会没有，而目标
+     * 上的 goal 还留着（尤其已经 complete 的）—— 没有墓碑就会被当成孤儿再认领一次，
+     * A 于是拿到一条假的「Host 重启过」提示。
+     *
+     * 墓碑只活在内存里，重启后自然清空 —— 这正是我们要的语义：只有跨进程时才算孤儿。
+     */
+    this.concluded.add(key);
   }
 
   /**
@@ -240,5 +266,7 @@ export class PaneDispatchService {
     for (const key of [...this.pending.keys()]) this.forget(key);
     this.bindings.clear();
     this.labels.clear();
+    this.concluded.clear();
+    this.adopting.clear();
   }
 }

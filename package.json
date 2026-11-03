@@ -20,6 +20,7 @@
     "host.message.js",
     "host.wait.js",
     "host.batch.js",
+    "host.watch.js",
     "host.tool.js",
     "client.js",
     "client.graph.view.js",

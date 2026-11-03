@@ -58,6 +58,7 @@
  *   - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取文本）；
  *   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路）；
  *   - `host.batch.js` —— 一批目标的调度与收尾（预检、并发等待、all/any）；
+ *   - `host.watch.js` —— 派出去之后的盯与认（后台监视、重启后认回孤儿单子）；
  *   - `host.tool.js` —— 面向模型的 `dispatch_task` 工具定义。
  *
  * 下面仍把原有的公共符号原样转出去，`test/dispatch-contract.mjs` 等既有用例
@@ -67,6 +68,7 @@
  */
 
 import { REMOTE_MARKERS, REMOTE_METHODS, SERVICE_KEY, TOOL_NAME } from './host.constants.js';
+import { adoptOrphanGoals } from './host.watch.js';
 import { errorText, noticeMessage } from './host.message.js';
 import { PaneDispatchService } from './host.service.js';
 import { createDispatchTool } from './host.tool.js';
@@ -141,6 +143,18 @@ export function apply(ctx) {
       } catch (reason) {
         ctx.logger?.warn?.('split-workspaces: 注册作用域委派工具失败: ' + errorText(reason));
       }
+      /*
+       * 顺手认领一次「可能因 Host 重启而丢掉的派单记录」。
+       *
+       * 为什么在这里：收尾提醒（下面 `agent/turn-stopping`）数的是 `pending`，而 `pending`
+       * 只活在内存里。重启后如果只有「调用工具时」才认领，A 在自己回合里干完别的事、
+       * 还没回头调工具就要结束回合时，`outstanding` 是空的 —— 提醒不会响，A 也不会想起来
+       * 去收结果。所以趁会话创建/绑定变化时先认回来。
+       *
+       * 不 await：`refresh` 是同步的，认领要读目标状态。失败就静默跳过，真正要用的那一刻
+       * （`dispatch_task` 续等）还会再认一次，那里才是兜底。
+       */
+      void adoptOrphanGoals(ctx, service, agentId).catch(() => {});
     };
 
     const offs = [];
@@ -256,4 +270,5 @@ export {
   normalizeWait,
   runBatch,
 } from './host.batch.js';
+export { adoptOrphanGoals } from './host.watch.js';
 export { resolveRequested } from './host.tool.js';

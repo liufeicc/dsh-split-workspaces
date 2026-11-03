@@ -145,6 +145,23 @@ that currently holds focus is marked by a brand-coloured title bar.
   custom presets): it uses the same Host roster as creating a new task from the sidebar
   (`remote.agentPresets.list`), and shows both the mode the pane's current session is running
   in and the mode preselected for the next session.
+- **An MCP tool switch shared per workspace** (the `MCP` / `MCP n` dropdown in the title bar):
+  which MCP servers' tools are visible to this workspace. Its semantics are the **opposite** of
+  the mode selector's — modes are stashed per pane and take effect per session, while MCP
+  visibility is a host policy applied by **session cwd**, so every session in the same workspace
+  shares one selection. The roster and tool counts come from the Host
+  (`remote.mcpWorkspace.list`, server names discovered from `mcp__<server>__*`); ticking calls
+  `set`, and the Host re-mounts the tool restriction and persists it immediately. A workspace
+  with no saved selection starts with **nothing ticked**, i.e. no MCP tools at all.
+- **A SKILL switch shared per workspace** (the `SKILL` / `SKILL n` dropdown in the title bar):
+  which skills from the skill library are visible to this workspace. It has the same shape as
+  the MCP switch (both are per-workspace host policies); the difference is that its items come
+  from **scanning the skill directory itself**, so every row can carry the skill's description —
+  without it you cannot sensibly choose. An empty directory, a missing directory and a broken
+  skill file are each explained in the popover: a blank panel would leave people guessing
+  whether they never created a file or the plugin is not active. The directory is owned by
+  Settings → Skills; this block only reads it and only writes one workspace's selection, and
+  when the skill plugin's client half is not mounted the button is **not rendered at all**.
 - **Design mode + task dispatch**: a second panel mode that draws each **session** as a card
   and connects them with arrows into a directed tree — the graph *is* the authorization. Sessions
   with outgoing arrows get an agent-scoped `dispatch_task` tool and can hand work to another
@@ -211,6 +228,24 @@ one more step and collects the result instead of requiring user input.
   checkable items, attach evidence to each, and not to declare completion without it; A must
   verify against the acceptance criteria and re-dispatch with the *specific gaps* when it falls
   short. This is prompt-level only — completion is still self-assessed by the executor.
+
+### Pitfalls we hit while building this
+
+None of these were architecture problems — they were boundary problems, and two of them had
+**green** tests because the fixture was written to match the bug.
+
+| Pitfall | Symptom | Root cause |
+|---|---|---|
+| Blocked reason rendered as an error code | users saw `round-limit` instead of the actual sentence | `blockedReason` is `{ code, message }`; the code read `explanation`, got `undefined`, and fell back to the code. The fixture copied the wrong field, so nothing failed |
+| `wait: none` faked success on old deployments | returned `dispatched` while nothing was delivered | the background watcher needs the goal service; without it the branch did nothing but still reported success |
+| A blocking continuation swallowed the conclusion | the task finished but A got an empty result, permanently | the watcher has been listening since dispatch; a blocking wait starts "now". When both settled together the code took the latter (possibly empty) and discarded the former |
+| State unreadable after a session restart | a finished goal waited the full 24-hour fallback before being recorded as `unknown` | `goals.get()` validates that the agent is live; the closed-over reference dies with the session, so every read threw and was treated as "not readable yet" |
+| Un-dispatchable after a target blocks | once B was `blocked`, A could never dispatch again | `goals.create` only replaces a `complete` goal; `blocked` / `paused` must be cleared first |
+| Conclusion and terminal state split across two windows | the watcher had the text but could not hand it over | the watcher used to re-subscribe every 5 minutes; the text arrived in one window and the terminal state in the next. A single long-lived subscription removed it |
+
+The common thread: **the same fact was stored twice without saying which copy is authoritative.**
+After the fixes the rule is: the background watcher starts at dispatch time, always sees more,
+and is authoritative; a blocking wait is only "what this one call happened to see".
 
 ## Behaviour details
 
@@ -474,6 +509,9 @@ the whole implementation.
   list both places share (`unopenedWorkspaces`); it does not depend on React and can be
   tested directly in Node.
 - `client.presets.js` — Agent modes: read the Host roster, apply a mode, share a snapshot.
+- `client.mcp.js` — the per-workspace MCP switch: read the Host roster, write the selection,
+  share a snapshot (optimistic update with rollback; the remote namespace belongs to another
+  package, so it can only be resolved lazily).
 - `client.styles.js` — the stylesheet and class names; colours only use theme tokens
   (`--dsw-*`).
 - `client.dicts.js` — Chinese and English strings.
@@ -504,6 +542,16 @@ the whole implementation.
 - `test/harness.mjs` — the offline test harness: simulates the browser module loader
   (including the `require.async` code-block rules), a React stand-in, and Context stand-ins
   (including records of `ctx.inject` and `registerFixed`).
+- `client.dispatch.js` — turns the arrows drawn in design mode into bindings and pushes only
+  the **changed** owners to the Host (a hand-written remote descriptor, same pattern as
+  `dsh-mcp-workspace-policy`).
+- `client.graph.model.js` — the pure model: the four edge checks, layered layout, drop
+  resolution, and the graph → bindings conversion. No React, so it runs under Node.
+- `client.graph.view.js` — the design-mode canvas: cards, bezier arrows, drag-to-connect,
+  delete buttons.
+- `client.skill.js` — the per-workspace SKILL switch: same shape as the MCP block, but its items
+  come from scanning the skill directory and every row carries a description; empty / missing /
+  broken directory each get their own message.
 - `test/board.mjs` — the shared test bench for the contract tests: assertion records
   (`check` / `report`), installing the plugin as a "board with two panes", colour contrast
   (WCAG), and small helpers for finding panes and menus in the render output.
@@ -527,6 +575,13 @@ the whole implementation.
   (`node test/focus-contract.mjs`).
 - `test/preset-contract.mjs` — offline contract tests for the mode selector
   (`node test/preset-contract.mjs`).
+- `test/graph-contract.mjs` — offline contract tests for the delegation graph
+  (`node test/graph-contract.mjs`): the pure model's three layers, the `paneDispatch` namespace
+  and codec shape, the binding-sync diff, and the really rendered mode switch / cards / arrows.
+- `test/skill-contract.mjs` — offline contract tests for the SKILL switch
+  (`node test/skill-contract.mjs`): two deliberate product decisions — the button is absent when
+  the skill service is not mounted, and an empty directory gets a pointer to where skills live
+  instead of a blank popover — plus every row carrying a description.
 - `test/mcp-contract.mjs` — offline contract tests for the MCP switches
   (`node test/mcp-contract.mjs`): the degraded branch, the optimistic update and its
   rollback, and the checkbox state and per-workspace write-back on the **really rendered**
@@ -586,6 +641,11 @@ otherwise the browser will neither reload nor drop the cached old version:
 touch client.js
 ```
 
+**The Host half uses a different mechanism**: the profile also installs `dsh-dev-hmr`, which
+watches the whole plugin source tree, so saving `index.js` or any `host.*.js` **hot-reloads the
+Host plugin** in the same process — no `dsh web` restart. A restart is only needed when the
+`package.json` dependency graph changes or a new package is added.
+
 When changing behaviour, also run every offline test (dependency-free, on the order of
 seconds):
 
@@ -597,6 +657,7 @@ node test/preset-contract.mjs
 node test/open-contract.mjs
 node test/mcp-contract.mjs
 node test/delete-contract.mjs
+node test/skill-contract.mjs
 node test/graph-contract.mjs
 node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs

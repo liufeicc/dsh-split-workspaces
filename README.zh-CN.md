@@ -104,6 +104,13 @@
   共享同一份选择。清单与工具数来自 Host（`remote.mcpWorkspace.list`，服务器名从工具名
   `mcp__<server>__*` 自动发现），勾选走 `set`：宿主立刻重挂工具限制并落盘。
   未配置的工作区**默认全不选**，也就是完全不暴露 MCP 工具、不占上下文。
+- **按工作区共享的 SKILL 开关**（标题栏上的 `SKILL` / `SKILL n` 下拉）：勾选技能库里哪些
+  技能对这个工作区可见。它与 MCP 开关是**同一个形状**（都是宿主按工作区施加的策略），
+  差别在开关项来自**技能目录自身的扫描结果**，所以每一行都带得出技能描述 —— 不看描述
+  根本没法选。技能目录为空、目录不存在、某个技能文件写坏了，弹层里分别说清是哪种情况：
+  只给一片空白会让人一直在猜「是我没建文件，还是插件没生效」。技能目录本身由
+  「设置 → 技能」维护，本块只读它，唯一会写的是某个工作区的勾选集合。
+  技能库插件的客户端半边没挂上时，标题栏**不出现**这个按钮，而不是给一个点了没反应的。
 - `添加工作区` 的下拉菜单会列出「还没铺开的工作区」，也支持从文件夹选择器
   （`uiWorkspace.pickDirectory()`，或在 Desktop 下走 preload 桥）**新建**一个工作区。
   同一条「选目录 → 注册工作区」的实现也供分屏菜单第二步的 `新建工作区…` 使用，
@@ -453,6 +460,8 @@ A 的模型多了一个 `dispatch_task` 工具：
 - `client.presets.js` —— Agent 模式：读 Host 花名册、应用模式、共享快照。
 - `client.mcp.js` —— 按工作区共享的 MCP 开关：读 Host 清单、写选择、共享快照
   （含乐观更新与失败回滚；远端命名空间是别的包挂的，所以只能惰性解析）。
+- `client.skill.js` —— 按工作区共享的 SKILL 开关：形状同上，但开关项来自技能目录扫描，
+  每行带描述；目录为空 / 不存在 / 有坏文件各有各的说法。
 - `client.styles.js` —— 样式表与 class 名；颜色只用主题 token（`--dsw-*`）。
 - `client.dicts.js` —— 中英文案。
 - `index.js` —— **Host 半边的入口**：装配 `paneDispatch` 服务与 `dispatch_task` 工具、
@@ -574,6 +583,7 @@ node test/preset-contract.mjs
 node test/open-contract.mjs
 node test/mcp-contract.mjs
 node test/delete-contract.mjs
+node test/skill-contract.mjs
 node test/graph-contract.mjs
 node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs

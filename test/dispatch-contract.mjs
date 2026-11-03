@@ -15,6 +15,23 @@ check('任务包装点明了「来自另一个会话」和「别反问」', (() 
   return text.includes('A 会话') && text.includes('把日志清理一下') && text.includes('不要停下来反问');
 })());
 check('发起方没有名字时不会写出空引号', host.wrapTask('做事', '').includes('另一个会话'));
+check('任务包装要求对方给证据，而不是只说「已完成」', (() => {
+  const text = host.wrapTask('做事', 'A 会话');
+  return text.includes('证据') && text.includes('不要宣布完成') && text.includes('不算完成');
+})());
+check('任务包装要求结论可复现', host.wrapTask('做事', 'A 会话').includes('能复现'));
+
+{
+  /*
+   * 「B 偷懒」的根子是：完成与否由 B 自评，且没有任何证据要求。
+   * 这两段提示词是唯一的抓手，用断言钉住，免得以后被顺手删掉。
+   */
+  const description = host.dispatchDescription({ bindings: new Map() }, undefined);
+  check('工具描述要求把验收标准写成可检验的条款', description.includes('可检验'), '');
+  check('工具描述要求拿到结论后先复核再转述', description.includes('拿到结论之后'), '');
+  check('工具描述要求不达标时按具体缺口重派', description.includes('具体缺口'), '');
+}
+
 check('从助手消息里只取文本块', host.assistantText({
   message: { content: [{ type: 'text', text: '结论' }, { type: 'image', data: 'x' }, { type: 'text', text: '   ' }] },
 }) === '结论');

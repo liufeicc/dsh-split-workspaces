@@ -36,7 +36,7 @@
  * @module @local/dsh-split-workspaces/host-batch
  */
 
-import { WAIT_ALL, WAIT_ANY } from './host.constants.js';
+import { ASYNC_MAX_MS, ASYNC_RECHECK_MS, WAIT_ALL, WAIT_ANY, WAIT_NONE } from './host.constants.js';
 import { errorText, wrapTask } from './host.message.js';
 import {
   deliverAndWait,
@@ -169,6 +169,51 @@ function explainConflicts(conflicts) {
 }
 
 /**
+ * 后台盯住一个已经派出去的目标，直到它有结论。
+ *
+ * 这是 `wait: 'none'` 的另一半：派完就返回之后，总得有人在目标结束的那一刻把结论
+ * 记下来 —— 否则 A 过一会儿回来查，只能看见「跑完了」却拿不到内容。
+ *
+ * 几处要注意：
+ *   - 用自己的 AbortController，**不复用调用方的 signal**：调用方那一轮结束就会 abort，
+ *     而后台监视必须活过那一轮（这正是「派完就走」的意义）；
+ *   - 每段结束时把已经拿到的文字累积起来：目标可能在一段里说完结论、下一段只剩
+ *     `goal/change`，不累积就会把结论丢掉；
+ *   - 目标被删掉（`cleared`）也算终态，不能一直等下去。
+ *
+ * @param ctx - 宿主上下文。
+ * @param service - 绑定表（要读它的复查间隔）。
+ * @param key - `ownerId\u0000targetId`。
+ * @param agent - 目标的活 agent。
+ */
+async function watchDetached(ctx, service, key, agent) {
+  const entry = service.pending.get(key);
+  if (entry === undefined) return;
+  const controller = new AbortController();
+  entry.controller = controller;
+  let text = '';
+  const startedAt = Date.now();
+  for (;;) {
+    if (controller.signal.aborted) return;
+    const outcome = await waitForGoal(ctx, agent, controller.signal, {
+      sliceMs: service.asyncRecheckMs ?? ASYNC_RECHECK_MS,
+    });
+    if (controller.signal.aborted) return;
+    if (typeof outcome.reply === 'string' && outcome.reply !== '') text = outcome.reply;
+    if (outcome.status !== 'running') {
+      entry.settled = {
+        status: outcome.status,
+        reply: text,
+        reason: typeof outcome.reason === 'string' ? outcome.reason : '',
+      };
+      return;
+    }
+    // 兜底：目标长时间读不到状态（例如 agent 已被回收）时不要永远占着订阅。
+    if (Date.now() - startedAt > ASYNC_MAX_MS) return;
+  }
+}
+
+/**
  * 等待一批目标，按 `wait` 语义决定什么时候收尾。
  *
  * @param waiters - 每个目标一条等待，解析成 `{ index, item, outcome }`。
@@ -224,6 +269,7 @@ export async function runBatch(options) {
   const { ctx, service, ownerId, bindings, task, wait, signal } = options;
   const ownerLabel = service.labels.get(ownerId) ?? ownerId;
   const support = goalSupport(ctx);
+  const nonBlocking = wait === WAIT_NONE;
 
   // ── 1. 分流：哪些是新派、哪些是续等 ──────────────────────────────────
   const fresh = [];
@@ -289,7 +335,15 @@ export async function runBatch(options) {
     service.pending.set(item.key, {
       goalId: created === undefined || created === null ? undefined : created.id,
       startedAt: Date.now(),
+      /** 后台监视写进来的结论；null 表示还在跑。 */
+      settled: null,
+      /** 后台监视的取消把手（撤箭头、卸载时掐掉）。 */
+      controller: null,
     });
+    if (nonBlocking) {
+      // 派完就走：挂一条后台监视，目标结束时把结论记进 pending，等 A 回来取。
+      watchDetached(ctx, service, item.key, agent).catch(() => undefined);
+    }
     entries.push({ ...item, agent });
   }
 
@@ -297,15 +351,93 @@ export async function runBatch(options) {
     try {
       entries.push({ ...item, agent: await resolveTargetAgent(support, item.binding) });
     } catch (reason) {
-      // 唤醒失败：这条派单已经等不上了，清掉 pending，免得把它永远挂在那里。
-      service.pending.delete(item.key);
+      // 唤醒失败：这条派单已经等不上了，结清记录（连同它的后台监视），免得永远挂着。
+      service.forget(item.key);
       failures.push({ binding: item.binding, reply: errorText(reason) });
     }
   }
 
+  // ── 4a. `wait: 'none'`：只回一份快照，绝不阻塞 ──────────────────────
+  if (nonBlocking) {
+    const byId = new Map();
+    for (const binding of bindings) {
+      const key = ownerId + '\u0000' + binding.id;
+      const entry = service.pending.get(key);
+      if (entry === undefined) continue;
+      if (entry.settled !== null && entry.settled !== undefined) {
+        // 有结论了就交付并结清：领取一次之后不再重复给，避免同一段结论反复进上下文。
+        const settled = entry.settled;
+        service.forget(key);
+        byId.set(binding.id, {
+          target: binding.label,
+          status: settled.status,
+          reply: composeReply(settled),
+          note: '',
+        });
+      } else {
+        byId.set(binding.id, { target: binding.label, status: 'running', reply: '', note: '' });
+      }
+    }
+    for (const failure of failures) {
+      byId.set(failure.binding.id, {
+        target: failure.binding.label,
+        status: 'failed',
+        reply: failure.reply,
+        note: '',
+      });
+    }
+    const results = bindings.map((binding) => byId.get(binding.id)).filter((item) => item !== undefined);
+
+    // 与阻塞路径同样的失败口径：一个都没派出去、或单目标失败，都直接抛。
+    if (entries.length === 0 && failures.length > 0) {
+      throw new Error(failures.map((item) => item.reply).join('\n'));
+    }
+    if (bindings.length === 1) {
+      const only = results[0];
+      if (only !== undefined && (only.status === 'failed' || only.status === 'error')) {
+        throw new Error(only.reply);
+      }
+    }
+
+    const stillRunning = results.filter((item) => item.status === 'running').length;
+    if (task !== '') {
+      return {
+        status: 'dispatched',
+        results,
+        stillRunning,
+        note: '已经派出去了，不用在这里等。你可以先做自己的事；需要结果时再调用一次 dispatch_task'
+          + '（省略 task 与 targets）来取。不收尾是不会结束的 —— 这个回合结束前会提醒你一次。',
+      };
+    }
+    return {
+      status: batchStatus(results, signal.aborted),
+      results,
+      stillRunning,
+      note: stillRunning === 0
+        ? ''
+        : '还有 ' + String(stillRunning) + ' 个目标在跑。可以再用 wait: none 看一眼，'
+          + '或者用默认的 wait: all 阻塞着等它们出结论。',
+    };
+  }
+
   // ── 4. 并发等待 ────────────────────────────────────────────────────
+  /*
+   * 有些目标可能在「派完就走」之后、这一次调用之前就已经结束了。它们的结论早就被
+   * 后台监视记下了，直接交付即可 —— 再等一轮只会白等满一段切片。
+   */
+  const ready = [];
+  const waiting = [];
+  for (const item of entries) {
+    const entry = support === null ? undefined : service.pending.get(item.key);
+    if (entry !== undefined && entry !== null && entry.settled !== null && entry.settled !== undefined) {
+      ready.push(item);
+    } else {
+      waiting.push(item);
+    }
+  }
+
   const links = [];
-  const waiters = entries.map((item, index) => {
+  const waiters = waiting.map((item, index) => {
     const link = linkSignal(signal);
     links.push(link);
     const promise = support === null
@@ -318,6 +450,11 @@ export async function runBatch(options) {
   });
 
   const collected = await collect(waiters, wait, links);
+  for (const item of ready) {
+    const entry = service.pending.get(item.key);
+    if (entry === undefined || entry === null) continue;
+    collected.push({ index: -1, item, outcome: entry.settled });
+  }
 
   // ── 5. 整理结果、清理 pending ──────────────────────────────────────
   const byId = new Map();
@@ -326,8 +463,8 @@ export async function runBatch(options) {
     const item = entry.item;
     const outcome = entry.outcome;
     if (support !== null) {
-      // 还在跑就留着 pending，下一轮接着等；有结论了就核销。
-      if (isTerminalStatus(outcome.status)) service.pending.delete(item.key);
+      // 还在跑就留着 pending，下一轮接着等；有结论了就结清（并掐掉后台监视）。
+      if (isTerminalStatus(outcome.status)) service.forget(item.key);
     }
     byId.set(item.binding.id, {
       target: item.binding.label,
@@ -380,5 +517,7 @@ export async function runBatch(options) {
 
 /** `wait` 参数的取值归一（模型给别的值时退回默认的 `all`）。 */
 export function normalizeWait(value) {
-  return value === WAIT_ANY ? WAIT_ANY : WAIT_ALL;
+  if (value === WAIT_ANY) return WAIT_ANY;
+  if (value === WAIT_NONE) return WAIT_NONE;
+  return WAIT_ALL;
 }

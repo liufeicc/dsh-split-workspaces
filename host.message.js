@@ -7,6 +7,8 @@
  * @module @local/dsh-split-workspaces/host-message
  */
 
+import { randomUUID } from 'node:crypto';
+
 /**
  * 把任意抛出物转成一句能放进错误里的文字。
  * @param reason - 捕获到的异常。
@@ -104,4 +106,26 @@ export function matchBinding(bindings, raw) {
 export function describeCandidates(bindings) {
   if (!Array.isArray(bindings) || bindings.length === 0) return '当前没有绑定任何可派发的会话。';
   return bindings.map((item, index) => (index + 1) + ') ' + item.label).join('\n');
+}
+
+/**
+ * 造一条「提醒」消息，用来在 A 收尾前把它拉回来。
+ *
+ * 为什么不用普通的 `prompt()` 投递：那会像用户说话一样插进 A 的对话；这里的语义是
+ * 「系统提示你还有事没做完」，所以给一个独立的 `source.kind`，界面上与真人输入区分得开。
+ *
+ * `inject()` 不唤醒驱动，只在下一个 step 边界被认领 —— 而 `agent/turn-stopping`
+ * 之后循环会重新检查一次 inbox，所以这条消息能让「本来要结束的回合」继续走一步。
+ *
+ * @param text - 提醒正文。
+ * @param summary - 给界面用的一句话摘要。
+ * @returns 冻结的消息对象（形状与 harness 的 createUserMessage 一致）。
+ */
+export function noticeMessage(text, summary) {
+  return Object.freeze({
+    id: randomUUID(),
+    role: 'user',
+    content: Object.freeze([Object.freeze({ type: 'text', text })]),
+    source: Object.freeze({ kind: 'pane-dispatch', form: 'notice', summary }),
+  });
 }

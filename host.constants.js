@@ -59,9 +59,27 @@ export const MAX_TASK_CHARS = 20000;
  */
 export const MAX_BATCH_TARGETS = 8;
 
-/** `wait` 的两档：等全部到终态，还是第一个到终态就返回。 */
+/** `wait` 的三档：等全部、等第一个、或者根本不等。 */
 export const WAIT_ALL = 'all';
 export const WAIT_ANY = 'any';
+/**
+ * `none`：派完就走，或者查一下就走。
+ *
+ * 有 `task` 时它表示「交给对方就返回，我不等」；没有 `task` 时它表示「看一眼现在
+ * 什么状态，别阻塞我」。同一个值在两个方向上语义一致 —— 都是「不阻塞」。
+ */
+export const WAIT_NONE = 'none';
+
+/**
+ * 后台盯着已派出目标的复查间隔。
+ *
+ * 只是用来看「目标结束没有」的重读周期，不是等待上限：真正的结束信号仍然来自
+ * 会话事件，这个间隔只决定「一直没事件时多久重读一次状态」。
+ */
+export const ASYNC_RECHECK_MS = 30 * 1000;
+
+/** 后台监视最长盯多久。兜底用，防止目标读不到状态时永远占着一条订阅。 */
+export const ASYNC_MAX_MS = 24 * 60 * 60 * 1000;
 
 /** 一条委派说明的最大长度（字符）—— 与客户端 `EDGE_NOTE_MAX` 保持一致。 */
 export const EDGE_NOTE_MAX = 200;

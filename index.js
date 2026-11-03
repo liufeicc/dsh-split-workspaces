@@ -17,7 +17,14 @@
  * 见 `matchBinding` 的解析规则）。这些目标**同时**开工，每个目标一条独立等待。
  *
  * 「什么时候算这一批结束」由 `wait` 决定：`all`（默认）等全部有结论，`any` 第一个有
- * 结论就返回、其余留给下一次续等。两种都只是同一批等待的收尾方式不同，不是两套实现。
+ * 结论就返回、其余留给下一次续等，`none` 根本不等（派完就走 / 只看一眼）。
+ *
+ * ## 派完就走，但收尾前一定被拉回来
+ *
+ * `wait: none` 把任务派出去就返回，A 可以先做自己的事。但结果不能就这么丢了：
+ * `agent/turn-stopping` 会在 A 正要结束回合时触发，此时还有未结清的派单就往 `next-step`
+ * inbox 里 `inject()` 一条提醒 —— agent loop 随后**重新检查** inbox，于是这个回合继续
+ * 走一步，A 回头把结论收掉。同回合按 turn 去重，取完即不再提醒。
  *
  * ## 投递与等待的机制
  *
@@ -60,7 +67,7 @@
  */
 
 import { REMOTE_MARKERS, REMOTE_METHODS, SERVICE_KEY, TOOL_NAME } from './host.constants.js';
-import { errorText } from './host.message.js';
+import { errorText, noticeMessage } from './host.message.js';
 import { PaneDispatchService } from './host.service.js';
 import { createDispatchTool } from './host.tool.js';
 
@@ -149,6 +156,45 @@ export function apply(ctx) {
       }
     }));
     offs.push(service.onChange((ownerId) => refresh(ownerId)));
+
+    /*
+     * 收尾前的自动检测：A 干完自己的事、正要结束回合时，如果手上还有派出去没取结果的
+     * 任务，就在这里把它拉回来。
+     *
+     * 为什么必须是这个钩子，而不是「等空闲了再 followup」：`agent/turn-stopping` 触发
+     * 之后，agent loop 会**再检查一次** inbox；此时 `inject()` 写进 `next-step` 的消息
+     * 会让这个回合继续走一步，而不是结束。于是 A 是在**同一个回合里**回头收结果，
+     * 不需要等用户再开口，也不需要把我们自己伪装成一次新的用户输入。
+     *
+     * 只在还有未结清的派单时才注入；注入后同一个回合不再重复注入（按 turn 去重），
+     * 所以即使模型无视提醒，也不会在同一轮里反复被拉回来。
+     */
+    const nudgedTurn = new Map();
+    offs.push(ctx.on('agent/turn-stopping', ({ agent, turn }) => {
+      const ownerId = agent?.id;
+      if (typeof ownerId !== 'string' || ownerId === '') return;
+      const outstanding = service.outstanding(ownerId);
+      if (outstanding.length === 0) return;
+      if (nudgedTurn.get(ownerId) === turn) return;
+      nudgedTurn.set(ownerId, turn);
+      const names = outstanding
+        .map((item) => service.bindings.get(ownerId)?.find((target) => target.id === item.key.split('\u0000')[1])?.label)
+        .filter((label) => typeof label === 'string');
+      const text = [
+        '[任务分派 · 收尾提醒]',
+        '你手上还有 ' + String(outstanding.length) + ' 个派出去的任务没取结果'
+          + (names.length === 0 ? '。' : '（' + names.join('、') + '）。'),
+        '结束这个回合之前，请调用 dispatch_task 并省略 task 与 targets 把它们收掉：',
+        '- 想等它们做完就省略 wait（默认 all），会阻塞到有结论；',
+        '- 只想看一眼就传 wait: none，不会阻塞。',
+        '不接受「先不管」—— 这些结果如果不取，用户永远看不到。',
+      ].join('\n');
+      try {
+        agent.inject(noticeMessage(text, '还有派出去的任务没取结果'));
+      } catch (reason) {
+        ctx.logger?.warn?.('split-workspaces: 收尾提醒注入失败: ' + errorText(reason));
+      }
+    }));
 
     const unregister = ctx.tools.register(createDispatchTool(service));
 

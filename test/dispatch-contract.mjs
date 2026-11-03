@@ -60,6 +60,7 @@ async function settle() {
  */
 function createHostContext({ agents = new Map(), promptThrows = false, goals = null } = {}) {
   const listeners = new Set();
+  const otherListeners = new Map();
   const promptCalls = [];
   const resolveCalls = [];
   const registered = [];
@@ -100,10 +101,18 @@ function createHostContext({ agents = new Map(), promptThrows = false, goals = n
       };
     },
     on: (event, handler) => {
-      if (event !== 'session/event') return () => {};
-      listeners.add(handler);
+      if (event === 'session/event') {
+        listeners.add(handler);
+        return () => {
+          listeners.delete(handler);
+        };
+      }
+      // 其余事件（目前只有 agent/turn-stopping）也要能注册，否则「收尾提醒」测不到。
+      const set = otherListeners.get(event) ?? new Set();
+      set.add(handler);
+      otherListeners.set(event, set);
       return () => {
-        listeners.delete(handler);
+        set.delete(handler);
       };
     },
     tools: {
@@ -123,7 +132,12 @@ function createHostContext({ agents = new Map(), promptThrows = false, goals = n
     for (const listener of [...listeners]) listener(session, event);
   };
 
-  return { ctx, promptCalls, resolveCalls, registered, emit, services };
+  /** 往任意宿主事件派一条（`agent/turn-stopping` 这类钩子用）。 */
+  const fire = (event, payload) => {
+    for (const handler of [...(otherListeners.get(event) ?? [])]) handler(payload);
+  };
+
+  return { ctx, promptCalls, resolveCalls, registered, emit, fire, services };
 }
 
 /** 每个用例一个全新的 DSH_HOME —— 绑定表会落盘，共用一个目录会互相污染。 */
@@ -753,6 +767,140 @@ const twoTargets = () => [
 
   controller.abort();
   await running.catch(() => undefined);
+}
+
+// ────────────────── 派完就走（wait: none）与收尾前的自动检测 ──────────────────
+
+{
+  /*
+   * 主路径：给了 task + wait: none → 立刻返回，不阻塞。
+   * 这是「A 先做自己的事，等结束再收」的第一步。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const started = Date.now();
+  const value = await tool.execute(
+    { task: '分头办事', targets: ['乙会话', '丙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  const elapsed = Date.now() - started;
+
+  check('wait: none 不阻塞，立刻返回', elapsed < 200, String(elapsed) + 'ms');
+  check('派完就走的状态是 dispatched', value.status === 'dispatched', JSON.stringify(value));
+  check('两个目标都真的建了目标', goals.created.length === 2, String(goals.created.length));
+  check('两个目标都在 pending 里等着被取', service.pending.size === 2, String(service.pending.size));
+  check('返回值里说明还有 2 个在做', value.stillRunning === 2, String(value.stillRunning));
+  check('note 告诉模型怎么收尾', value.note.includes('省略 task'), value.note);
+}
+
+{
+  /*
+   * 后半段：后台监视把结论记下来，A 回来查时能直接取走，且**取一次就不再重复给**。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  await tool.execute(
+    { task: '分头办事', targets: ['乙会话', '丙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+
+  // 乙先完成；后台监视应当在事件到达时就把结论记进 pending。
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '乙的结论'));
+  await settle();
+
+  const peek = await tool.execute(
+    { wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  const done = peek.results.find((item) => item.target === '乙会话');
+  const running = peek.results.find((item) => item.target === '丙会话');
+  check('查询能拿到已完成后台任务的结论', done?.reply === '乙的结论', JSON.stringify(peek.results));
+  check('查询不会阻塞：还在跑的那个标成 running', running?.status === 'running', JSON.stringify(peek.results));
+  check('领取之后结清，不会重复给同一段结论', service.pending.size === 1, String(service.pending.size));
+
+  // 查的时候不带 targets：只返回「还在 pending 里」的那些，已领取的自然就不在了。
+  const again = await tool.execute(
+    { wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('再查一次时已领取的目标不再出现',
+    again.results.every((item) => item.target !== '乙会话'),
+    JSON.stringify(again.results));
+}
+
+{
+  /*
+   * 阻塞路径也要能用上后台已经记下的结论 —— 否则「先派了再回来等」会白等一段切片。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  await tool.execute(
+    { task: '分头办事', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '乙的结论'));
+  await settle();
+
+  const started = Date.now();
+  const value = await tool.execute({}, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  check('阻塞续等能立刻拿到后台已记下的结论',
+    value.status === 'complete' && value.results[0].reply === '乙的结论', JSON.stringify(value));
+  check('不会为了一条已有结论白等一段切片', Date.now() - started < 200, String(Date.now() - started) + 'ms');
+}
+
+{
+  /*
+   * 收尾前的自动检测：A 正要结束回合时，如果还有派出去没取结果的，把它拉回来一次。
+   * 同一回合只提醒一次（按 turn 去重），取完之后不再提醒。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, fire, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  await tool.execute(
+    { task: '分头办事', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+
+  const injected = [];
+  const stopping = (turn) => fire('agent/turn-stopping', {
+    agent: { id: 's-a', inject: (message) => injected.push(message) },
+    turn,
+  });
+
+  stopping(7);
+  check('收尾前有未结清的派单时会注入一次提醒', injected.length === 1, String(injected.length));
+  check('提醒里点名还有几个、是哪几个',
+    injected[0]?.content?.[0]?.text.includes('1 个') && injected[0].content[0].text.includes('乙会话'),
+    injected[0]?.content?.[0]?.text);
+  check('提醒自带独立来源，不伪装成用户输入', injected[0]?.source?.kind === 'pane-dispatch');
+
+  stopping(7);
+  check('同一个回合不会重复提醒', injected.length === 1, String(injected.length));
+
+  // 收掉结果之后就不该再提醒了。
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '乙的结论'));
+  await settle();
+  await tool.execute({ wait: 'none' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  stopping(8);
+  check('取完结果后不再提醒', injected.length === 1, String(injected.length));
 }
 
 report();

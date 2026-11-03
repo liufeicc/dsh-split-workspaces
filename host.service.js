@@ -149,7 +149,7 @@ export class PaneDispatchService {
     const kept = new Set(next.map((item) => item.id));
     for (const key of [...this.pending.keys()]) {
       const [pendingOwner, target] = key.split('\u0000');
-      if (pendingOwner === owner && !kept.has(target)) this.pending.delete(key);
+      if (pendingOwner === owner && !kept.has(target)) this.forget(key);
     }
     // 每次改动都落盘：箭头是人工一条条画的，频率极低，不值得为它做防抖。
     this.saved = saveStore(this.snapshotOwners());
@@ -200,10 +200,45 @@ export class PaneDispatchService {
     return { targets };
   }
 
+  /**
+   * 忘掉一条进行中的派单：先掐掉它在后台的监视，再删记录。
+   *
+   * 顺序不能反 —— 监视回调会在结束时写回 `settled`，先删的话那条回调会往一个已经
+   * 不存在的对象上写，等于白跑一趟还占着订阅。
+   *
+   * @param key - `ownerId\u0000targetId`。
+   */
+  forget(key) {
+    const entry = this.pending.get(key);
+    try {
+      entry?.controller?.abort?.();
+    } catch {
+      /* 掐监视失败不该拦着把记录删掉 */
+    }
+    this.pending.delete(key);
+  }
+
+  /**
+   * 这个会话手上还没结清的派单（派出去没取结果的）。
+   *
+   * 用它来回答「A 收尾之前还有没有事没了」：只要有，就在 `agent/turn-stopping`
+   * 时把 A 拉回来，而不是让回合静静地结束、结果等到用户下一次开口才被看见。
+   *
+   * @param ownerId - 发起方会话 id。
+   * @returns 还没结清的条目数组。
+   */
+  outstanding(ownerId) {
+    const list = [];
+    for (const [key, entry] of this.pending) {
+      if (key.startsWith(ownerId + '\u0000')) list.push({ key, entry });
+    }
+    return list;
+  }
+
   /** 插件卸载时清空，避免热重载留下上一份绑定。 */
   clear() {
+    for (const key of [...this.pending.keys()]) this.forget(key);
     this.bindings.clear();
     this.labels.clear();
-    this.pending.clear();
   }
 }

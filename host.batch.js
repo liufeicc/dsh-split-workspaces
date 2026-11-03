@@ -37,7 +37,7 @@
  */
 
 import { ASYNC_MAX_MS, ASYNC_RECHECK_MS, WAIT_ALL, WAIT_ANY, WAIT_NONE } from './host.constants.js';
-import { errorText, wrapTask } from './host.message.js';
+import { assistantText, errorText, wrapTask } from './host.message.js';
 import {
   deliverAndWait,
   goalSupport,
@@ -174,43 +174,125 @@ function explainConflicts(conflicts) {
  * 这是 `wait: 'none'` 的另一半：派完就返回之后，总得有人在目标结束的那一刻把结论
  * 记下来 —— 否则 A 过一会儿回来查，只能看见「跑完了」却拿不到内容。
  *
- * 几处要注意：
+ * ## 为什么是「订阅一次、一直听」，而不是反复等一段
+ *
+ * 工具调用必须切段（一次最多等 5 分钟，不能让调用永久挂着），但**后台监视不是工具
+ * 调用**，它没有这个限制。所以这里从头到尾只挂一个 `session/event` 监听。
+ *
+ * 这一点很关键：事件流只在你订阅着的时候从你面前流过，错过就没了。如果像工具那样
+ * 切成一段一段（退订 → 再订阅），就会出现两个问题：
+ *   1. 两段之间的空档里到达的事件会丢；
+ *   2. 结论可能在这一段说完、而终态在下一段才被看见，于是那一段「听到的」是空的。
+ * 单订阅长听把这两个问题一起消掉了 —— 助手文本从头攒到尾，终态一来就有东西可交。
+ *
+ * ## 几个必须照顾到的情况
+ *
  *   - 用自己的 AbortController，**不复用调用方的 signal**：调用方那一轮结束就会 abort，
  *     而后台监视必须活过那一轮（这正是「派完就走」的意义）；
- *   - 每段结束时把已经拿到的文字累积起来：目标可能在一段里说完结论、下一段只剩
- *     `goal/change`，不累积就会把结论丢掉；
- *   - 目标被删掉（`cleared`）也算终态，不能一直等下去。
+ *   - 进来先读一次状态：目标可能在我们挂上监听之前就已经结束了；
+ *   - 目标被删掉（`cleared`）也算终态，不能一直等下去；
+ *   - 没有事件时靠一个定期重读兜底（`unref` 过，不会吊住进程）；
+ *   - 状态长时间读不到（会话被回收）时如实放弃，而不是永远占着一条订阅。
  *
  * @param ctx - 宿主上下文。
  * @param service - 绑定表（要读它的复查间隔）。
  * @param key - `ownerId\u0000targetId`。
  * @param agent - 目标的活 agent。
  */
-async function watchDetached(ctx, service, key, agent) {
+function watchDetached(ctx, service, key, agent) {
   const entry = service.pending.get(key);
   if (entry === undefined) return;
+  const goals = ctx.get('goals');
+  if (goals === undefined || goals === null || typeof goals.get !== 'function') return;
+  const sessionId = agent?.session?.id ?? agent?.id;
+  if (typeof sessionId !== 'string' || sessionId === '') return;
+
   const controller = new AbortController();
   entry.controller = controller;
-  let text = '';
   const startedAt = Date.now();
-  for (;;) {
-    if (controller.signal.aborted) return;
-    const outcome = await waitForGoal(ctx, agent, controller.signal, {
-      sliceMs: service.asyncRecheckMs ?? ASYNC_RECHECK_MS,
-    });
-    if (controller.signal.aborted) return;
-    if (typeof outcome.reply === 'string' && outcome.reply !== '') text = outcome.reply;
-    if (outcome.status !== 'running') {
-      entry.settled = {
-        status: outcome.status,
-        reply: text,
-        reason: typeof outcome.reason === 'string' ? outcome.reason : '',
-      };
-      return;
+  let text = '';
+  let done = false;
+  let timer = null;
+  let off = () => {};
+
+  /** 收摊：退订、停表。注意它不改 `entry.settled` —— 交不交结果由调用方决定。 */
+  const stop = () => {
+    done = true;
+    if (timer !== null) clearInterval(timer);
+    timer = null;
+    try {
+      off();
+    } catch {
+      /* 退订失败不该盖住已经拿到的结论 */
     }
-    // 兜底：目标长时间读不到状态（例如 agent 已被回收）时不要永远占着订阅。
-    if (Date.now() - startedAt > ASYNC_MAX_MS) return;
-  }
+  };
+
+  /**
+   * 读一次目标状态。
+   * 读不到（agent 已经不是活实例）返回 `null` —— 「不知道」，继续等。
+   */
+  const readPhase = () => {
+    try {
+      const view = goals.get(agent);
+      if (view === undefined || view === null) return { phase: 'cleared', reason: '' };
+      const reason = view.blockedReason === undefined || view.blockedReason === null
+        ? ''
+        : (view.blockedReason.explanation ?? view.blockedReason.code ?? '');
+      return { phase: view.phase, reason };
+    } catch {
+      return null;
+    }
+  };
+
+  /** 到了终态就把结论记进 pending，等 A 来取。 */
+  const settle = (current) => {
+    if (done) return;
+    stop();
+    entry.settled = {
+      status: typeof current.phase === 'string' ? current.phase : 'complete',
+      reply: text,
+      reason: typeof current.reason === 'string' ? current.reason : '',
+    };
+  };
+
+  /** 查一次：已终态就结算并返回 true。 */
+  const check = () => {
+    if (done) return true;
+    const current = readPhase();
+    if (current !== null && current.phase !== 'active') {
+      settle(current);
+      return true;
+    }
+    /*
+     * 兜底：目标状态长时间读不到（会话被回收、agent 已释放）时不能永远挂着。
+     * 如实记成一条「状态未知」，让 A 取走并结清，而不是留一个永远等不到的坑。
+     */
+    if (Date.now() - startedAt > ASYNC_MAX_MS) {
+      stop();
+      entry.settled = { status: 'unknown', reply: text, reason: '目标状态长时间读不到（会话可能已被回收）' };
+      return true;
+    }
+    return false;
+  };
+
+  off = ctx.on('session/event', (session, event) => {
+    if (done) return;
+    if (session === undefined || session.id !== sessionId) return;
+    if (event !== undefined && event.type === 'assistant/message') {
+      const said = assistantText(event.data);
+      if (said !== '') text = said;
+    }
+    // 任何事件之后都重读一次：目标的推进与结束都体现在会话日志里。
+    check();
+  });
+
+  controller.signal.addEventListener('abort', () => stop(), { once: true });
+
+  // 进来先看一眼：目标可能在我们挂上监听之前就结束了。
+  if (check()) return;
+
+  timer = setInterval(check, service.asyncRecheckMs ?? ASYNC_RECHECK_MS);
+  timer.unref?.();
 }
 
 /**
@@ -342,7 +424,7 @@ export async function runBatch(options) {
     });
     if (nonBlocking) {
       // 派完就走：挂一条后台监视，目标结束时把结论记进 pending，等 A 回来取。
-      watchDetached(ctx, service, item.key, agent).catch(() => undefined);
+      watchDetached(ctx, service, item.key, agent);
     }
     entries.push({ ...item, agent });
   }

@@ -903,4 +903,41 @@ const twoTargets = () => [
   check('取完结果后不再提醒', injected.length === 1, String(injected.length));
 }
 
+{
+  /*
+   * 这一幕正是「跨段攒」当初要解决的问题，单订阅之后它应该天然成立：
+   * 结论在很早的时候说完，之后很久没有任何助手消息，最后才由一条**不带文本**的
+   * 状态事件宣告结束。结算时必须仍然拿着那句结论，而不是空串。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  await tool.execute(
+    { task: '分头办事', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+
+  // 1) 早就说完了结论
+  emit('s-b', assistantEvent(1, '结论：新增三节规格'));
+  await settle();
+
+  // 2) 之后很长一段时间只有「干活」类的噪音，没有任何助手文本
+  emit('s-b', { type: 'tool/result', seq: 2, time: 2, data: { callId: 'c1', name: 'run', ok: true } });
+  emit('s-b', { type: 'step/start', seq: 3, time: 3, data: { turn: 1, step: 2 } });
+  await settle();
+
+  // 3) 最后才由一条不带文本的状态事件宣告结束
+  goals.done('s-b', 'complete');
+  emit('s-b', { type: 'goal/change', seq: 4, time: 4, data: {} });
+  await settle();
+
+  const value = await tool.execute({ wait: 'none' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  check('终态由不带文本的事件宣告时，仍然拿得到早先那句结论',
+    value.results[0]?.reply === '结论：新增三节规格', JSON.stringify(value.results));
+  check('状态是 complete', value.results[0]?.status === 'complete', JSON.stringify(value.results));
+}
+
 report();

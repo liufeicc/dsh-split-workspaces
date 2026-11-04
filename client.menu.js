@@ -13,7 +13,8 @@ window.__ModuleLoader__.load({
   id: '@local/dsh-split-workspaces/client.menu.js',
   factory(require) {
     const React = require('react');
-    const { useEffect, useRef, useState } = React;
+    const ReactDOM = require('react-dom');
+    const { useEffect, useLayoutEffect, useRef, useState } = React;
     const h = React.createElement;
 
     /** 组装菜单零件。 */
@@ -105,11 +106,23 @@ window.__ModuleLoader__.load({
           if (onOpenChange !== undefined) onOpenChange(value);
         };
         const rootRef = useRef(null);
+        const menuRef = useRef(null);
+        /** 菜单的 fixed 定位：`null` 表示还没量出来，先隐藏避免闪一下。 */
+        const [anchor, setAnchor] = useState(null);
+        const updateRef = useRef(null);
         useEffect(() => {
           if (!open) return undefined;
           const onPointerDown = (event) => {
+            if (!(event.target instanceof Node)) return;
             const root = rootRef.current;
-            if (root !== null && event.target instanceof Node && !root.contains(event.target)) setOpen(false);
+            const menu = menuRef.current;
+            /*
+             * 菜单已经 portal 到 body，不再位于 root 里。两处都要查，否则点菜单项
+             * 会被当成「点了外面」而先关掉菜单，点击落不到目标上。
+             */
+            if (root !== null && root.contains(event.target)) return;
+            if (menu !== null && menu.contains(event.target)) return;
+            setOpen(false);
           };
           const onKeyDown = (event) => {
             if (event.key !== 'Escape') return;
@@ -123,8 +136,108 @@ window.__ModuleLoader__.load({
             document.removeEventListener('keydown', onKeyDown, true);
           };
         }, [open]);
+        /*
+         * 菜单的定位。
+         *
+         * 为什么不能再用 CSS 的 `position:absolute`：菜单原来挂在窗格标题栏里，
+         * 而 `.dshSplitWs_pane` 是 `overflow:hidden`。窗格一窄，240px 宽的菜单
+         * 必然超出窗格边界被裁掉（左右都一样）。portal 到 body 之后菜单不再受
+         * 窗格裁切，再用 fixed 把它锚在触发器旁边：
+         *   - 水平：align=end 时右边缘对齐触发器，向左展开；最后夹取到视口内；
+         *   - 垂直：默认在下方，下面放不下且上面更宽裕时向上翻转；
+         *   - 高度：按可用空间限制，超出时菜单内部滚动。
+         */
+        useLayoutEffect(() => {
+          if (!open) {
+            setAnchor(null);
+            updateRef.current = null;
+            return undefined;
+          }
+          const update = (event) => {
+            const trigger = rootRef.current;
+            const menu = menuRef.current;
+            if (trigger === null) return;
+            /*
+             * 菜单自己滚动时不重算位置：否则每滚一格都把内容滚动误当成页面在动，
+             * 菜单位置会跟着抖。只有窗口/窗格/棋盘的滚动才需要跟随触发器。
+             */
+            if (event !== undefined && menu !== null
+              && event.target instanceof Node && menu.contains(event.target)) return;
+            const margin = 8;
+            const gap = 4;
+            const rect = trigger.getBoundingClientRect();
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const maxWidth = Math.max(80, Math.min(420, viewportWidth - margin * 2));
+            const minWidth = Math.min(240, maxWidth);
+            const menuWidth = menu === null
+              ? minWidth
+              : Math.max(minWidth, Math.min(menu.offsetWidth, maxWidth));
+            let left = align === 'end' ? rect.right - menuWidth : rect.left;
+            left = Math.max(margin, Math.min(left, viewportWidth - margin - menuWidth));
+            const menuHeight = menu === null ? 0 : menu.offsetHeight;
+            const below = viewportHeight - margin - (rect.bottom + gap);
+            const above = rect.top - gap - margin;
+            let top = rect.bottom + gap;
+            let maxHeight = Math.min(340, Math.max(120, below));
+            if ((menuHeight > below || below < 120) && above > below) {
+              maxHeight = Math.min(340, Math.max(120, above));
+              const used = menuHeight === 0 ? maxHeight : Math.min(menuHeight, maxHeight);
+              top = Math.max(margin, rect.top - gap - used);
+            }
+            setAnchor({ top, left, minWidth, maxWidth, maxHeight });
+          };
+          updateRef.current = update;
+          update();
+          window.addEventListener('resize', update);
+          /*
+           * 用 rAF 合并滚动事件：棋盘滚动会连续触发几十次，没必要每次都 setState。
+           * capture 才能听到窗格内部的滚动（scroll 不冒泡）。
+           */
+          let frame = 0;
+          const onScroll = (event) => {
+            if (frame !== 0) return;
+            frame = requestAnimationFrame(() => {
+              frame = 0;
+              update(event);
+            });
+          };
+          window.addEventListener('scroll', onScroll, true);
+          return () => {
+            updateRef.current = null;
+            window.removeEventListener('resize', update);
+            window.removeEventListener('scroll', onScroll, true);
+            if (frame !== 0) cancelAnimationFrame(frame);
+          };
+        }, [open, align]);
+        /*
+         * 菜单内容会变：分屏菜单从「方向」切到「工作区」、MCP 勾选后多一行。
+         * 高度一变就要重算上下翻转，所以用 ResizeObserver 盯着尺寸，而不是
+         * 每次 render 都重算（那样很容易写出 setState 循环）。
+         */
+        useEffect(() => {
+          if (!open) return undefined;
+          const menu = menuRef.current;
+          if (menu === null || typeof ResizeObserver === 'undefined') return undefined;
+          const observer = new ResizeObserver(() => {
+            if (updateRef.current !== null) updateRef.current();
+          });
+          observer.observe(menu);
+          return () => observer.disconnect();
+        }, [open]);
         const iconOnly = icon !== undefined;
-        return h('div', { className: cx(css.popover, align === 'end' && css.popoverEnd), ref: rootRef },
+        const menuStyle = anchor === null
+          ? { position: 'fixed', top: 0, left: 0, visibility: 'hidden' }
+          : {
+              position: 'fixed',
+              top: anchor.top,
+              left: anchor.left,
+              minWidth: anchor.minWidth,
+              maxWidth: anchor.maxWidth,
+              maxHeight: anchor.maxHeight,
+              zIndex: 1000,
+            };
+        return h('div', { className: css.popover, ref: rootRef },
           h('button', {
             type: 'button',
             className: iconOnly
@@ -138,8 +251,15 @@ window.__ModuleLoader__.load({
             onClick: () => setOpen((value) => !value),
           }, iconOnly ? icon : h('span', { className: css.triggerLabel }, label), iconOnly ? null : h(Chevron, null)),
           open
-            ? h('div', { className: css.popoverList, role: 'menu' },
-                typeof children === 'function' ? children(() => setOpen(false)) : children)
+            ? ReactDOM.createPortal(
+                h('div', {
+                  ref: menuRef,
+                  className: css.popoverList,
+                  role: 'menu',
+                  style: menuStyle,
+                }, typeof children === 'function' ? children(() => setOpen(false)) : children),
+                document.body,
+              )
             : null);
       }
 

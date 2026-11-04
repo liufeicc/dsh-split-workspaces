@@ -109,7 +109,12 @@ that currently holds focus is marked by a brand-coloured title bar.
   is closed, the pane that replaces it takes over the caret **after the next reflow** (it is
   remounted; the reason is likewise in pitfall 5). When a pane has no typeable input box (no
   session yet, or the host is inert), only the highlight switches and the caret is left
-  alone. The two ends of the gradient are mixed from the blue accent colour and a static
+  alone. A popup menu is rendered through a portal into `document.body` with
+   `position: fixed`: the pane is `overflow:hidden`, so a menu left inside it gets clipped as
+   soon as the pane narrows (the preset / switch-workspace / split / MCP / SKILL menus all share
+   this). It is clamped horizontally to the viewport, flips above the trigger when there is no
+   room below, and scrolls internally; the tradeoff is that it may cover a neighbouring pane.
+   The two ends of the gradient are mixed from the blue accent colour and a static
   black token (`color-mix`), which both produces the dark-to-light blue in the design and
   raises the white text's contrast above 4.5:1 — pure accent colour with white text is only
   3.3:1, which looks blurry. The offline tests compute the contrast of each end of the
@@ -628,6 +633,10 @@ the whole implementation.
   exercised), a click alone not touching pane state, the pane's error line spelling out "the
   delete service is missing" when it is, and `forgetSession` releasing **every** pane pinned
   to the deleted session.
+- `test/menu-contract.mjs` — offline contract test for title-bar popup menus
+  (`node test/menu-contract.mjs`): the menu is portaled into `document.body` and uses fixed
+  positioning, so the pane's `overflow:hidden` can no longer clip it; the width fallback
+  shrinks with the viewport.
 - `tools/browser-probe.mjs` — a **real-browser** probe (requires a local `google-chrome`): it
   uses CDP trusted mouse input to measure, one by one, the browser default behaviours that
   "caret ownership" depends on, see pitfall 5. It is not part of the offline tests (those
@@ -683,6 +692,7 @@ node test/preset-contract.mjs
 node test/open-contract.mjs
 node test/mcp-contract.mjs
 node test/delete-contract.mjs
+node test/menu-contract.mjs
 node test/skill-contract.mjs
 node test/graph-contract.mjs
 node test/dispatch-contract.mjs

@@ -82,6 +82,21 @@ export const ReactStub = {
 };
 
 /**
+ * 真实客户端里菜单用 `react-dom` 的 portal 挂到 body（否则会被窗格
+ * `overflow:hidden` 裁掉）。离线测试不需要真正的 DOM 容器，直接返回 children
+ * 即可 —— 菜单内容仍会出现在渲染树里，现有断言不用改。
+ */
+export const ReactDomStub = {
+  createPortal: (children) => children,
+};
+
+/*
+ * 组件里用了 `useLayoutEffect` 做菜单定位。离线替身没有布局阶段，复用
+ * `useEffect` 的依赖比较即可；测试默认不执行 effect，所以不会碰 window。
+ */
+ReactStub.useLayoutEffect = ReactStub.useEffect;
+
+/**
  * 造一个工厂用的 `require`：种子模块（react 等）来自 `modules`，
  * 相对路径的 `require.async` 按 loader 的规则装载同目录代码块。
  */
@@ -146,7 +161,9 @@ async function importWithStub(path) {
 export async function loadBundle(path, modules) {
   const definition = await loadDefinition(path);
   const dir = dirname(path);
-  return definition.factory(createChunkRequire({ ownerId: definition.id, dir, modules }));
+  // `react-dom` 是菜单 portal 的依赖，所有用例都默认带上；调用方仍可覆盖。
+  const merged = { 'react-dom': ReactDomStub, ...modules };
+  return definition.factory(createChunkRequire({ ownerId: definition.id, dir, modules: merged }));
 }
 
 /**

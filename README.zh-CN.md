@@ -74,6 +74,10 @@
   用户刚拖选出一段文字时也一个字都不碰（`focus()` 会把那段选区整段抹掉，见坑 5）。
   关掉当前窗格时，顶替它的窗格在**下一次重排之后**接管光标（它会重新挂载，理由同样在坑 5）。
   窗格里没有可打字的输入框时（还没会话、宿主 inert），只切高亮、不动光标。
+- **弹出菜单挂在 `document.body` 上**：窗格是 `overflow:hidden`，菜单如果留在窗格 DOM 里，
+  窗格一窄就会被裁掉（标题栏的模式 / 切换工作区 / 分屏 / MCP / SKILL 都受影响）。
+  所以菜单用 portal + `position:fixed`，按触发器的位置左右夹取、下方放不下时向上翻转，
+  高度按视口限制并内部滚动。代价是菜单会盖在相邻窗格上面 —— 这是弹出菜单的正常行为。
   渐变两端是把蓝色强调色与静态黑 token 混出来的（`color-mix`），既做出图里那种由深到浅的
   蓝，也把白字的对比度抬到 4.5:1 以上 —— 纯强调色配白字只有 3.3:1，偏糊。
   离线测试会把渐变逐端算一遍对比度，低于 4.5:1 直接判失败。
@@ -575,6 +579,9 @@ A 的模型多了一个 `dispatch_task` 工具：
   交给 `sessionDeleteUi`（`ctx.get` 里放替身，因此走的是真实的惰性解析路径）、
   光点一下不动窗格状态、服务不在时窗格错误行明说「删除功能没准备好」、
   以及删成功后 `forgetSession` 把**所有**钉着它的窗格松开。
+- `test/menu-contract.mjs` —— 标题栏弹出菜单的离线契约测试（`node test/menu-contract.mjs`）：
+  菜单确实 portal 到 `document.body`、用 fixed 定位，窗格的 `overflow:hidden` 不再裁切它；
+  宽度兜底值按视口收窄。
 - `tools/browser-probe.mjs` —— **真浏览器**探针（需要本地装有 `google-chrome`）：用 CDP 可信
   鼠标输入把「光标归属」依赖的浏览器默认行为逐条量一遍，见坑 5。它不进离线测试
   （那些仍然零依赖），改这块代码前手动跑一次（`node tools/browser-probe.mjs`）。
@@ -617,6 +624,7 @@ node test/preset-contract.mjs
 node test/open-contract.mjs
 node test/mcp-contract.mjs
 node test/delete-contract.mjs
+node test/menu-contract.mjs
 node test/skill-contract.mjs
 node test/graph-contract.mjs
 node test/dispatch-contract.mjs

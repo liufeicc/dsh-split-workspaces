@@ -112,8 +112,12 @@ window.__ModuleLoader__.load({
       // 弹出菜单的**面板底色**：用「抬升表面」那支 token（深色主题 #2c2c2e / 浅色主题 #fff），
       // 不用 --dsw-alias-bg-overlay —— 它在深色主题里是 #61666b 的中灰，白字压上去糊成一片，
       // 次要文字（「当前」「当前会话已开始…」）更是只有 3.3:1，用户反馈就是「灰得看不清字」。
-      '.dshSplitWs_popoverList{position:absolute;top:calc(100% + 4px);left:0;z-index:60;min-width:240px;max-width:min(420px,70vw);max-height:340px;overflow-y:auto;padding:4px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 12px 32px rgba(0,0,0,.28)}',
-      '.dshSplitWs_popoverEnd .dshSplitWs_popoverList{left:auto;right:0}',
+      /*
+       * 弹出菜单 portal 到 body 后用 fixed 定位，由 client.menu.js 按触发器位置计算
+       * top/left；这里只留「不超出视口」的兜底尺寸。原来的 absolute + 窗格
+       * `overflow:hidden` 会在窄窗格里把菜单裁掉。
+       */
+      '.dshSplitWs_popoverList{position:fixed;top:0;left:0;z-index:1000;min-width:min(240px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));max-height:min(340px,calc(100vh - 16px));overflow-y:auto;padding:4px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 12px 32px rgba(0,0,0,.28)}',
       '.dshSplitWs_menuItem{display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;line-height:18px;text-align:left;cursor:pointer}',
       // 菜单项 hover：底色不能再用 bg-layer-2（那正是面板自己的底色，压上去等于没反应），
       // 改成拿 currentColor 调淡 —— 深色主题下是白字提亮、浅色主题下是黑字压暗，两种主题都看得见。
@@ -238,7 +242,6 @@ window.__ModuleLoader__.load({
       iconButton: 'dshSplitWs_iconButton',
       iconButtonOpen: 'dshSplitWs_iconButtonOpen',
       popover: 'dshSplitWs_popover',
-      popoverEnd: 'dshSplitWs_popoverEnd',
       trigger: 'dshSplitWs_trigger',
       triggerOpen: 'dshSplitWs_triggerOpen',
       triggerLabel: 'dshSplitWs_triggerLabel',

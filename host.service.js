@@ -42,11 +42,14 @@ export class PaneDispatchService {
     /** ownerId → 这个会话的显示名（客户端随每次同步带上来）。 */
     this.labels = new Map();
     /**
-     * 还没结清的派单：`「owner\u0000target」 → { settled, controller }`。
+     * 还没结清的派单：`「owner\u0000target」 → { settled, controller, progress, replaced }`。
      *
-     * 它同时承担两件事：
+     * 它同时承担三件事：
      *   1. 区分「新派一单」与「接着等上一单」—— 有记录就是续等，不重建目标；
-     *   2. 存结论 —— `settled` 由后台监视在目标终态时写入，A 来取时读它。
+     *   2. 区分「接着等」与「纠正」—— 记录还在、`settled` 为空，说明目标正在跑，
+     *      这时带 task 的调用是纠正，不是新任务；
+     *   3. 存结果 —— `settled` 由后台监视在目标终态时写入；`progress` 是还没结算时的
+     *      最新过程稿，供 `wait: none` 中途查看。
      * 领取（或撤箭头、卸载）之后条目被删掉，于是下一次调用又回到「新派」。
      */
     this.pending = new Map();

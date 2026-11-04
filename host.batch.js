@@ -9,12 +9,26 @@
  *
  * ## 三个阶段，顺序不能换
  *
- *   1. **分流**：把请求拆成「新派」与「续等」两拨，并检查语义冲突
- *      （给了 task 却选中一个还在跑的旧派单 / 没给 task 却选中一个从没派过的目标）。
+ *   1. **分流**：把请求拆成「新派」「续等」「纠正」三拨，并检查语义冲突
+ *      （给了 task 却选中一个已有结论没收的目标 / 没给 task 却选中一个从没派过的目标）。
+ *      目标正在跑时给 task 不再报错，而是当成**纠正**排队 —— 这是 A 看到过程稿之后
+ *      唯一能改方向的路。
  *   2. **预检**：把这一批新派的目标**全部**查一遍忙闲，全部空闲才动手。
  *      少了这一步就会出现「派出去一半」：目标 B 建好了、目标 C 报忙，模型拿到一个
  *      半截状态，还得自己猜哪些生效了。
  *   3. **并发等待**：每个目标一条独立的等待，按 `wait` 语义决定什么时候收尾。
+ *
+ * ## 交付与过程稿分开
+ *
+ * 只有 `complete` 是**交付**：文本进 `reply`，`deliverable` 为 true。其余状态
+ * （running / blocked / paused / interrupted / timeout / cancelled）的文本一律进
+ * `progress`，并明确标注「过程稿，可能被推翻」。这样 A 不会把 B 的中途判断当成结论。
+ *
+ * ## 用户手停
+ *
+ * 用户在界面上按停止时，`turn/end` 会带 `aborted.user`。这一单按 `interrupted` 收口，
+ * 而不是 `paused` 或 `running`：A 必须知道「是用户停的、未交付、可以继续做别的」，
+ * 且不能越过用户去纠正目标。
  *
  * ## wait 的两种语义
  *
@@ -36,8 +50,9 @@
  * @module @local/dsh-split-workspaces/host-batch
  */
 
-import { WAIT_ALL, WAIT_ANY, WAIT_NONE } from './host.constants.js';
+import { STATUS_INTERRUPTED, WAIT_ALL, WAIT_ANY, WAIT_NONE } from './host.constants.js';
 import { errorText, wrapTask } from './host.message.js';
+import { redirectBatch } from './host.redirect.js';
 import {
   deliverAndWait,
   goalSupport,
@@ -111,13 +126,83 @@ function composeReply(outcome) {
 }
 
 /**
- * 单个结果的补充说明（目前只有「还在做，已到第几轮」这一条）。
+ * 把非交付状态的过程文本整理成**明确标着「过程稿」**的一段话。
+ *
+ * 为什么前缀要写死在数据里而不是只在工具描述里叮嘱：模型最容易忽略的就是描述，
+ * 而它一定会读到结果文本。让「这是过程稿」和内容长在一起，误用的概率最低。
+ *
  * @param outcome - 等待结果。
- * @returns 说明文字；已终态时是空串。
+ * @returns 带前缀的过程稿；没有内容时返回空串。
  */
-function composeItemNote(outcome) {
-  if (outcome?.status !== 'running') return '';
-  return '已到第 ' + String(outcome.rounds ?? 0) + ' 轮。';
+function composeProgress(outcome) {
+  const progress = typeof outcome?.progress === 'string' ? outcome.progress : '';
+  if (progress === '') return '';
+  return '（过程稿，可能被后续推翻）\n' + progress;
+}
+
+/**
+ * 单个结果的补充说明：讲清楚「这一单交付了没有、能不能拿它行动」。
+ *
+ * @param outcome - 等待结果。
+ * @param interruptedBy - `'user'` 表示用户手动停止。
+ * @returns 说明文字；成功交付时是空串。
+ */
+function composeItemNote(outcome, interruptedBy) {
+  const status = outcome?.status;
+  const lines = [];
+  if (status === 'running') {
+    const rounds = Number(outcome?.rounds ?? 0);
+    lines.push(rounds > 0 ? '已到第 ' + String(rounds) + ' 轮。' : '目标还在做。');
+    lines.push('这是过程稿，不是交付结论；方向不对时，可以用 dispatch_task 带 task 给这个目标发纠正（会排队到它的下一轮）。');
+  } else if (status === 'complete' && outcome?.deliverable === false) {
+    lines.push('目标已完成，但结论没能自动恢复；去目标会话里看最后一条回复。');
+  } else if (interruptedBy === 'user') {
+    lines.push('用户手动停止了目标并接管了这一单，未交付。');
+    lines.push('你可以继续做不依赖它的部分；不要越过用户去纠正它，等用户处理完再派。');
+  } else if (status === 'paused') {
+    lines.push('目标已暂停，未交付。');
+  } else if (status === 'blocked') {
+    lines.push('目标受阻，未交付。');
+  } else if (status === 'cleared') {
+    lines.push('目标已被清除，未交付。');
+  } else if (status === 'cancelled') {
+    lines.push('这次等待被取消了，目标仍在跑，未交付。');
+  } else if (status === 'timeout') {
+    lines.push('等待超时，目标仍未交付；可以再等一次。');
+  } else if (status === 'error') {
+    lines.push('等待出错，未交付。');
+  }
+  return lines.join(' ');
+}
+
+/**
+ * 把一次等待结果整形成对模型友好的结果项。
+ *
+ * 三个字段一起回答 A 最关心的问题：
+ *   - `deliverable`：这一单到底交付了没有（只有 complete / completed 为 true）；
+ *   - `reply`：交付结论（未交付时只有结束原因，不含过程稿）；
+ *   - `progress`：未交付时的过程稿（带「可能被推翻」前缀）。
+ *
+ * @param target - 目标显示名。
+ * @param outcome - 等待结果。
+ * @param replaced - 建目标前清掉的旧目标（可选）。
+ * @returns 结果项。
+ */
+function shapeResult(target, outcome, replaced) {
+  // 个别「目标已完成、但结论没恢复」的条目会显式带 `deliverable: false`。
+  const delivered = outcome?.deliverable === false ? false : isSuccessStatus(outcome?.status);
+  const interruptedBy = outcome?.interruptedBy === 'user' ? 'user' : '';
+  return {
+    target,
+    status: typeof outcome?.status === 'string' ? outcome.status : 'error',
+    deliverable: delivered,
+    reply: composeReply(outcome),
+    progress: delivered ? '' : composeProgress(outcome),
+    interruptedBy,
+    note: [composeItemNote(outcome, interruptedBy), replacedNote(replaced)]
+      .filter((text) => text !== '')
+      .join(' '),
+  };
 }
 
 /**
@@ -206,6 +291,12 @@ export function batchStatus(results, aborted) {
   if (results.some((item) => item.status === 'running')) return 'running';
   const failed = results.filter((item) => item.status === 'failed').length;
   if (failed === results.length) return 'failed';
+  /*
+   * 全部目标都被用户手动停止：这不是「部分做成」，而是一整批被接管。
+   * 单独给一个状态，A 才知道该继续做不依赖它的部分，而不是按 partial 的语义去复核半成品。
+   */
+  const interrupted = results.filter((item) => item.status === STATUS_INTERRUPTED).length;
+  if (interrupted === results.length) return STATUS_INTERRUPTED;
   const succeeded = results.filter((item) => isSuccessStatus(item.status)).length;
   if (failed === 0 && succeeded === results.length) return 'complete';
   /*
@@ -217,29 +308,34 @@ export function batchStatus(results, aborted) {
 }
 
 /**
- * 语义冲突时的说明：给了 task 却选中还在跑的旧派单，或者反过来。
+ * 语义冲突时的说明。
  *
- * 两种都**直接拒绝**而不是猜：猜错的代价是模型以为新任务已经派出去了，而对方其实还在
- * 做上一件 —— 用户会得到一份对不上的结论。
+ * 现在只剩三种：
+ *   - 目标刚被用户手动停止并接管（`interrupted`）；
+ *   - 上一次派单有结论还没取（`uncollected`）；
+ *   - 没给 task 却选中一个从没派过的目标（`idle`）。
+ * 「目标正在跑」不再是冲突 —— 带 task 的调用会被当成纠正排队。
  *
- * @param conflicts - `[{ binding, why }]`，`why` 是 `'running'` 或 `'idle'`。
+ * 三种都**直接拒绝**而不是猜：猜错的代价是模型以为事情已经办好了，而实际上没有。
+ *
+ * @param conflicts - `[{ binding, why }]`，`why` 是 `'interrupted'` / `'uncollected'` / `'idle'`。
  * @returns 一整段可直接抛给模型的话。
  */
 function explainConflicts(conflicts) {
-  const running = conflicts.filter((item) => item.why === 'running').map((item) => '「' + item.binding.label + '」');
+  const interrupted = conflicts.filter((item) => item.why === 'interrupted').map((item) => '「' + item.binding.label + '」');
   const uncollected = conflicts.filter((item) => item.why === 'uncollected').map((item) => '「' + item.binding.label + '」');
   const idle = conflicts.filter((item) => item.why === 'idle').map((item) => '「' + item.binding.label + '」');
   const lines = [];
+  if (interrupted.length > 0) {
+    lines.push(
+      '这些目标刚被用户手动停止并接管：' + interrupted.join('、') + '。',
+      '这一单未交付；先省略 task 取走中断说明，不要越过用户去纠正它。等用户处理完再派。',
+    );
+  }
   if (uncollected.length > 0) {
     lines.push(
       '这些目标上一次派单的**结果还没取**：' + uncollected.join('、') + '。',
       '先省略 task 把它们取回来（结果只会交付一次），再派新的。',
-    );
-  }
-  if (running.length > 0) {
-    lines.push(
-      '这些目标还在跑上一次派出去的那件事：' + running.join('、') + '。',
-      '先等它们结束（省略 task，只等它们），再派新的；不要给正在跑的会话叠加第二个目标。',
     );
   }
   if (idle.length > 0) {
@@ -317,9 +413,10 @@ export async function runBatch(options) {
     throw new Error('这个部署没有目标服务，做不到「派完就走」：请省略 wait（默认 all），同步等到结论。');
   }
 
-  // ── 1. 分流：哪些是新派、哪些是续等 ──────────────────────────────────
+  // ── 1. 分流：哪些是新派、哪些是续等、哪些其实是在纠正 ──────────────────
   const fresh = [];
   const resume = [];
+  const redirects = [];
   const conflicts = [];
   for (const binding of bindings) {
     const key = ownerId + '\u0000' + binding.id;
@@ -328,8 +425,21 @@ export async function runBatch(options) {
       if (pending === undefined) fresh.push({ binding, key });
       // 有结论却没收 = 「结果还没取」，与「还在跑」是两回事，得分开说。
       else if (pending.settled !== null && pending.settled !== undefined) {
-        conflicts.push({ binding, why: 'uncollected' });
-      } else conflicts.push({ binding, why: 'running' });
+        conflicts.push({
+          binding,
+          why: pending.settled.status === STATUS_INTERRUPTED ? 'interrupted' : 'uncollected',
+        });
+      } else {
+        /*
+         * 目标正在跑，而且 A 给了新内容：这是**纠正**，不是第二个任务。
+         *
+         * 旧行为是直接报「目标忙」，于是 A 看到过程稿发现方向不对也改不了，只能等它
+         * 按错的方向跑完。现在改成排队一条纠正消息 —— 不新建 goal、不打断当前轮，
+         * 目标在下一轮会看到。用户手动停止过的目标不在这里（settled 已存在，走
+         * `interrupted` 冲突），避免 A 越过用户去驱动目标。
+         */
+        redirects.push({ binding, key });
+      }
     } else if (pending === undefined) {
       conflicts.push({ binding, why: 'idle' });
     } else {
@@ -337,6 +447,15 @@ export async function runBatch(options) {
     }
   }
   if (conflicts.length > 0) throw new Error(explainConflicts(conflicts));
+  if (redirects.length > 0) {
+    if (fresh.length > 0) {
+      throw new Error(
+        '一次调用里不能同时「纠正正在跑的目标」和「给空闲目标派新任务」：'
+        + '同一个 task 会有两种语义。请分成两次调用 —— 先只发给正在跑的目标，再发新任务。',
+      );
+    }
+    return redirectBatch({ ctx, service, ownerId, bindings, task, signal });
+  }
 
   // ── 2. 预检：新派的目标必须**全部**空闲，否则一个都不派 ──────────────
   if (fresh.length > 0) {
@@ -388,6 +507,8 @@ export async function runBatch(options) {
       settled: null,
       /** 后台监视的取消把手（撤箭头、卸载时掐掉）。 */
       controller: null,
+      /** 最新过程稿：让 `wait: none` 中途查看时也能看到进展。 */
+      progress: '',
     });
     if (nonBlocking) {
       // 派完就走：挂一条后台监视，目标结束时把结论记进 pending，等 A 回来取。
@@ -417,18 +538,18 @@ export async function runBatch(options) {
         // 有结论了就交付并结清：领取一次之后不再重复给，避免同一段结论反复进上下文。
         const settled = entry.settled;
         service.forget(key);
-        byId.set(binding.id, {
-          target: binding.label,
-          status: settled.status,
-          reply: composeReply(settled),
-          note: replacedNote(entry.replaced),
-        });
+        byId.set(binding.id, shapeResult(binding.label, settled, entry.replaced));
       } else {
         byId.set(binding.id, {
           target: binding.label,
           status: 'running',
+          deliverable: false,
           reply: '',
-          note: replacedNote(entry.replaced),
+          progress: composeProgress({ progress: entry.progress ?? '' }),
+          interruptedBy: '',
+          note: [composeItemNote({ status: 'running', rounds: 0 }, ''), replacedNote(entry.replaced)]
+            .filter((text) => text !== '')
+            .join(' '),
         });
       }
     }
@@ -436,7 +557,10 @@ export async function runBatch(options) {
       byId.set(failure.binding.id, {
         target: failure.binding.label,
         status: 'failed',
+        deliverable: false,
         reply: failure.reply,
+        progress: '',
+        interruptedBy: '',
         note: '',
       });
     }
@@ -469,8 +593,8 @@ export async function runBatch(options) {
       stillRunning,
       note: stillRunning === 0
         ? ''
-        : '还有 ' + String(stillRunning) + ' 个目标在跑。可以再用 wait: none 看一眼，'
-          + '或者用默认的 wait: all 阻塞着等它们出结论。',
+        : '还有 ' + String(stillRunning) + ' 个目标在跑。返回里的 progress 是过程稿，不是交付结论。'
+          + '可以再用 wait: none 看一眼，或者用默认的 wait: all 阻塞着等它们出结论。',
     };
   }
 
@@ -524,30 +648,34 @@ export async function runBatch(options) {
        * 后台监视从**派出那一刻**就在听，比「这一次阻塞等待」看到的历史更长。
        * 目标恰好在阻塞期间结束时，两边会同时结算：这时必须以后台攒下的文本为准。
        * 否则「结论早说、终态晚到且不带文本」会把结论覆盖成空串 —— 真机可复现。
+       *
+       * 如果后台已经看到终态、而这次阻塞等待只拿到 `running`（切片到期），
+       * 应当直接采用后台的终态 —— 尤其是 `interrupted`：用户手停后 A 不该再等。
        */
       if (record !== undefined && record !== null
         && record.settled !== null && record.settled !== undefined) {
+        if (outcome.status === 'running') outcome.status = record.settled.status;
         if (outcome.reply === undefined || outcome.reply === '') outcome.reply = record.settled.reply;
+        if (outcome.progress === undefined || outcome.progress === '') outcome.progress = record.settled.progress;
         if ((outcome.reason === undefined || outcome.reason === '')
           && typeof record.settled.reason === 'string') outcome.reason = record.settled.reason;
+        if (outcome.interruptedBy === undefined || outcome.interruptedBy === '') {
+          outcome.interruptedBy = record.settled.interruptedBy;
+        }
       }
       // 还在跑就留着 pending，下一轮接着等；有结论了就结清（并掐掉后台监视）。
       if (isTerminalStatus(outcome.status)) service.forget(item.key);
     }
-    byId.set(item.binding.id, {
-      target: item.binding.label,
-      status: outcome.status,
-      reply: composeReply(outcome),
-      note: [composeItemNote(outcome), replacedNote(record === undefined || record === null ? null : record.replaced)]
-        .filter((text) => text !== '')
-        .join(' '),
-    });
+    byId.set(item.binding.id, shapeResult(item.binding.label, outcome, record === undefined || record === null ? null : record.replaced));
   }
   for (const failure of failures) {
     byId.set(failure.binding.id, {
       target: failure.binding.label,
       status: 'failed',
+      deliverable: false,
       reply: failure.reply,
+      progress: '',
+      interruptedBy: '',
       note: '',
     });
   }
@@ -575,10 +703,15 @@ export async function runBatch(options) {
   const stillRunning = results.filter((item) => item.status === 'running').length;
   let note = '';
   if (status === 'running') {
-    note = '还有 ' + stillRunning + ' 个目标在做。继续调用 dispatch_task 并省略 task 与 targets，'
-      + '接着等下一段，直到状态不再是 running。';
+    note = '还有 ' + stillRunning + ' 个目标在做。返回里的 progress 是**过程稿**，可能被后面推翻，'
+      + '不是交付结论；可以据此判断方向，并用 dispatch_task 带 task 给目标发纠正。'
+      + '要继续等就**继续调用** dispatch_task 并省略 task 与 targets，接着等下一段，直到状态不再是 running。';
+  } else if (status === STATUS_INTERRUPTED) {
+    note = '这一批被用户手动停止了：用户接管了目标，这一单未交付。'
+      + '你可以继续做不依赖它的部分；等用户处理完再派，不要越过用户去纠正它。';
   } else if (status === 'partial') {
-    note = '这一批里有目标没做成或没派出去，看 results 里各自的 status 与 reply。';
+    note = '这一批里有目标没做成、没派出去，或被用户接管；看 results 里各自的 status 与 note。'
+      + '只有 deliverable 为 true 的 reply 才是交付结论，其余内容都只是过程稿。';
   } else if (status === 'failed') {
     note = '这一批一个都没派出去，先按 reply 里的原因处理，再重新派。';
   }

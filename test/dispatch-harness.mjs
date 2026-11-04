@@ -195,8 +195,22 @@ export const assistantEvent = (seq, text) => ({
   surfaceOp: 'append',
 });
 
-/** 一轮结束。 */
-export const turnEndEvent = (seq, kind) => ({ type: 'turn/end', seq, time: 3, data: { turn: 1, reason: { kind } } });
+/**
+ * 一轮结束。
+ *
+ * 第三个参数是取消原因：用户按停止时是 `{ kind: 'user' }`，会写进
+ * `reason.reason`（真实形状见 dsh-session 的 `TurnEndReasonMap`）。
+ *
+ * @param seq - 事件序号。
+ * @param kind - `completed` / `aborted` / `blocked` / `error` 等。
+ * @param cause - 可选，取消原因。
+ */
+export const turnEndEvent = (seq, kind, cause) => ({
+  type: 'turn/end',
+  seq,
+  time: 3,
+  data: { turn: 1, reason: cause === undefined ? { kind } : { kind, reason: cause } },
+});
 
 /** 造一个目标服务替身：记录创建请求，phase 由用例直接改。 */
 export function fakeGoals({ failCreate = false } = {}) {

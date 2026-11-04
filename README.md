@@ -195,30 +195,40 @@ the global one) whose description lists the available targets.
 
 | Parameter | Meaning |
 |---|---|
-| `task` | Task body. The target cannot see A's history, so background **and verifiable acceptance criteria** belong here. Omit it when waiting for a previous dispatch |
+| `task` | Task body. The target cannot see A's history, so background **and verifiable acceptance criteria** belong here. Omit it when waiting for a previous dispatch. When the target is already running, a `task` means a **correction** (queued to its next round, no new goal) |
 | `targets` | Array of targets. Each item may be an index, full title, title fragment, or session id. Required when more than one target is available; omitted with no `task`, it means "keep waiting on everything still running" |
-| `wait` | `all` (default) / `any` (return on the first conclusion) / `none` (do not wait) |
+| `wait` | `all` (default) / `any` (return on the first deliverable) / `none` (do not wait) |
 
 The call returns a batch: `{ status, results, stillRunning, note }`, where `results` holds one
-`{ target, status, reply, note }` per target in request order.
+`{ target, status, deliverable, reply, progress, interruptedBy, note }` per target in request
+order. **Only a `deliverable: true` reply is a conclusion.** Text from `running` / `blocked` /
+`paused` / `interrupted` goes into `progress`, explicitly marked as a draft that later rounds may
+overturn; `interruptedBy: "user"` means the user stopped the target.
 
-What happens: split new dispatches from continuations → **preflight every new target's
-idleness (one busy target rejects the whole batch)** → create a **goal** on the target session
-via `goals.create` (so it keeps working across rounds instead of replying once) → wait
-according to `wait` → shape the results. A call waits at most 5 minutes at a time and returns
-`running` with progress; the model calls again with no arguments to keep waiting.
+What happens: split new dispatches, continuations and corrections → **preflight every new
+target's idleness (one busy target rejects the whole new batch)** → create a **goal** on the
+target session via `goals.create` (so it keeps working across rounds instead of replying once) →
+wait according to `wait` → shape the results. A call waits at most 5 minutes at a time and
+returns `running` with `progress` (`deliverable: false`); the model calls again with no arguments
+to keep waiting. A call that sends `task` to a running target returns `redirected` instead.
 
-`wait: 'none'` returns immediately with `dispatched` and keeps a background watcher that
-records the conclusion. Because a dispatch must not be forgotten, the owner is nudged once
-per turn at `agent/turn-stopping` — injected into the next step, so the same turn continues
-one more step and collects the result instead of requiring user input.
+`wait: 'none'` returns immediately with `dispatched` (or `redirected` for a correction) and keeps
+a background watcher that records the conclusion. Because a dispatch must not be forgotten, the
+owner is nudged once per turn at `agent/turn-stopping` — injected into the next step, so the same
+turn continues one more step and collects the result instead of requiring user input.
 
 ### Boundaries worth knowing
 
 - **Multiple targets run in parallel**, each with its own waiter; results come back in request
   order. The tool never guesses "probably all of them" — name them when there is more than one.
-- **One task per target at a time**, and the target must be idle. Queueing is refused: it would
-  make "that round ended" an unreliable completion signal.
+- **One task per target at a time.** A `task` sent to a running target is a **correction**, not a
+  second task: it is queued via `sessions.prompt(mode: 'queue')`, creates no new goal, and returns
+  `redirected`. Do not mix corrections and new dispatches in one call.
+- **A user stop is reported as `interrupted`.** A `turn/end` with `aborted.user` closes the
+  dispatch immediately (`interruptedBy: "user"`, `deliverable: false`) — this covers both a
+  stopped goal round (goal becomes `paused`) and a stopped ordinary round (goal stays `active`
+  but automatic continuation is disarmed). A may continue with work that does not depend on the
+  target, but must not correct it behind the user's back.
 - **Blocked / paused targets stay reusable.** `goals.create` only replaces a `complete` goal,
   so a `blocked` or `paused` one is cleared first (keeping its tombstone and history) and the
   result says so.
@@ -540,6 +550,8 @@ the whole implementation.
   - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
   - `host.batch.js` — batch scheduling: preflight, concurrent waiting, `all`/`any`/`none`
     completion, clearing blocked goals, honest partial failures;
+  - `host.redirect.js` — queues an A correction onto a running target (`mode: queue`, no new
+    goal, no interruption of the current round);
   - `host.watch.js` — what happens after dispatch: the background watcher behind `wait: none`
     (one long-lived subscription) and `adoptOrphanGoals`, which reclaims dispatched-but-lost
     work after a Host restart by matching the goal objective prefix;

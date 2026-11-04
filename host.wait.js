@@ -15,8 +15,54 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { DISPATCH_SLICE_MS, DISPATCH_TIMEOUT_MS } from './host.constants.js';
+import { DISPATCH_SLICE_MS, DISPATCH_TIMEOUT_MS, STATUS_INTERRUPTED } from './host.constants.js';
 import { assistantText, errorText, wrapTask } from './host.message.js';
+
+/**
+ * 把「最后一段助手文本」按结束状态分成**交付结论**与**过程稿**。
+ *
+ * 这是本次改动最核心的一条约定：只有 `complete` / `completed` 才算交付，文本进
+ * `reply`；其余状态（还在跑、受阻、暂停、用户接管、超时、取消）的文本一律进
+ * `progress`，并让调用方标 `deliverable: false`。这样「B 说了一段像结论的话」不会
+ * 被当成「B 交出了结论」。
+ *
+ * @param status - 结束状态。
+ * @param text - 最后一段助手文本。
+ * @param reason - 结束原因（给 composeReply 拼在括号里）。
+ * @param interruptedBy - `'user'` 表示用户手动停止。
+ * @returns 统一的等待结果。
+ */
+function outcomeOf(status, text, reason = '', interruptedBy = '') {
+  const delivered = status === 'complete' || status === 'completed';
+  return {
+    status,
+    reply: delivered ? text : '',
+    progress: delivered ? '' : text,
+    reason: typeof reason === 'string' ? reason : '',
+    interruptedBy: interruptedBy === 'user' ? 'user' : '',
+  };
+}
+
+/** 目标模式在 `outcomeOf` 之上再带一个「已推进到第几轮」。 */
+function goalOutcome(status, text, reason, interruptedBy, rounds) {
+  return { ...outcomeOf(status, text, reason, interruptedBy), rounds: rounds ?? 0 };
+}
+
+/**
+ * 这条 `turn/end` 是不是「用户按了停止」。
+ *
+ * 真实事件形状是 `{ kind: 'aborted', reason: { kind: 'user' } }`（见 dsh-session 的
+ * `TurnEndReasonMap`）。用户停目标会话时走的就是这条；A 自己取消等待不会产生目标侧的
+ * `turn/end`，所以这里可以安全地把它当成「用户接管了目标」。
+ *
+ * @param event - `session/event` 事件。
+ * @returns 是就返回 true。
+ */
+export function isUserStop(event) {
+  if (event === undefined || event === null || event.type !== 'turn/end') return false;
+  const reason = event.data?.reason;
+  return reason?.kind === 'aborted' && reason.reason?.kind === 'user';
+}
 
 /**
  * 目标会话此刻是不是正忙；忙的话返回一句可以直接抛出去的说明。
@@ -44,7 +90,8 @@ export function runningText(ctx, binding) {
   }
   if (live === undefined || live === null) return null;
   if (live.status !== 'running') return null;
-  return '目标会话「' + binding.label + '」正在跑一个回合，暂时不能接任务。等它闲下来再派。';
+  return '目标会话「' + binding.label + '」正在跑一个回合，暂时不能接新任务。'
+    + '等它闲下来再派；如果它正在做你派出去的那件事，可以用 dispatch_task 带 task 发纠正。';
 }
 
 /**
@@ -57,14 +104,15 @@ export function runningText(ctx, binding) {
  *
  * 三种结束方式：
  *   - 正常：返回那一轮的结束原因（completed / aborted / error / blocked）；
- *   - 超时：返回 `timeout`，并带上已经收到的文本（有总比没有强）；
- *   - 取消：返回 `cancelled`，同样带上已收到的文本。
+ *     只有 `completed` 的文本进 `reply`，其余状态一律进 `progress`（过程稿）；
+ *   - 用户按停止：返回 `interrupted`，并注明 `interruptedBy: 'user'`；
+ *   - 超时 / 取消：同样把已收到的文本放进 `progress`，不冒充结论。
  *
  * @param ctx - 宿主上下文（用来订阅 `session/event`）。
  * @param targetId - 目标会话 id。
  * @param requestId - 本次投递的一次性 id（会写进消息的 rpcId）。
  * @param signal - 调用方的取消信号。
- * @returns `{ status, reply }`。
+ * @returns `{ status, reply, progress, reason, interruptedBy }`。
  */
 export function waitForTurn(ctx, targetId, requestId, signal) {
   return new Promise((resolve) => {
@@ -86,7 +134,7 @@ export function waitForTurn(ctx, targetId, requestId, signal) {
       signal.removeEventListener('abort', onAbort);
       resolve(outcome);
     };
-    const onAbort = () => finish({ status: 'cancelled', reply: lastText });
+    const onAbort = () => finish(outcomeOf('cancelled', lastText));
     off = ctx.on('session/event', (session, event) => {
       if (settled || session === undefined || event === undefined) return;
       if (session.id !== targetId) return;
@@ -105,16 +153,21 @@ export function waitForTurn(ctx, targetId, requestId, signal) {
         return;
       }
       if (event.type === 'turn/end') {
+        // 用户按停止：这一轮不是「做完了」，而是「被接管了」。
+        if (isUserStop(event)) {
+          finish(outcomeOf(STATUS_INTERRUPTED, lastText, '用户手动停止了目标会话。', 'user'));
+          return;
+        }
         const kind = event.data?.reason?.kind;
-        finish({ status: typeof kind === 'string' ? kind : 'completed', reply: lastText });
+        finish(outcomeOf(typeof kind === 'string' ? kind : 'completed', lastText));
       }
     });
     if (signal.aborted) {
-      finish({ status: 'cancelled', reply: '' });
+      finish(outcomeOf('cancelled', ''));
       return;
     }
     signal.addEventListener('abort', onAbort, { once: true });
-    timer = setTimeout(() => finish({ status: 'timeout', reply: lastText }), DISPATCH_TIMEOUT_MS);
+    timer = setTimeout(() => finish(outcomeOf('timeout', lastText)), DISPATCH_TIMEOUT_MS);
     /*
      * 兜底定时器**不许吊住事件循环**：它最长 20 分钟，而它唯一的作用是「万一没人叫醒
      * 这个 Promise」。在长驻宿主里这没什么，但在短命进程（离线测试、一次性脚本）里，
@@ -131,15 +184,17 @@ export function waitForTurn(ctx, targetId, requestId, signal) {
  * 恰恰是它会在多轮里继续推进。所以这里等的是 **goal 的 phase 离开 active**
  * （complete / blocked / paused），而不是某一个 turn/end。
  *
- * 两个细节：
+ * 三个细节：
  *   - 每收到一条该会话的事件就读一次 goal：goal 变化本身就是会话事件，不必自己维护状态；
- *   - 助手文本取**最后一个非空**的：目标的最后一轮通常就是结论，中途那些「继续查…」
- *     不是用户要的。
+ *   - 助手文本取**最后一个非空**的：终态 `complete` 时它就是交付结论；其余状态（还在跑、
+ *     受阻、暂停、用户接管、超时）一律作为**过程稿**，因为最后一轮也可能被后面推翻；
+ *   - `turn/end` 的 `aborted.user` 是「用户按了停止」：立刻收口成 `interrupted`，
+ *     不能等 goal 变 paused（用户停普通轮时 goal 仍 active，会一直等到切片超时）。
  *
  * @param ctx - 宿主上下文。
  * @param agent - 目标会话的活 agent。
  * @param signal - 调用方取消信号。
- * @returns `{ status, reply, reason }`；`status` 是 goal 的终态或 `timeout`/`cancelled`。
+ * @returns `{ status, reply, progress, reason, interruptedBy, rounds }`。
  */
 export function waitForGoal(ctx, agent, signal, options) {
   const goals = ctx.get('goals');
@@ -162,7 +217,7 @@ export function waitForGoal(ctx, agent, signal, options) {
       signal.removeEventListener('abort', onAbort);
       resolve(outcome);
     };
-    const onAbort = () => finish({ status: 'cancelled', reply: lastText, reason: '', rounds: rounds() });
+    const onAbort = () => finish(goalOutcome('cancelled', lastText, '', '', rounds()));
     /**
      * 读一次目标状态。
      * 读不到（agent 已不是活实例）时返回 `{ phase: null }` —— 表示「不知道」，继续等。
@@ -185,7 +240,7 @@ export function waitForGoal(ctx, agent, signal, options) {
     const settleIfTerminal = () => {
       const current = read();
       if (current.phase === null || current.phase === 'active') return false;
-      finish({ status: current.phase, reply: lastText, reason: current.reason, rounds: current.rounds });
+      finish(goalOutcome(current.phase, lastText, current.reason, '', current.rounds));
       return true;
     };
     off = ctx.on('session/event', (session, event) => {
@@ -194,11 +249,24 @@ export function waitForGoal(ctx, agent, signal, options) {
         const text = assistantText(event.data);
         if (text !== '') lastText = text;
       }
+      /*
+       * 用户按停止：这不一定等得到 goal 变成 `paused`。
+       *
+       * 两种情况都要收口：
+       *   - 停的是 goal 轮：goal-round-driver 会在 agent 空闲时把它置为 paused；
+       *   - 停的是普通轮：goal 仍是 active，但自动推进已经被 disarm —— 再等下去
+       *     只会让 A 一直看到 running，误以为 B 还在做。
+       * 所以直接以 `turn/end` 的 `aborted.user` 为准，立刻告诉 A「用户接管了这一单」。
+       */
+      if (isUserStop(event)) {
+        finish(goalOutcome(STATUS_INTERRUPTED, lastText, '用户手动停止了目标会话。', 'user', rounds()));
+        return;
+      }
       // 任何事件之后都重读一次：目标的推进与结束都体现在会话日志里。
       settleIfTerminal();
     });
     if (signal.aborted) {
-      finish({ status: 'cancelled', reply: '', reason: '', rounds: 0 });
+      finish(goalOutcome('cancelled', '', '', '', 0));
       return;
     }
     signal.addEventListener('abort', onAbort, { once: true });
@@ -211,10 +279,10 @@ export function waitForGoal(ctx, agent, signal, options) {
       const current = read();
       if (current.phase === null || current.phase === 'active') {
         // 还在跑：带着目前的进度返回，让派单方看见进展并决定是否接着等。
-        finish({ status: 'running', reply: lastText, reason: '', rounds: current.rounds });
+        finish(goalOutcome('running', lastText, '', '', current.rounds));
         return;
       }
-      finish({ status: current.phase, reply: lastText, reason: current.reason, rounds: current.rounds });
+      finish(goalOutcome(current.phase, lastText, current.reason, '', current.rounds));
     }, sliceMs);
     timer.unref?.();
   });

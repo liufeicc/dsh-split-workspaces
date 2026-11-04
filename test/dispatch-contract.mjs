@@ -182,7 +182,12 @@ check('清空目标等于解除绑定', (() => {
   const firstValue = await first;
 
   check('到一段的尽头还没做完时，状态是 running 而不是超时失败', firstValue.status === 'running', JSON.stringify(firstValue));
-  check('返回里带着目前的进度', firstValue.results[0].reply.includes('已经拆到第三个结构'), JSON.stringify(firstValue));
+  check('running 时的文本进的是「过程稿」，不是结论 reply',
+    firstValue.results[0].reply === '' && firstValue.results[0].progress.includes('已经拆到第三个结构'),
+    JSON.stringify(firstValue.results[0]));
+  check('过程稿明确标注「可能被推翻」，并标成未交付',
+    firstValue.results[0].progress.includes('过程稿') && firstValue.results[0].deliverable === false,
+    JSON.stringify(firstValue.results[0]));
   check('note 告诉模型接着等怎么做', firstValue.note.includes('接着等') && firstValue.note.includes('省略 task'), firstValue.note);
 
   /*

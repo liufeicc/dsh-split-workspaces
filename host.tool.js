@@ -160,19 +160,34 @@ export function dispatchDescription(service, ownerId) {
     '不达标就**带着具体缺口重新派**：点名哪一条没有证据、期望看到什么。',
     '不要笼统地说「再做一遍」—— 那只会换来同一次偷懒。只有确实达标了，才把结论转述给用户。',
     '',
+    '## 过程稿与纠正',
+    '目标还在跑时，results 里的 progress 是**过程稿**，deliverable 为 false：它可能被后面推翻，',
+    '不能当成交付结论写进你的输出，也不能据此宣布完成。',
+    '过程稿可以用来判断方向。方向不对时，用 dispatch_task 带 task、targets 指向同一个目标发纠正：',
+    '纠正会排队到目标的下一轮，不会打断当前轮，也不新建目标；返回 status: redirected。',
+    '一次调用里不要把「纠正正在跑的目标」和「给空闲目标派新任务」混在一起 —— 同一个 task 会有',
+    '两种语义，请分成两次调用。',
+    '',
+    '## 用户手动停止目标',
+    '用户可能在界面上按停止，把目标接管过去。这时结果里的 status 是 interrupted，',
+    'interruptedBy 是 user，这一单**没有交付**：不要拿过程稿当结论，也不要越过用户去纠正它。',
+    '你可以继续做不依赖它的部分；等用户处理完，再按用户的指示重新派或续等。',
+    '',
     '## 一次派给多个目标',
     'targets 可以给多个（最多 ' + MAX_BATCH_TARGETS + ' 个）：这些目标**同时**开工，不是排队。',
-    '每个目标一次只能接一件事 —— 想给同一个会话派第二件，先等它把第一件做完。',
+    '每个目标一次只能接一件事：它正在跑时再给 task 会被当成「纠正」排队（不会新建目标）；',
+    '要派一件全新的任务，先等它结束并取走结果。',
     '可派目标多于一个时，必须用 targets 指明派给谁，不会替你猜。',
-    '给了 task 时，targets 里的目标必须都空闲；有一个还在跑，整批都不会派出去。',
+    '给了 task 时，targets 里要么全是空闲目标（新派），要么全是正在跑的目标（纠正）；',
+    '两种混在一起会被拒绝 —— 同一个 task 不能同时对两个目标有两种语义。',
     '',
     '## wait：这一批什么时候返回',
-    '- all（默认）：等这一批**全部**有结论才返回。要拿到每个目标的完整结论，就用它。',
-    '- any：第一个目标一有结论就返回，其余还在跑（results 里标成 running，留到下一次续等）。',
+    '- all（默认）：等这一批**全部**有交付结论才返回。要拿到每个目标的完整结论，就用它。',
+    '- any：第一个目标有交付结论就返回，其余还在跑（results 里标成 running，带过程稿，留到下一次续等）。',
     '  只有「谁先回来就先看谁」时才用 any。它**不会**让整批更快拿全结果 —— 反而要多调几次、',
     '  每次都得重发一遍这份描述，更费 token。',
-    '- none：**不等**。给了 task 就是「派完就走」（立刻返回 status: dispatched），你接着做自己的事；',
-    '  没给 task 就是「看一眼现在什么状态」，也不会阻塞。',
+    '- none：**不等**。给了 task、目标又空闲，就是「派完就走」（立刻返回 status: dispatched）；',
+    '  给了 task、目标正在跑，就是「纠正排队」（status: redirected）；没给 task 就是「看一眼状态」。',
     '',
     '## 派完就走（wait: none）之后怎么收尾',
     '派出去的任务不会自己消失：只要还有没取结果的，**这个回合结束前会被提醒一次**，',
@@ -182,11 +197,11 @@ export function dispatchDescription(service, ownerId) {
     '',
     '## 调用行为',
     '每次调用最多等 5 分钟一段（wait: none 不等，立刻返回）：',
-    '- 这一批在这段时间内都有了结论 → 直接返回，status 是 complete / partial / failed；',
-    '- 还没完 → 返回**目前的进度**，status 是 running；',
+    '- 这一批在这段时间内都有了交付结论 → 直接返回，status 是 complete / partial / failed / interrupted；',
+    '- 还没完 → 返回**目前的进度**：status 是 running，deliverable 为 false，内容是标注过的过程稿；',
     '只要状态还是 running，就**必须继续调用**（省略 task 与 targets）接着等，直到状态不再是 running。',
     '不要把它当成失败，也不要停下来问用户要不要继续等 —— 用户要的就是「一直盯到它做完」。',
-    '要求目标此刻空闲才接新单；续等不受这条限制。目标正在跑回合时会直接报错而不是排队。',
+    '要求目标此刻空闲才接新单；续等不受这条限制。目标正在跑回合时带 task 会被当成纠正，而不是拒绝。',
   ];
   if (roster.length === 0) {
     base.push('');
@@ -258,10 +273,13 @@ export function createDispatchTool(service, ownerId) {
               properties: {
                 target: { type: 'string' },
                 status: { type: 'string' },
+                deliverable: { type: 'boolean' },
                 reply: { type: 'string' },
+                progress: { type: 'string' },
+                interruptedBy: { type: 'string' },
                 note: { type: 'string' },
               },
-              required: ['target', 'status', 'reply', 'note'],
+              required: ['target', 'status', 'deliverable', 'reply', 'progress', 'interruptedBy', 'note'],
               additionalProperties: false,
             },
           },
@@ -276,8 +294,12 @@ export function createDispatchTool(service, ownerId) {
           + (value.stillRunning > 0 ? '（还有 ' + String(value.stillRunning) + ' 个在做）' : '');
         const lines = [head];
         for (const item of value.results) {
-          lines.push('', '—— ' + item.target + '：' + item.status);
-          lines.push(item.reply === '' ? '（没有可读的结论）' : item.reply);
+          const flag = item.deliverable === true
+            ? '已交付'
+            : (item.interruptedBy === 'user' ? '用户手动停止，未交付' : '未交付');
+          lines.push('', '—— ' + item.target + '：' + item.status + '（' + flag + '）');
+          if (typeof item.progress === 'string' && item.progress !== '') lines.push(item.progress);
+          else lines.push(item.reply === '' ? '（没有可读的结论）' : item.reply);
           if (item.note !== '') lines.push(item.note);
         }
         if (value.note !== '') lines.push('', value.note);

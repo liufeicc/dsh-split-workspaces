@@ -59,6 +59,19 @@ export const MAX_TASK_CHARS = 20000;
  */
 export const MAX_BATCH_TARGETS = 8;
 
+/**
+ * 目标被**用户手动停止**时的状态。
+ *
+ * 与 `paused` 的区别是「谁停的、这一单算不算交付」：`paused` 是 goal 的持久阶段，
+ * 可能是用户执行 `/goal pause`，也可能是别的插件暂停；`interrupted` 特指「用户在界面上
+ * 按了停止，把目标接管过去了」。对派单方 A 来说，后者必须明确成「这一单没交付，别拿
+ * 过程稿当结论」。
+ */
+export const STATUS_INTERRUPTED = 'interrupted';
+
+/** 一条「纠正」已经排队到目标下一轮（不是立即打断，也不是新任务）。 */
+export const STATUS_REDIRECTED = 'redirected';
+
 /** `wait` 的三档：等全部、等第一个、或者根本不等。 */
 export const WAIT_ALL = 'all';
 export const WAIT_ANY = 'any';

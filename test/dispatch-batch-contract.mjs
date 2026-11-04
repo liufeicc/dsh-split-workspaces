@@ -5,7 +5,7 @@
  * 跑法：`node test/dispatch-batch-contract.mjs`
  */
 import {
-  assistantEvent, boot, check, fakeMultiGoals, host, report, settle, twoTargets,
+  assistantEvent, boot, check, fakeMultiGoals, host, report, settle, turnEndEvent, twoTargets,
 } from './dispatch-harness.mjs';
 
 // ────────────────────── 一次派给多个目标（批处理） ──────────────────────
@@ -143,25 +143,28 @@ import {
 
 {
   /*
-   * 给一个「还在跑上件事」的目标再派新任务 → 明确拒绝。
-   * 猜错的代价是模型以为新任务派出去了，而对方其实还在做上一件。
+   * 给一个「还在跑上件事」的目标再给 task → 当成**纠正**排队，不新建目标、不打断。
+   *
+   * 旧行为是直接拒绝。真用起来的问题是：A 看到过程稿发现方向不对，却改不了，
+   * 只能等目标按错的方向跑完。现在改成排一条纠正消息，目标下一轮会看到。
    */
   const goals = fakeMultiGoals();
-  const { tool, ctx, emit } = boot({ goals });
+  const { tool, ctx, emit, promptCalls } = boot({ goals });
   ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
 
   const running = tool.execute({ task: '第一件事' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
   await settle();
 
-  let message = null;
-  try {
-    await tool.execute({ task: '第二件事' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
-  } catch (error) {
-    message = error.message;
-  }
-  check('给正在跑的目标再派新任务会被明确拒绝',
-    typeof message === 'string' && message.includes('还在跑'), message);
-  check('被拒时没有建第二个目标', goals.created.length === 1, String(goals.created.length));
+  const redirected = await tool.execute({ task: '第二件事' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  check('给正在跑的目标带 task 会被当成纠正排队，而不是拒绝',
+    redirected.status === 'redirected' && redirected.results[0]?.status === 'redirected',
+    JSON.stringify(redirected));
+  check('纠正没有新建第二个目标', goals.created.length === 1, String(goals.created.length));
+  check('纠正以排队方式投递（mode: queue），不打断当前轮',
+    promptCalls.length === 1 && promptCalls[0].request.mode === 'queue', JSON.stringify(promptCalls));
+  check('纠正消息里点明这不是新任务',
+    promptCalls[0].request.content[0].text.includes('不是新任务'),
+    promptCalls[0].request.content[0].text);
 
   goals.done('s-b', 'complete');
   emit('s-b', assistantEvent(1, '第一件事做完了'));
@@ -468,8 +471,6 @@ import {
     JSON.stringify(value.results));
 }
 
-report();
-
 // ────────────────── 受阻之后还能不能再派 ──────────────────
 
 /**
@@ -580,6 +581,152 @@ function realishGoals() {
   check('结果还没取时，明确说是「结果还没取」而不是「还在跑」',
     typeof message === 'string' && message.includes('结果还没取'), message);
   check('并且告诉模型先取再派', typeof message === 'string' && message.includes('先省略 task'), message);
+}
+
+// ────────────────── 过程稿、用户手停、纠正 ──────────────────
+
+{
+  /*
+   * 纯函数：整批都被用户接管时，不能报成 partial（那会让 A 以为还有半成品可复核）。
+   */
+  check('全部目标都被用户接管时，整批状态是 interrupted',
+    host.batchStatus([{ status: 'interrupted' }], false) === 'interrupted');
+  check('部分被接管、部分完成时，整批状态是 partial',
+    host.batchStatus([{ status: 'interrupted' }, { status: 'complete' }], false) === 'partial');
+}
+
+{
+  /*
+   * 用户手动停止（阻塞等待中）：
+   * A 必须知道「是用户停的、这一单没交付」；过程稿只能当参考，不能当结论。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  const waiting = tool.execute(
+    { task: '做件事', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  emit('s-b', assistantEvent(1, '我初步判断是 X，还在验证'));
+  emit('s-b', turnEndEvent(2, 'aborted', { kind: 'user' }));
+  const value = await waiting;
+  const item = value.results[0];
+
+  check('用户手动停止后整批状态是 interrupted', value.status === 'interrupted', JSON.stringify(value));
+  check('单个目标标成 interrupted，并注明是用户停的',
+    item?.status === 'interrupted' && item?.interruptedBy === 'user', JSON.stringify(item));
+  check('用户停止不算交付：reply 只有说明，中间话单独放 progress',
+    item?.deliverable === false
+      && item?.reply.includes('用户')
+      && item?.progress.includes('我初步判断是 X'),
+    JSON.stringify(item));
+  check('note 让 A 继续做不依赖 B 的部分，且不要越过用户去纠正',
+    item?.note.includes('继续做不依赖') && item?.note.includes('不要越过用户'), item?.note);
+  check('用户停止后 pending 结清', service.pending.size === 0, String(service.pending.size));
+
+  let again = null;
+  try {
+    await tool.execute({ wait: 'none' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  } catch (error) {
+    again = error.message;
+  }
+  check('中断说明交付一次后，不会假装还有结果可等',
+    typeof again === 'string' && again.includes('没有可接着等'), again);
+}
+
+{
+  /*
+   * 用户手动停止（wait:none + 后台监视）：
+   * 中途查询要能看到过程稿；停止后查询要拿到 interrupted，而不是永远 running。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  await tool.execute(
+    { task: '做件事', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  emit('s-b', assistantEvent(1, '先给一版中间稿'));
+  await settle();
+
+  const peek = await tool.execute({ wait: 'none' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  check('wait:none 中途查询能看到过程稿',
+    peek.results[0]?.status === 'running' && peek.results[0]?.progress.includes('先给一版中间稿'),
+    JSON.stringify(peek.results));
+  check('中途查询也明确标成未交付', peek.results[0]?.deliverable === false, JSON.stringify(peek.results));
+
+  emit('s-b', turnEndEvent(2, 'aborted', { kind: 'user' }));
+  await settle();
+  const value = await tool.execute({ wait: 'none' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  check('后台监视也能识别用户手停',
+    value.status === 'interrupted' && value.results[0]?.interruptedBy === 'user', JSON.stringify(value));
+  check('领取中断说明后 pending 结清', service.pending.size === 0, String(service.pending.size));
+}
+
+{
+  /*
+   * 用户手停之后，A 不能越过用户去「纠正」目标；但可以先把中断说明取走。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  await tool.execute(
+    { task: '做件事', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  emit('s-b', turnEndEvent(2, 'aborted', { kind: 'user' }));
+  await settle();
+
+  let message = null;
+  try {
+    await tool.execute(
+      { task: '你应该改成 Y', targets: ['乙会话'] },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    message = error.message;
+  }
+  check('用户手停后 A 再带 task 会被拒绝，不越过用户去纠正',
+    typeof message === 'string' && message.includes('接管') && message.includes('先省略 task'), message);
+
+  const taken = await tool.execute({ wait: 'none' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  check('拒绝之后可以先把中断说明取走', taken.status === 'interrupted', JSON.stringify(taken));
+}
+
+{
+  /*
+   * 一个被用户接管、一个正常完成：整批是 partial，且两个目标的交付状态必须分开看。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const waiting = tool.execute(
+    { task: '分头办事', targets: ['乙会话', '丙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-c', 'complete');
+  emit('s-c', assistantEvent(1, '丙做完了'));
+  emit('s-b', turnEndEvent(2, 'aborted', { kind: 'user' }));
+  const value = await waiting;
+  const yi = value.results.find((item) => item.target === '乙会话');
+  const bing = value.results.find((item) => item.target === '丙会话');
+
+  check('一个被接管、一个完成时，整批状态是 partial', value.status === 'partial', JSON.stringify(value));
+  check('完成的目标标成已交付', bing?.deliverable === true && bing?.reply === '丙做完了', JSON.stringify(bing));
+  check('被用户接管的目标标成未交付',
+    yi?.deliverable === false && yi?.interruptedBy === 'user', JSON.stringify(yi));
+  check('partial 的 note 提醒只有 deliverable 才是结论',
+    value.note.includes('deliverable'), value.note);
 }
 
 report();

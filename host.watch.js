@@ -23,9 +23,9 @@
  * @module @local/dsh-split-workspaces/host-watch
  */
 
-import { ASYNC_MAX_MS, ASYNC_RECHECK_MS, DISPATCH_TAG } from './host.constants.js';
+import { ASYNC_MAX_MS, ASYNC_RECHECK_MS, DISPATCH_TAG, STATUS_INTERRUPTED } from './host.constants.js';
 import { assistantText } from './host.message.js';
-import { goalSupport, resolveTargetAgent } from './host.wait.js';
+import { goalSupport, isUserStop, resolveTargetAgent } from './host.wait.js';
 
 /**
  * 后台盯住一个已经派出去的目标，直到它有结论。
@@ -120,10 +120,18 @@ export function watchDetached(ctx, service, key, agent) {
   const settle = (current) => {
     if (done) return;
     stop();
+    /*
+     * 只有 `complete` 才算交付；其余状态（含用户手停的 `interrupted`）都只把文本
+     * 记成 `progress`。这是与 `waitForGoal` 同一条约定 —— 两个入口看到的「结论」
+     * 必须一样，否则 A 从哪条路拿到结果，行为会不一致。
+     */
+    const delivered = current.phase === 'complete';
     entry.settled = {
       status: typeof current.phase === 'string' ? current.phase : 'complete',
-      reply: text,
+      reply: delivered ? text : '',
+      progress: delivered ? '' : text,
       reason: typeof current.reason === 'string' ? current.reason : '',
+      interruptedBy: current.interruptedBy === 'user' ? 'user' : '',
     };
   };
 
@@ -141,7 +149,13 @@ export function watchDetached(ctx, service, key, agent) {
      */
     if (Date.now() - startedAt > ASYNC_MAX_MS) {
       stop();
-      entry.settled = { status: 'unknown', reply: text, reason: '目标状态长时间读不到（会话可能已被回收）' };
+      entry.settled = {
+        status: 'unknown',
+        reply: '',
+        progress: text,
+        reason: '目标状态长时间读不到（会话可能已被回收）',
+        interruptedBy: '',
+      };
       return true;
     }
     return false;
@@ -152,7 +166,22 @@ export function watchDetached(ctx, service, key, agent) {
     if (session === undefined || session.id !== sessionId) return;
     if (event !== undefined && event.type === 'assistant/message') {
       const said = assistantText(event.data);
-      if (said !== '') text = said;
+      if (said !== '') {
+        text = said;
+        /*
+         * A 用 `wait: none` 中途查看时，要能看到最新过程稿。
+         * 只写还在表里的那条 entry —— 记录可能已经被领取/撤箭头了。
+         */
+        if (service.pending.get(key) === entry) entry.progress = said;
+      }
+    }
+    /*
+     * 用户按停止：不能等 goal 变 paused（停普通轮时 goal 仍 active）。直接结算成
+     * `interrupted`，让 A 知道「这一单被用户接管了，未交付」。
+     */
+    if (isUserStop(event)) {
+      settle({ phase: STATUS_INTERRUPTED, reason: '用户手动停止了目标会话。', interruptedBy: 'user' });
+      return;
     }
     // 任何事件之后都重读一次：目标的推进与结束都体现在会话日志里。
     check();
@@ -264,12 +293,26 @@ export async function adoptOrphanGoals(ctx, service, ownerId) {
         // 已经做完、结论只剩在目标会话的历史里：给一条能指导下一步的说明。
         service.pending.set(key, {
           replaced: undefined,
-          settled: { status: 'complete', reply: '', reason: restartLostNote(binding.label) },
+          settled: {
+            status: 'complete',
+            // 目标确实完成了，但结论只剩在会话历史里 —— 不能把它当交付结论。
+            deliverable: false,
+            reply: '',
+            progress: '',
+            reason: restartLostNote(binding.label),
+            interruptedBy: '',
+          },
           controller: null,
+          progress: '',
         });
       } else {
         // 还在跑（或停在 blocked/paused）：重建记录，重挂后台监视。
-        service.pending.set(key, { replaced: undefined, settled: null, controller: null });
+        service.pending.set(key, {
+          replaced: undefined,
+          settled: null,
+          controller: null,
+          progress: '',
+        });
         watchDetached(ctx, service, key, agent);
       }
       adopted += 1;

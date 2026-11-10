@@ -93,13 +93,15 @@ export function report() {
  * @param options.pickerThrows - 让文件夹选择器直接失败，用来检查报错文案。
  * @param options.createdId - `workspaces.create` 建出来的工作区 id。
  */
-export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new' } = {}) {
+export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new', preloadPanes = true } = {}) {
   const stub = createStubContext({ presets: [] });
   await mod.apply(stub.ctx);
   const main = stub.registered.find((definition) => definition.name === 'main');
   const injected = main.inject();
-  injected.paneStore.addPane('ws-a');
-  injected.paneStore.addPane('ws-b');
+  if (preloadPanes) {
+    injected.paneStore.addPane('ws-a');
+    injected.paneStore.addPane('ws-b');
+  }
 
   const workspaces = source({
     items: [
@@ -114,6 +116,7 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
   });
   const sessions = source({
     ids: ['s-a', 's-b', 's-blank', 's-c'],
+    phase: 'ready',
     byId: {
       's-a': { id: 's-a', displayTitle: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
       's-b': { id: 's-b', displayTitle: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
@@ -154,7 +157,7 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
     // 这样「窗格空白时提示先选会话」这类断言检查的就是真实渲染结果。
     SessionProvider: function SessionProvider(props) { return props.session === undefined ? props.empty() : null; },
   });
-  return { stub, paneStore: injected.paneStore, render, createdWith, pickCount: () => pickCount, connectCount: () => connectCount };
+  return { stub, paneStore: injected.paneStore, injected, render, createdWith, pickCount: () => pickCount, connectCount: () => connectCount };
 }
 
 /** 打开某个窗格的分屏菜单并点掉第一步的方向，返回停在第二步的窗格挂载。 */

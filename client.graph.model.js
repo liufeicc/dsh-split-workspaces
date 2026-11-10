@@ -429,6 +429,33 @@ window.__ModuleLoader__.load({
       return byOwner;
     }
 
+    /**
+     * 把一批“可能是坏数据”的边清洗成当前可用的树。
+     *
+     * 恢复保存的布局时必须走这里：保存的图可能引用了已经删除的会话，也可能是旧版本/
+     * 手改过的 JSON（成环、同一目标多个上级、自连）。逐条按 `validateEdge` 接纳，
+     * 保留下来的就是一棵合法的有向树；坏边丢掉而不是让恢复整体失败。
+     *
+     * @param edges - 待清洗的边数组。
+     * @param isNode - 可选：这个会话 id 当前是否仍然存在。
+     * @returns 新的合法边数组（深拷贝，保留说明文字）。
+     */
+    function sanitizeEdges(edges, isNode) {
+      const next = [];
+      const validNode = typeof isNode === 'function' ? isNode : () => true;
+      for (const edge of Array.isArray(edges) ? edges : []) {
+        if (edge === null || typeof edge !== 'object') continue;
+        if (typeof edge.from !== 'string' || typeof edge.to !== 'string') continue;
+        if (edge.from === '' || edge.to === '') continue;
+        if (!validNode(edge.from) || !validNode(edge.to)) continue;
+        if (!validateEdge(next, edge.from, edge.to).ok) continue;
+        const item = { from: edge.from, to: edge.to };
+        if (typeof edge.note === 'string' && edge.note.trim() !== '') item.note = edge.note.trim().slice(0, EDGE_NOTE_MAX);
+        next.push(item);
+      }
+      return next;
+    }
+
     return {
       CARD_W,
       CARD_H,
@@ -442,6 +469,7 @@ window.__ModuleLoader__.load({
       createGraphStore,
       hasPath,
       validateEdge,
+      sanitizeEdges,
       resolveDrop,
       edgesFromBindings,
       layoutGraph,

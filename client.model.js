@@ -652,6 +652,34 @@ window.__ModuleLoader__.load({
         },
 
         /**
+         * 用一份已经校验/剪枝过的布局整体替换当前棋盘。
+         *
+         * 只由入口的「恢复保存的布局」调用：传入的快照必须已经由
+         * `client.layout.js` 校验过（窗格 key 唯一、布局树只引用存在的窗格）；
+         * 这里只做最后一道形状保护，不再猜测业务含义。空窗格返回 false，让调用方
+         * 回退到 `ensureInitialized` 的默认播种，而不是把面板变成一块空白。
+         *
+         * @param state - `{ panes, layout, activeKey, nextKey, nextSplit }`。
+         * @returns 是否真的替换了棋盘。
+         */
+        restore(state) {
+          if (state === null || state === undefined || typeof state !== 'object') return false;
+          if (!Array.isArray(state.panes) || state.panes.length === 0) return false;
+          if (state.layout === null || state.layout === undefined || typeof state.layout !== 'object') return false;
+          const nextKey = Number.isInteger(state.nextKey) && state.nextKey > 0 ? state.nextKey : 1;
+          const nextSplit = Number.isInteger(state.nextSplit) && state.nextSplit > 0 ? state.nextSplit : 1;
+          publish({
+            panes: state.panes,
+            layout: state.layout,
+            activeKey: typeof state.activeKey === 'string' ? state.activeKey : null,
+            initialized: true,
+            nextKey,
+            nextSplit,
+          });
+          return true;
+        },
+
+        /**
          * 第一次打开棋盘时播种：当前会话所在的工作区排第一，再补一个别的，
          * 于是打开就是两个窗格并排，而不是一块空白。
          */

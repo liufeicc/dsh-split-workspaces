@@ -277,6 +277,46 @@ window.__ModuleLoader__.load({
         const presetOptions = presetState.options;
         const presetDefaultId = presetState.defaultId;
 
+        /*
+         * 这份组件实例是否已经用“保存的布局”接管过任务分派图。
+         *
+         * Host 自己也存着一份绑定表（`paneDispatch`）；没有保存布局时靠它恢复箭头。
+         * 但用户一旦保存过布局，图就是那份快照的一部分：即使保存的是空图，也不能让
+         * Host 上的旧绑定在下面那个兜底效果里把它填回来。用 ref 而不是 state，是因为
+         * 读取发生在异步 loadDispatch 的回调里，只需要“当前值”，不需要触发渲染。
+         */
+        const savedGraphOwned = useRef(false);
+        /*
+         * Host 的绑定表是否已经真正读回来并处理完（不只是 dispatchStore 的状态变成
+         * ready）。保存按钮靠它避免一个很窄的竞态：状态已经 ready、但“把绑定反推成边”
+         * 的那段 `.then` 还没跑完时，graphStore 仍是空的；这时若把空图写进保存结构，
+         * 下次恢复就会把 Host 上原本存在的箭头清掉。
+         */
+        const graphReadyForSave = useRef(false);
+        const [savedLayoutAvailable, setSavedLayoutAvailable] = useState(() => {
+          try {
+            return paneActions.hasSavedLayout() === true;
+          } catch {
+            return false;
+          }
+        });
+        /*
+         * 模式花名册来自远端；正常几十毫秒就回来，但连接异常时不能让它把恢复流程
+         * 永远卡在“正在恢复…”。4 秒后即使还没回来也继续恢复（保留保存时的模式 id），
+         * 界面可用比死等一个清单更重要。
+         */
+        const [presetDeadlinePassed, setPresetDeadlinePassed] = useState(false);
+        useEffect(() => {
+          if (!savedLayoutAvailable) return undefined;
+          const timer = setTimeout(() => setPresetDeadlinePassed(true), 4000);
+          return () => clearTimeout(timer);
+        }, [savedLayoutAvailable]);
+        const [saveState, setSaveState] = useState('idle');
+        const saveTimer = useRef(null);
+        useEffect(() => () => {
+          if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+        }, []);
+
         const workspaceById = useMemo(() => {
           const index = new Map();
           for (const item of items) index.set(item.workspaceId, item);
@@ -299,8 +339,74 @@ window.__ModuleLoader__.load({
         }, [items, sessionState]);
 
         useEffect(() => {
-          paneActions.ensureInitialized(currentWorkspaceId, workspaceIds);
-        }, [paneActions, currentWorkspaceId, workspaceIds]);
+          // 棋盘已经就位（当前页面里用过，或刚恢复/播种过）就不再覆盖。
+          if (paneState.initialized || paneState.panes.length > 0) return;
+          if (workspaceIds.length === 0) return;
+          /*
+           * 没有保存过布局：保持原来的首次播种行为，不等待会话/模式清单。
+           */
+          if (!savedLayoutAvailable) {
+            paneActions.ensureInitialized(currentWorkspaceId, workspaceIds);
+            return;
+          }
+          /*
+           * 有保存的布局：必须等会话表和模式清单就绪再恢复。
+           *
+           * 会话表没就绪时，无法区分「保存的会话已经不存在」与「只是还没加载」；
+           * 这时抢先恢复会把仍然有效的会话误清空，或者让窗格钉在一个不存在的会话上
+           * 一直显示“载入历史…”。模式清单同理：没就绪时无法判断保存的 Agent 模式
+           * 是否还存在，恢复后再清空会造成一次可见闪烁。
+           */
+          if (sessionState.phase !== 'ready') return;
+          const presetSettled = presetState.status !== 'idle' && presetState.status !== 'loading';
+          if (!presetSettled && !presetDeadlinePassed) return;
+          // 正常路径按花名册校验模式；超时仍在加载时传 null，保留保存时的模式 id。
+          const validPresetIds = presetState.status === 'ready'
+            ? presetState.options.map((option) => option.id)
+            : (presetSettled ? [] : null);
+          const validSession = (id, allowBlank) => {
+            const summary = sessionState.byId[id];
+            if (summary === undefined) return false;
+            if (summary.origin === 'subagent') return false;
+            if (archivedSessionIds.includes(id)) return false;
+            if (allowBlank !== true && summary.blank === true) return false;
+            return true;
+          };
+          let result;
+          try {
+            result = paneActions.restoreSavedLayout({
+              workspaces: items.map((item) => ({ workspaceId: item.workspaceId, path: item.path })),
+              isValidPaneSession: (id) => validSession(id, true),
+              isValidGraphSession: (id) => validSession(id, false),
+              presetIds: validPresetIds,
+            });
+          } catch {
+            // 恢复是增益功能：任何意外都退回默认播种，绝不把面板卡死在恢复态。
+            result = { panes: false, graph: false };
+          }
+          /*
+           * 保存结构里带图（哪怕边被清空）时，这份快照拥有图：抑制下面“从 Host 绑定表
+           * 反推箭头”的兜底，避免刚才保存的空图又被 Host 上的旧绑定填回来。
+           */
+          savedGraphOwned.current = result?.graph === true;
+          // 保存结构里真的有图时，它本身就是可靠快照；不必再等 Host 绑定表。
+          if (result?.graph === true) graphReadyForSave.current = true;
+          // 没有可用窗格（例如保存的工作区全被删了）时，仍按原有规则播种默认布局。
+          if (result?.panes !== true) paneActions.ensureInitialized(currentWorkspaceId, workspaceIds);
+        }, [
+          paneActions,
+          paneState.initialized,
+          paneState.panes.length,
+          currentWorkspaceId,
+          workspaceIds,
+          items,
+          sessionState,
+          archivedSessionIds,
+          presetState.status,
+          presetState.options,
+          presetDeadlinePassed,
+          savedLayoutAvailable,
+        ]);
 
         useEffect(() => {
           paneActions.loadPresets();
@@ -348,6 +454,13 @@ window.__ModuleLoader__.load({
                   if (round < 10) timer = setTimeout(() => attempt(round + 1), 300);
                   return;
                 }
+                // 绑定表已经读回来并处理完，之后保存的图才是可靠快照。
+                graphReadyForSave.current = true;
+                /*
+                 * 保存的布局里带了图：这份快照就是权威，即使它是空图也不让 Host 的旧绑定
+                 * 填回来。保存的图会在同步效果里重新推给 Host。
+                 */
+                if (savedGraphOwned.current) return;
                 if (graphStore.getSnapshot().edges.length > 0) return;
                 const restored = graphModel.edgesFromBindings(loaded);
                 if (restored.length > 0) graphStore.setEdges(restored);
@@ -811,12 +924,116 @@ window.__ModuleLoader__.load({
           degraded: dispatchState.status === 'unavailable',
         });
 
+        /**
+         * 这次保存能不能带上一份可靠的分派图。
+         *
+         * 两个来源：
+         *   - 保存结构里本来就有图，恢复后它仍是权威快照；
+         *   - 或者 Host 绑定表已经成功读回、并且“反推成边”的处理已经跑完。
+         */
+        const graphSnapshotReady = savedGraphOwned.current
+          || (dispatchState.status === 'ready' && graphReadyForSave.current);
+        /**
+         * 当前界面有没有值得保存的东西：至少一个窗格，或一条已经读回来的分派边。
+         *
+         * 图还在 loading 时不能只凭“暂时没有边”就判断没东西可存；相反，那时应该
+         * 允许先保存棋盘，只是不要把不可靠的空图写进快照。
+         */
+        const canSaveLayout = panes.length > 0
+          || (graphSnapshotReady && graphState.edges.length > 0);
+        /**
+         * 有保存的布局、但还在等会话/模式清单就绪时，棋盘会暂时为空。
+         * 这时显示“正在恢复…”而不是误导性的“还没有打开的工作区”。
+         */
+        const awaitingSavedLayout = savedLayoutAvailable
+          && !paneState.initialized
+          && panes.length === 0
+          && workspaceIds.length > 0;
+
+        /**
+         * 保存当前界面：棋盘 + 窗格会话/模式 + 任务分派图 + 当前面板模式。
+         * 保存失败只在这条通用错误行里说一句，不弹窗、不阻塞界面。
+         */
+        const handleSaveLayout = () => {
+          if (!canSaveLayout) return;
+          /*
+           * 图只有在 Host 绑定表确实读回来、并且已经处理完（或保存的图本身就是权威）
+           * 时才是可靠快照。还在 loading / unavailable / error 时传 null：保存结构里
+           * 不写 graph 字段，下次加载就不会拿一份空图去覆盖 Host 上可能还存在的旧绑定。
+           */
+          const graphSnapshot = graphSnapshotReady ? graphState : null;
+          /*
+           * “跟随最新会话”的窗格记录里 `sessionId` 往往是 null，真正显示的是
+           * `panePlan` 现场解析出来的那一条。保存时必须把**眼前这一段对话**的 id
+           * 落下来，否则下次恢复只会重新跟一次“最新”，用户看到的可能已经是另一段。
+           * `follow` 原样保留：保存的会话以后被删了，跟随型窗格仍会回退到最新会话。
+           */
+          const resolvedPanes = paneState.panes.map((pane) => {
+            const resolved = panePlan.get(pane.key)?.sessionId;
+            const sessionId = typeof resolved === 'string' && resolved !== ''
+              ? resolved
+              : (typeof pane.sessionId === 'string' && pane.sessionId !== '' ? pane.sessionId : null);
+            return { ...pane, sessionId };
+          });
+          const snapshotForSave = { ...paneState, panes: resolvedPanes };
+          const result = paneActions.saveLayout(snapshotForSave, workspaceById, graphSnapshot, modeState.mode);
+          if (result?.ok === true) {
+            setSavedLayoutAvailable(true);
+            setAddError(null);
+            setSaveState('saved');
+            if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+            saveTimer.current = setTimeout(() => {
+              saveTimer.current = null;
+              setSaveState('idle');
+            }, 1800);
+            return;
+          }
+          setSaveState('idle');
+          setAddError(t('panel.saveFailed') + (typeof result?.reason === 'string' && result.reason !== '' ? ': ' + result.reason : ''));
+        };
+
+        /** 清除保存记录：当前界面保持不变，下次页面加载回到默认播种。 */
+        const handleClearSavedLayout = () => {
+          if (paneActions.clearSavedLayout() === true) {
+            setSavedLayoutAvailable(false);
+            setAddError(null);
+            return;
+          }
+          setAddError(t('panel.clearFailed'));
+        };
+
         return h('div', { className: css.root, [BOARD_MARKER]: 'true' },
           h('header', { className: css.head },
             h('div', { className: css.headMain },
               h('h1', { className: css.title }, t('panel.title'))),
             h('div', { className: css.headActions },
               modeSwitch,
+              h('button', {
+                type: 'button',
+                className: cx(css.button, css.saveLayout),
+                title: t('panel.saveHint'),
+                'aria-label': saveState === 'saved' ? t('panel.saved') : t('panel.save'),
+                'data-state': saveState,
+                disabled: !canSaveLayout,
+                onClick: handleSaveLayout,
+              }, saveState === 'saved' ? t('panel.saved') : t('panel.save')),
+              // 只有确实保存过时才出现；点它只删保存记录，当前界面一个窗格都不动。
+              savedLayoutAvailable
+                ? h('button', {
+                    type: 'button',
+                    className: css.iconButton,
+                    title: t('panel.clearSavedHint'),
+                    'aria-label': t('panel.clearSaved'),
+                    onClick: handleClearSavedLayout,
+                  }, h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                    h('path', {
+                      d: 'M3 4.5h10M6.5 4.5V3h3v1.5M5 4.5l.5 8h5l.5-8',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.3,
+                      strokeLinecap: 'round',
+                      strokeLinejoin: 'round',
+                    })))
+                : null,
               h(Popover, {
                 label: addBusy ? t('panel.adding') : t('panel.add'),
                 title: t('panel.add'),
@@ -858,8 +1075,15 @@ window.__ModuleLoader__.load({
               h('path', { d: 'M4 4l8 8M12 4l-8 8', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' })))),
           panes.length === 0
             ? h('div', cx(css.board, css.boardEmpty),
-                h('strong', null, t('board.emptyTitle')),
-                h('span', null, t('board.emptyBody')))
+                awaitingSavedLayout
+                  ? [
+                      h('strong', { key: 'restoring' }, t('board.restoring')),
+                      h('span', { key: 'restoringHint' }, t('board.restoringHint')),
+                    ]
+                  : [
+                      h('strong', { key: 'empty' }, t('board.emptyTitle')),
+                      h('span', { key: 'emptyHint' }, t('board.emptyBody')),
+                    ])
             : modeState.mode === graphModel.MODE_GRAPH
               ? graphBoard
               : h('div', { className: css.board },

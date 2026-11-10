@@ -20,11 +20,20 @@ that currently holds focus is marked by a brand-coloured title bar.
   input box, streaming output).
 - **A per-pane conversation view strip**: above each pane's conversation area, the panel lists
   every registered `conversation.view` — by default just "Chat"; with the Git panel installed it
-  becomes "Chat / Git", and with developer tools enabled there is also "Trajectory". The strip
-  only reads the framework's registry and copies no plugin UI: clicking Git renders the Git
-  plugin's own panel. Each pane picks independently and defaults to Chat; **with no extra view
-  plugins (or only Chat) the strip is not rendered at all**, so the pane behaves exactly as
-  before.
+  becomes "Chat / Git". **"Trajectory" stays in the main conversation and is never listed in a
+  tiled pane.** The strip only reads the framework's registry and copies no plugin UI: clicking
+  Git renders the Git plugin's own panel. Each pane picks independently and defaults to Chat;
+  **with no extra view plugins (or only Chat) the strip is not rendered at all**, so the pane
+  behaves exactly as before.
+- **Save layout / auto-restore**: the "Save layout" button in the top-right writes the current
+  board (split directions, ratios, pane order, focus), each pane's session and Agent preset,
+  the **dispatch graph (edges + notes)**, and the current panel mode to browser localStorage.
+  The first time the tiled panel is opened after a page reload, it restores that snapshot;
+  switching panels within the same page keeps the live layout. Missing workspaces, sessions,
+  presets, or graph endpoints are dropped or cleared silently — never an error. The small
+  trash icon clears only the saved record and leaves the current board alone. The model itself
+  is persisted per session by DSH, so restoring the session restores the model; no second
+  model snapshot is forced onto it.
 - **The `Open directory` icon** (the folder to the right of the workspace name): clicking it
   hands **that pane's** workspace directory to the system file manager (Linux `xdg-open`,
   macOS Finder, Windows Explorer). It does not implement this machinery itself; instead it
@@ -501,7 +510,7 @@ same directory with `require.async('./client.xxx.js')`, and the host serves them
 `/plugins/<package name>/client.xxx.js?rev=<version>`, so the entry does not have to carry
 the whole implementation.
 
-- `client.js` — entry: loads the code blocks (styles / dictionaries / model / presets /
+- `client.js` — entry: loads the code blocks (styles / dictionaries / model / layout / presets /
   conversation views / menu / pane / view), registers the slot, injects the styles, registers `Alt+arrow keys` as
   the framework's fixed shortcut and installs its keyboard handling on the document; it also
   provides `openWorkspaceDirectory(path)` (going through
@@ -516,9 +525,13 @@ the whole implementation.
   document-level `Alt+arrow keys` handling, delegating focus to the pane block's
   `focusPaneInput`).
 - `client.views.js` — the per-pane conversation view strip: reads the registered
-  `conversation.view` entries (Chat / Trajectory / Git…), passes the selected view id as the
-  owner prop of the shared `conversation.content` Factory, and renders no strip at all when
-  no extra view plugin is installed (behaviour identical to before).
+  `conversation.view` entries (Chat / Git, always skipping `trajectory`), passes the selected
+  view id as the owner prop of the shared `conversation.content` Factory, and renders no strip
+  at all when no extra view plugin is installed (behaviour identical to before).
+- `client.layout.js` — pure save/restore logic for the board: serializes the layout, pane
+  sessions/presets, dispatch graph, and panel mode; on restore it validates workspaces
+  (id → path fallback), sessions, and presets, prunes invalid layout branches and dead graph
+  edges, and treats corrupt JSON/version as "never saved".
 - `client.pane.js` — pane layer: `PaneFrame` (workspace title, the **open-directory button**,
   the **replace-workspace icon** — its menu contents and the `New workspace…` path — split
   menu, mode, session (**every row ends with a delete button**), close) and the session
@@ -605,7 +618,7 @@ the whole implementation.
 - `test/views-contract.mjs` — offline contract tests for the per-pane view strip
   (`node test/views-contract.mjs`): zero views / Chat-only leaves the old behaviour untouched,
   the strip appears and switches, blank sessions hide it, a vanished view falls back to Chat,
-  and Trajectory follows the developer-tools switch.
+  and Trajectory never appears in a pane.
 - `test/drag-contract.mjs` — offline contract tests for the two kinds of dragging
   (`node test/drag-contract.mjs`): resizing with a splitter (including keyboard fine-tuning
   and double-click balance), and the whole chain of **drag-to-swap on the title bar**. The
@@ -619,6 +632,11 @@ the whole implementation.
   ownership when lighting up a pane** (clicking a control does not steal it, clicking content
   hands it over, a drag-selection is given way to, closing a pane waits one frame)
   (`node test/focus-contract.mjs`).
+- `test/save-contract.mjs` — offline contract tests for layout save/restore
+  (`node test/save-contract.mjs`): serialization, missing sessions/workspaces/presets,
+  layout pruning and focus fallback, corrupt JSON/version, graph sanitizing (missing nodes,
+  self-edges, cycles, multiple parents), real persistence/read-back/clear, and automatic
+  restore of the board, graph, and mode when the panel mounts.
 - `test/preset-contract.mjs` — offline contract tests for the mode selector
   (`node test/preset-contract.mjs`).
 - `test/graph-contract.mjs` — offline contract tests for the delegation graph
@@ -702,6 +720,7 @@ seconds):
 ```bash
 node test/layout-contract.mjs
 node test/views-contract.mjs
+node test/save-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs
 node test/preset-contract.mjs

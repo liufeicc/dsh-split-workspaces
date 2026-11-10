@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Split workspaces",
-    "description": "Tile several workspaces left/right and up/down in the main panel, drag the dividers to resize, drag a pane header onto another pane and release to swap the two places, and highlight the pane that currently has focus; one conversation per pane, with a per-pane strip for the registered conversation views (Chat / Trajectory / Git, etc.)."
+    "description": "Tile several workspaces left/right and up/down in the main panel, drag the dividers to resize, drag a pane header onto another pane and release to swap the two places, and highlight the pane that currently has focus; one conversation per pane, with a per-pane strip for the registered conversation views (Chat / Git, etc.; Trajectory remains in the main conversation), and a top-right save-layout action that remembers pane sessions, Agent presets, and the dispatch graph for the next load."
   }
 }

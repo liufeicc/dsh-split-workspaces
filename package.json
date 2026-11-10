@@ -30,6 +30,7 @@
     "client.styles.js",
     "client.dicts.js",
     "client.model.js",
+    "client.layout.js",
     "client.presets.js",
     "client.mcp.js",
     "client.skill.js",

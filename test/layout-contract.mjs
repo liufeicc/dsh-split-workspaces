@@ -24,7 +24,7 @@ import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, re
 const here = dirname(fileURLToPath(import.meta.url));
 
 const mod = await loadBundle(join(here, '..', 'client.js'), { react: ReactStub });
-check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.dispatch.js,./client.graph.model.js,./client.graph.view.js,./client.menu.js,./client.pane.js,./client.views.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
+check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.layout.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.dispatch.js,./client.graph.model.js,./client.graph.view.js,./client.menu.js,./client.pane.js,./client.views.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
 
 /*
  * 清单与磁盘必须一一对应。
@@ -45,6 +45,7 @@ const mods = await mod.test.chunks;
 check('每个代码块都按 loader 规则注册并导出自己的东西', typeof mods.styles.CSS === 'string' && typeof mods.styles.css.pane === 'string' && typeof mods.styles.cx === 'function'
   && typeof mods.dicts.zh['panel.title'] === 'string' && typeof mods.dicts.en['panel.title'] === 'string'
   && typeof mods.model.createPaneStore === 'function' && typeof mods.presets.createPresetStore === 'function'
+  && typeof mods.layout.serialize === 'function' && typeof mods.layout.restore === 'function'
   && typeof mods.menu.createMenu === 'function' && typeof mods.pane.createPane === 'function'
   && typeof mods.views.createViewTabs === 'function' && typeof mods.views.createPaneBody === 'function'
   && typeof mods.view.createView === 'function');

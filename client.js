@@ -120,6 +120,7 @@ window.__ModuleLoader__.load({
       './client.styles.js',
       './client.dicts.js',
       './client.model.js',
+      './client.layout.js',
       './client.presets.js',
       './client.mcp.js',
       './client.skill.js',
@@ -144,8 +145,8 @@ window.__ModuleLoader__.load({
         return Promise.reject(new Error('client module loader 不支持包内代码块（require.async 缺失）'));
       }
       return Promise.all(CHUNK_FILES.map((file) => require.async(file)))
-        .then(([styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view]) => ({
-          styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view,
+        .then(([styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view]) => ({
+          styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view,
         }));
     }
 
@@ -240,6 +241,113 @@ window.__ModuleLoader__.load({
       const dispatchSync = mods.dispatch.createDispatchSync(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY));
 
       /*
+       * 布局保存/恢复的存储层。
+       *
+       * 只存本机浏览器 localStorage：这是“界面偏好”而不是会话数据，放在客户端最轻，
+       * 也不需要新增 Host 服务。隐私模式/沙箱禁用它时读取一律当作“没有保存过”，
+       * 保存失败则把原因交给按钮旁边那行错误提示，不影响面板本身。
+       */
+      const readLocalStorage = () => {
+        try {
+          return typeof globalThis.localStorage === 'undefined' ? null : globalThis.localStorage;
+        } catch {
+          return null;
+        }
+      };
+      const readSavedLayout = () => {
+        const storage = readLocalStorage();
+        if (storage === null) return null;
+        let raw;
+        try {
+          raw = storage.getItem(mods.layout.LAYOUT_STORAGE_KEY);
+        } catch {
+          return null;
+        }
+        if (raw === null || raw === undefined || raw === '') return null;
+        try {
+          const parsed = JSON.parse(raw);
+          return mods.layout.isSavedPayload(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      };
+      const writeSavedLayout = (payload) => {
+        const storage = readLocalStorage();
+        if (storage === null || typeof storage.setItem !== 'function') {
+          return { ok: false, reason: 'localStorage unavailable' };
+        }
+        try {
+          storage.setItem(mods.layout.LAYOUT_STORAGE_KEY, JSON.stringify(payload));
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, reason: mods.presets.errorText(error) };
+        }
+      };
+      const clearSavedLayout = () => {
+        const storage = readLocalStorage();
+        if (storage === null || typeof storage.removeItem !== 'function') return false;
+        try {
+          storage.removeItem(mods.layout.LAYOUT_STORAGE_KEY);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      /**
+       * 保存当前界面。图/会话/模式都放在同一份 JSON 里，版本号由 layout 块决定。
+       * @returns `{ ok: true }` 或 `{ ok: false, reason }`。
+       */
+      const persistLayout = (snapshot, workspaceById, graph, mode) => {
+        const payload = mods.layout.serialize(snapshot, workspaceById, graph, mode);
+        if (payload === null) return { ok: false, reason: 'nothing to save' };
+        return writeSavedLayout(payload);
+      };
+      /**
+       * 恢复保存的界面。窗格、任务分派图、面板模式分别落位；任何一部分坏掉都只是
+       * 不恢复那一部分，不抛异常。
+       *
+       * @returns `{ panes: boolean, graph: boolean }`：panes 表示棋盘是否被替换；
+       *   graph 表示保存结构里是否有图（即使边被清空也算“这份保存拥有图”，
+       *   调用方据此阻止 Host 旧绑定覆盖已保存的空图）。
+       */
+      const restorePersistedLayout = (context) => {
+        const saved = readSavedLayout();
+        if (saved === null) return { panes: false, graph: false };
+        let restored;
+        try {
+          restored = mods.layout.restore(saved, context);
+        } catch {
+          return { panes: false, graph: false };
+        }
+        if (restored === null) return { panes: false, graph: false };
+        // 面板模式跟着保存时的界面走；图是否存在不影响模式恢复。
+        try {
+          viewModeStore.setMode(restored.mode);
+        } catch {
+          /* 非法模式由 store 自己忽略，这里不需要额外处理 */
+        }
+        let panes = false;
+        if (restored.paneState !== null) {
+          try {
+            panes = paneStore.restore(restored.paneState);
+          } catch {
+            panes = false;
+          }
+        }
+        let graph = false;
+        if (restored.graph !== null) {
+          try {
+            const edges = mods.graphModel.sanitizeEdges(restored.graph.edges, context?.isValidGraphSession);
+            graphStore.setEdges(edges);
+            graph = true;
+          } catch {
+            graph = false;
+          }
+        }
+        return { panes, graph };
+      };
+
+      /*
        * 挂载 `remote.paneDispatch` 命名空间（Host 那一半由 index.js 提供）。
        *
        * 与 MCP / SKILL 两个服务一样**不能**写进 inject：那样插件激活会依赖远端挂载完成，
@@ -288,6 +396,10 @@ window.__ModuleLoader__.load({
         setActive: (key) => paneStore.setActive(key),
         setRatio: (splitId, ratio) => paneStore.setRatio(splitId, ratio),
         ensureInitialized: (currentWorkspaceId, workspaceIds) => paneStore.ensureInitialized(currentWorkspaceId, workspaceIds),
+        saveLayout: (snapshot, workspaceById, graph, mode) => persistLayout(snapshot, workspaceById, graph, mode),
+        restoreSavedLayout: (context) => restorePersistedLayout(context),
+        hasSavedLayout: () => readSavedLayout() !== null,
+        clearSavedLayout: () => clearSavedLayout(),
         loadPresets: () => presetStore.load(),
         loadMcp: () => mcpStore.load(),
         setMcpSelection: (workspacePath, selected) => mcpStore.setSelection(workspacePath, selected),

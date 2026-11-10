@@ -71,10 +71,13 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 本包暴露的两个方法：读全部绑定 / 覆盖某个发起方的绑定。 */
+    /** 本包暴露的方法：绑定 list/set，以及 Host 侧布局的 read/write/clear。 */
     const REMOTE_DESCRIPTORS = [
       descriptorFor('list', 'PaneDispatchListRequest'),
       descriptorFor('set', 'PaneDispatchSetRequest'),
+      descriptorFor('readLayout', 'PaneLayoutReadRequest'),
+      descriptorFor('writeLayout', 'PaneLayoutWriteRequest'),
+      descriptorFor('clearLayout', 'PaneLayoutClearRequest'),
     ];
 
     /** 把任意抛出物转成一句人能读的话。 */
@@ -349,6 +352,91 @@ window.__ModuleLoader__.load({
             return { ok: false, error: message };
           });
           return queue;
+        },
+
+        /**
+         * 从 Host 读回保存的布局。
+         *
+         * @returns 保存结构；没有保存过时是 null；远端还没挂上时是 undefined
+         *   （调用方可以重试，不能把 undefined 当成“没有保存”而直接清掉布局）。
+         */
+        async loadLayout() {
+          let service;
+          try {
+            service = await waitForService(getService, 6, 100);
+          } catch {
+            return undefined;
+          }
+          if (service === undefined || service === null) return undefined;
+          try {
+            const result = await service.readLayout({});
+            if (result === undefined || result === null) return undefined;
+            if (!result.ok) {
+              const code = result.error === undefined || result.error === null ? undefined : result.error.code;
+              // 老版本 Host 没有布局方法：当作“没有保存过”，让界面回到默认播种，
+              // 不要每 300ms 重试到超时。
+              if (code === 'gateway/invocation-unavailable') return null;
+              return undefined;
+            }
+            return result.value ?? null;
+          } catch {
+            return undefined;
+          }
+        },
+
+        /**
+         * 把布局写到 Host。
+         *
+         * @param {object} payload - 客户端保存结构。
+         * @returns {{ok: boolean, reason?: string}}
+         */
+        async saveLayout(payload) {
+          let service;
+          try {
+            service = await waitForService(getService);
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
+          if (service === undefined || service === null) return { ok: false, reason: 'notMounted' };
+          try {
+            const result = await service.writeLayout({ layout: payload });
+            if (result === undefined || result === null) return { ok: false, reason: 'notMounted' };
+            if (!result.ok) {
+              return { ok: false, reason: result.error === undefined || result.error === null ? 'writeLayout failed' : result.error.message };
+            }
+            // Host 方法没有抛错、远程 result.ok 为真，就已经完成落盘。
+            // 不再额外要求 value 必须是某个具体形状：Typert 的 src-json 对原始
+            // 布尔值/对象包装的返回不完全一致，按 value 判断会把已经写成功的保存
+            // 误报成失败。
+            return { ok: true };
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
+        },
+
+        /**
+         * 删除 Host 上的布局记录。
+         *
+         * @returns {{ok: boolean, reason?: string}}
+         */
+        async clearLayout() {
+          let service;
+          try {
+            service = await waitForService(getService);
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
+          if (service === undefined || service === null) return { ok: false, reason: 'notMounted' };
+          try {
+            const result = await service.clearLayout({});
+            if (result === undefined || result === null) return { ok: false, reason: 'notMounted' };
+            if (!result.ok) {
+              return { ok: false, reason: result.error === undefined || result.error === null ? 'clearLayout failed' : result.error.message };
+            }
+            return { ok: true };
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
         },
       };
     }

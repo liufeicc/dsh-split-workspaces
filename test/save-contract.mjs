@@ -5,14 +5,14 @@
  *   1. `client.layout.js` 的纯序列化/校验：坏 JSON、缺会话、缺工作区、缺模式、
  *      布局剪枝、focus 回退、比例保留；
  *   2. 任务分派图的清洗：缺节点、自连、重复边、成环、多上级都丢掉，合法边和说明保留；
- *   3. 入口 `paneActions` 的真实落盘/读回：保存到 localStorage、恢复棋盘/图/模式、
+ *   3. 入口 `paneActions` 的真实落盘/读回：保存到 Host 磁盘、恢复棋盘/图/模式、
  *      清除保存记录。
  *
  * 用 `node test/save-contract.mjs` 单独运行。
  */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ReactStub, createStubContext, findAll, loadBundle } from './harness.mjs';
+import { ReactStub, createStubContext, findAll, loadBundle, settle } from './harness.mjs';
 import { check, report, renderBoard } from './board.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,14 +20,6 @@ const mod = await loadBundle(join(here, '..', 'client.js'), { react: ReactStub }
 const mods = await mod.test.chunks;
 const layout = mods.layout;
 const graphModel = mods.graphModel;
-
-/* 测试进程里没有 localStorage；用一个内存实现模拟浏览器。 */
-const memory = new Map();
-globalThis.localStorage = {
-  getItem: (key) => (memory.has(key) ? memory.get(key) : null),
-  setItem: (key, value) => { memory.set(key, String(value)); },
-  removeItem: (key) => { memory.delete(key); },
-};
 
 /** 造一份可保存的 paneStore 快照。 */
 const paneSnapshot = () => ({
@@ -179,9 +171,22 @@ const cleaned = graphModel.sanitizeEdges([
 check('清洗后只留下合法树边', cleaned.map((edge) => edge.from + '>' + edge.to).join(',') === 's-a>s-b,s-a>s-c,s-d>s-e');
 check('清洗保留合法边的说明', cleaned[2].note === '说明');
 
-// --- 4. 入口动作：真实落盘 / 读回 / 清除 ------------------------------------------
+// --- 4. 入口动作：Host 落盘 / 读回 / 清除 ------------------------------------------
 
+let hostLayout = null;
+const hostLayoutHandlers = {
+  readLayout: async () => ({ ok: true, value: hostLayout }),
+  writeLayout: async (request) => {
+    hostLayout = request.layout;
+    return { ok: true, value: { ok: true } };
+  },
+  clearLayout: async () => {
+    hostLayout = null;
+    return { ok: true, value: { ok: true } };
+  },
+};
 const stub = createStubContext({ presets: [] });
+stub.remoteHandlers.paneDispatch = hostLayoutHandlers;
 await mod.apply(stub.ctx);
 const main = stub.registered.find((definition) => definition.name === 'main');
 const injected = main.inject();
@@ -193,10 +198,10 @@ injected.paneStore.setPreset('pane-1', 'standard');
 injected.graphStore.setEdges([{ from: 's-a', to: 's-b', note: '分工' }]);
 injected.viewModeStore.setMode('graph');
 
-const saveResult = actions.saveLayout(injected.paneStore.getSnapshot(), workspaceById, injected.graphStore.getSnapshot(), 'graph');
+const saveResult = await actions.saveLayout(injected.paneStore.getSnapshot(), workspaceById, injected.graphStore.getSnapshot(), 'graph');
 check('入口保存成功', saveResult.ok === true);
 check('保存后可读取到布局', actions.hasSavedLayout() === true);
-check('localStorage 里确实写入了 JSON', typeof globalThis.localStorage.getItem(layout.LAYOUT_STORAGE_KEY) === 'string');
+check('Host 上确实写入了保存结构', hostLayout !== null && hostLayout.version === layout.LAYOUT_VERSION);
 
 injected.paneStore.closeAll();
 injected.graphStore.setEdges([]);
@@ -218,16 +223,24 @@ check('入口恢复分派图', restoredResult.graph === true
   && injected.graphStore.getSnapshot().edges[0].note === '分工');
 check('入口恢复面板模式', injected.viewModeStore.getSnapshot().mode === 'graph');
 
-check('清除保存记录成功', actions.clearSavedLayout() === true && actions.hasSavedLayout() === false);
+const cleared = await actions.clearSavedLayout();
+check('清除 Host 保存记录成功', cleared === true && actions.hasSavedLayout() === false && hostLayout === null);
 
-// 损坏的 JSON：读取时当作没有保存过，不抛错。
-globalThis.localStorage.setItem(layout.LAYOUT_STORAGE_KEY, '{ not json');
-check('损坏的 JSON 不抛错且视为没有保存', actions.hasSavedLayout() === false && actions.restoreSavedLayout(context).panes === false);
-globalThis.localStorage.removeItem(layout.LAYOUT_STORAGE_KEY);
+// 非法版本：只信任客户端校验，Host 原样返回坏数据时当作没有保存过。
+const badStub = createStubContext({ presets: [] });
+badStub.remoteHandlers.paneDispatch = {
+  readLayout: async () => ({ ok: true, value: { version: 999 } }),
+  writeLayout: async () => ({ ok: true, value: { ok: true } }),
+  clearLayout: async () => ({ ok: true, value: { ok: true } }),
+};
+await mod.apply(badStub.ctx);
+const badInjected = badStub.registered.find((definition) => definition.name === 'main').inject();
+check('非法版本不恢复', await badInjected.paneActions.loadSavedLayout() === false
+  && badInjected.paneActions.hasSavedLayout() === false
+  && badInjected.paneActions.restoreSavedLayout(context).panes === false);
 
-// --- 5. 自动恢复：挂载平铺面板时按保存的界面加载 ----------------------------------
+// --- 5. 自动恢复：挂载平铺面板时从 Host 读取布局 ----------------------------------
 
-// 先准备一份带图、带会话的保存结构，再让面板从空 store 开始挂载。
 const savedForRestore = layout.serialize(
   {
     panes: [
@@ -248,34 +261,59 @@ const savedForRestore = layout.serialize(
   { edges: [{ from: 's-a', to: 's-b', note: '恢复后的分工' }] },
   'graph',
 );
-globalThis.localStorage.setItem(layout.LAYOUT_STORAGE_KEY, JSON.stringify(savedForRestore));
-const restoreBoard = await renderBoard(mod, { preloadPanes: false });
+const restoreBoard = await renderBoard(mod, {
+  preloadPanes: false,
+  remoteHandlers: {
+    paneDispatch: {
+      readLayout: async () => ({ ok: true, value: savedForRestore }),
+      writeLayout: async () => ({ ok: true, value: { ok: true } }),
+      clearLayout: async () => ({ ok: true, value: { ok: true } }),
+    },
+  },
+});
 // 先把模式清单置成“已读取”（测试替身返回空清单，状态 unavailable），
 // 这样挂载时恢复效果不会停在“等清单”的分支。
 await restoreBoard.injected.presetStore.load();
+await restoreBoard.injected.paneActions.loadSavedLayout();
 ReactStub.effectsEnabled = true;
-restoreBoard.render();
+const restoreInstance = restoreBoard.render();
+for (let index = 0; index < 8; index += 1) await settle();
+restoreInstance.flush();
+for (let index = 0; index < 8; index += 1) await settle();
+restoreInstance.flush();
 ReactStub.effectsEnabled = false;
 const restoredPaneState = restoreBoard.paneStore.getSnapshot();
-check('面板挂载时自动恢复保存的棋盘', restoredPaneState.initialized === true && restoredPaneState.panes.length === 2);
+check('面板挂载时自动恢复 Host 里保存的棋盘', restoredPaneState.initialized === true && restoredPaneState.panes.length === 2);
 check('自动恢复保留布局方向与比例', restoredPaneState.layout.dir === 'col' && restoredPaneState.layout.ratio === 0.6);
 check('自动恢复保留窗格里的会话', restoredPaneState.panes[0].sessionId === 's-a' && restoredPaneState.panes[1].sessionId === 's-b');
 check('自动恢复分派图与说明', restoreBoard.injected.graphStore.getSnapshot().edges.length === 1
   && restoreBoard.injected.graphStore.getSnapshot().edges[0].note === '恢复后的分工');
 check('自动恢复保存时的面板模式', restoreBoard.injected.viewModeStore.getSnapshot().mode === 'graph');
-globalThis.localStorage.removeItem(layout.LAYOUT_STORAGE_KEY);
 
-// --- 6. 界面：保存按钮真的写入当前棋盘 ----------------------------------------------
+// --- 6. 界面：保存按钮真的写入 Host ------------------------------------------------
 
-const board = await renderBoard(mod);
+let writtenLayout = null;
+const board = await renderBoard(mod, {
+  remoteHandlers: {
+    paneDispatch: {
+      readLayout: async () => ({ ok: true, value: null }),
+      writeLayout: async (request) => {
+        writtenLayout = request.layout;
+        return { ok: true, value: { ok: true } };
+      },
+      clearLayout: async () => ({ ok: true, value: { ok: true } }),
+    },
+  },
+});
 const tree = board.render().tree;
+await settle();
 const saveButtons = findAll(tree, (node) => node.type === 'button'
-  && (node.children[0] === '保存布局' || node.children[0] === '已保存'));
+  && (node.children[0] === '保存布局' || node.children[0] === '已保存' || node.children[0] === '保存中…'));
 check('右上角渲染出“保存布局”按钮', saveButtons.length === 1);
 saveButtons[0].props.onClick();
-const written = JSON.parse(globalThis.localStorage.getItem(layout.LAYOUT_STORAGE_KEY));
-check('点保存按钮写入两个窗格', Array.isArray(written.panes) && written.panes.length === 2);
-check('跟随窗格保存成眼前这一段对话，而不是只存 null', written.panes[0].sessionId === 's-a' && written.panes[1].sessionId === 's-b');
-check('图未就绪时按钮不写不可靠的空图', written.graph === undefined);
+for (let index = 0; index < 5; index += 1) await settle();
+check('点保存按钮把两个窗格写入 Host', Array.isArray(writtenLayout?.panes) && writtenLayout.panes.length === 2);
+check('跟随窗格保存成眼前这一段对话，而不是只存 null', writtenLayout.panes[0].sessionId === 's-a' && writtenLayout.panes[1].sessionId === 's-b');
+check('图未就绪时按钮不写不可靠的空图', writtenLayout.graph === undefined);
 
 report();

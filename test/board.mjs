@@ -93,8 +93,9 @@ export function report() {
  * @param options.pickerThrows - 让文件夹选择器直接失败，用来检查报错文案。
  * @param options.createdId - `workspaces.create` 建出来的工作区 id。
  */
-export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new', preloadPanes = true } = {}) {
+export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new', preloadPanes = true, remoteHandlers = {} } = {}) {
   const stub = createStubContext({ presets: [] });
+  Object.assign(stub.remoteHandlers, remoteHandlers);
   await mod.apply(stub.ctx);
   const main = stub.registered.find((definition) => definition.name === 'main');
   const injected = main.inject();

@@ -27,8 +27,10 @@ that currently holds focus is marked by a brand-coloured title bar.
   behaves exactly as before.
 - **Save layout / auto-restore**: the "Save layout" button in the top-right writes the current
   board (split directions, ratios, pane order, focus), each pane's session and Agent preset,
-  the **dispatch graph (edges + notes)**, and the current panel mode to browser localStorage.
-  The first time the tiled panel is opened after a page reload, it restores that snapshot;
+  the **dispatch graph (edges + notes)**, and the current panel mode to the Host's
+  `$DSH_HOME/storages/pane_layout.json`.
+  The first time the tiled panel is opened after a page reload — or after the desktop app
+  restarts on a different port — it restores that snapshot;
   switching panels within the same page keeps the live layout. Missing workspaces, sessions,
   presets, or graph endpoints are dropped or cleared silently — never an error. The small
   trash icon clears only the saved record and leaves the current board alone. The model itself
@@ -574,6 +576,9 @@ the whole implementation.
   sibling `host.*.js` modules:
   - `host.constants.js` — service key, remote method list, timeouts and size limits;
   - `host.store.js` — binding-table persistence (the only constructor of the target shape);
+  - `host.layout.js` — layout persistence at `$DSH_HOME/storages/pane_layout.json`, with
+    atomic temp-file + rename and a 1 MB guard; independent of the browser origin so a
+    desktop restart on a new port still finds the saved layout;
   - `host.service.js` — `PaneDispatchService` (bindings, dispatch state, diagnostics);
   - `host.message.js` — pure helpers (task wrapping, target matching, assistant text);
   - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
@@ -635,8 +640,11 @@ the whole implementation.
 - `test/save-contract.mjs` — offline contract tests for layout save/restore
   (`node test/save-contract.mjs`): serialization, missing sessions/workspaces/presets,
   layout pruning and focus fallback, corrupt JSON/version, graph sanitizing (missing nodes,
-  self-edges, cycles, multiple parents), real persistence/read-back/clear, and automatic
+  self-edges, cycles, multiple parents), Host persistence/read-back/clear, and automatic
   restore of the board, graph, and mode when the panel mounts.
+- `test/host-layout-contract.mjs` — offline contract tests for the Host layout file
+  (`node test/host-layout-contract.mjs`): missing file, atomic save/read-back, storage path,
+  invalid root rejection, clear, and repeated clear.
 - `test/preset-contract.mjs` — offline contract tests for the mode selector
   (`node test/preset-contract.mjs`).
 - `test/graph-contract.mjs` — offline contract tests for the delegation graph
@@ -721,6 +729,7 @@ seconds):
 node test/layout-contract.mjs
 node test/views-contract.mjs
 node test/save-contract.mjs
+node test/host-layout-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs
 node test/preset-contract.mjs

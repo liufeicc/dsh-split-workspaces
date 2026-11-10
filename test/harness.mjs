@@ -361,6 +361,12 @@ export function createStubContext({ presets = [], respond } = {}) {
             service[descriptor.method] = async (request) => {
               const handler = remoteHandlers[namespace]?.[descriptor.method];
               if (typeof handler !== 'function') {
+                // 布局是插件自带的新方法：测试没显式挂 handler 时按“Host 上没有
+                // 保存记录 / 写入是空操作”处理，避免每个面板挂载都去等 2 秒超时。
+                if (descriptor.method === 'readLayout') return { ok: true, value: null };
+                if (descriptor.method === 'writeLayout' || descriptor.method === 'clearLayout') {
+                  return { ok: true, value: { ok: true } };
+                }
                 return { ok: false, error: { code: 'gateway/invocation-unavailable', message: 'no handler' } };
               }
               return handler(request);

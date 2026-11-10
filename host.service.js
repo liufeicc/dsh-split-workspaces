@@ -1,8 +1,9 @@
 /**
- * 多工作区平铺 —— 绑定关系与派单状态的宿主服务。
+ * 多工作区平铺 —— 绑定关系、派单状态与布局落盘的宿主服务。
  *
- * 整个插件在 Host 侧只有一张表：`ownerId → Array<{ id, label, note? }>`，外加两个
- * 辅助索引（显示名、进行中的派单）。客户端是选择的唯一权威，每次把完整集合推上来；
+ * 委派部分在 Host 侧只有一张表：`ownerId → Array<{ id, label, note? }>`，外加两个
+ * 辅助索引（显示名、进行中的派单）。布局是另一份独立文件（`host.layout.js`），
+ * 不混进这张表。客户端是选择的唯一权威，每次把完整集合推上来；
  * 这里只负责「原样存住、落盘、通知订阅者」。
  *
  * 服务本身不投递、不等待 —— 那是 `host.wait.js` 与 `host.tool.js` 的事。这样
@@ -13,6 +14,7 @@
 
 import { DISPATCH_SLICE_MS } from './host.constants.js';
 import { loadStore, makeTarget, saveStore } from './host.store.js';
+import { clearLayoutFile, loadLayoutFile, saveLayoutFile } from './host.layout.js';
 
 /**
  * 绑定关系与工具执行的全部状态。
@@ -216,6 +218,50 @@ export class PaneDispatchService {
       });
     }
     return { targets };
+  }
+
+  /**
+   * 读取当前 profile 的平铺布局。
+   *
+   * 布局存在 Host 磁盘上而不是浏览器 localStorage：桌面版重启会换端口，
+   * localStorage 按 origin 隔离，旧布局读不到。这里返回客户端保存结构本身，
+   * 字段版本和降级仍由客户端 `client.layout.js` 负责。
+   *
+   * @param request - Typert 网关要求保留的形参。
+   * @returns 保存结构；没有保存过时返回 null。
+   */
+  readLayout(request) {
+    void request;
+    return loadLayoutFile();
+  }
+
+  /**
+   * 覆盖保存当前布局。
+   *
+   * @param request - `{ layout: object }`。
+   * @returns `{ ok: true }`；写盘失败时抛错，让远程调用返回明确错误。
+   */
+  writeLayout(request) {
+    if (!saveLayoutFile(request?.layout)) {
+      throw new Error('paneDispatch.writeLayout: layout could not be saved');
+    }
+    // 返回对象而不是裸 true：Typert 的 src-json 结果路径对原始布尔值不保证
+    // 能原样回传，客户端会拿不到“写入成功”的确认。
+    return { ok: true };
+  }
+
+  /**
+   * 删除 Host 上的布局记录。
+   *
+   * @param request - Typert 网关要求保留的形参。
+   * @returns `{ ok: true }`；删除失败时抛错。
+   */
+  clearLayout(request) {
+    void request;
+    if (!clearLayoutFile()) {
+      throw new Error('paneDispatch.clearLayout: layout could not be cleared');
+    }
+    return { ok: true };
   }
 
   /**

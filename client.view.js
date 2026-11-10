@@ -293,13 +293,12 @@ window.__ModuleLoader__.load({
          * 下次恢复就会把 Host 上原本存在的箭头清掉。
          */
         const graphReadyForSave = useRef(false);
-        const [savedLayoutAvailable, setSavedLayoutAvailable] = useState(() => {
-          try {
-            return paneActions.hasSavedLayout() === true;
-          } catch {
-            return false;
-          }
-        });
+        const [savedLayoutAvailable, setSavedLayoutAvailable] = useState(false);
+        /*
+         * Host 布局是唯一的持久化来源，所以每次挂载都必须先异步问一次 Host；
+         * 没查完之前不能播种，否则默认布局会先把棋盘占住。
+         */
+        const [layoutLookupDone, setLayoutLookupDone] = useState(false);
         /*
          * 模式花名册来自远端；正常几十毫秒就回来，但连接异常时不能让它把恢复流程
          * 永远卡在“正在恢复…”。4 秒后即使还没回来也继续恢复（保留保存时的模式 id），
@@ -311,6 +310,45 @@ window.__ModuleLoader__.load({
           const timer = setTimeout(() => setPresetDeadlinePassed(true), 4000);
           return () => clearTimeout(timer);
         }, [savedLayoutAvailable]);
+        /*
+         * Host 布局是一次异步读取；远端命名空间可能比面板晚挂上，所以短暂重试。
+         * 6 秒还读不到就按“没有保存”继续播种，避免面板永远停在恢复态。
+         */
+        useEffect(() => {
+          if (layoutLookupDone) return undefined;
+          let cancelled = false;
+          let timer = null;
+          let attempts = 0;
+          const load = () => {
+            Promise.resolve(paneActions.loadSavedLayout())
+              .then((found) => {
+                if (cancelled) return;
+                if (found === true) {
+                  setSavedLayoutAvailable(true);
+                  setLayoutLookupDone(true);
+                  return;
+                }
+                if (found === false) {
+                  setLayoutLookupDone(true);
+                  return;
+                }
+                attempts += 1;
+                if (attempts >= 5) {
+                  setLayoutLookupDone(true);
+                  return;
+                }
+                timer = setTimeout(load, 300);
+              })
+              .catch(() => {
+                if (!cancelled) setLayoutLookupDone(true);
+              });
+          };
+          load();
+          return () => {
+            cancelled = true;
+            if (timer !== null) clearTimeout(timer);
+          };
+        }, [layoutLookupDone, paneActions]);
         const [saveState, setSaveState] = useState('idle');
         const saveTimer = useRef(null);
         useEffect(() => () => {
@@ -342,6 +380,8 @@ window.__ModuleLoader__.load({
           // 棋盘已经就位（当前页面里用过，或刚恢复/播种过）就不再覆盖。
           if (paneState.initialized || paneState.panes.length > 0) return;
           if (workspaceIds.length === 0) return;
+          // Host 布局还没查完：先别播种，否则默认布局会抢在保存布局前面。
+          if (!layoutLookupDone) return;
           /*
            * 没有保存过布局：保持原来的首次播种行为，不等待会话/模式清单。
            */
@@ -406,6 +446,7 @@ window.__ModuleLoader__.load({
           presetState.options,
           presetDeadlinePassed,
           savedLayoutAvailable,
+          layoutLookupDone,
         ]);
 
         useEffect(() => {
@@ -954,8 +995,12 @@ window.__ModuleLoader__.load({
          * 保存当前界面：棋盘 + 窗格会话/模式 + 任务分派图 + 当前面板模式。
          * 保存失败只在这条通用错误行里说一句，不弹窗、不阻塞界面。
          */
-        const handleSaveLayout = () => {
-          if (!canSaveLayout) return;
+        const handleSaveLayout = async () => {
+          if (!canSaveLayout || saveState === 'saving') return;
+          if (saveTimer.current !== null) {
+            clearTimeout(saveTimer.current);
+            saveTimer.current = null;
+          }
           /*
            * 图只有在 Host 绑定表确实读回来、并且已经处理完（或保存的图本身就是权威）
            * 时才是可靠快照。还在 loading / unavailable / error 时传 null：保存结构里
@@ -976,7 +1021,8 @@ window.__ModuleLoader__.load({
             return { ...pane, sessionId };
           });
           const snapshotForSave = { ...paneState, panes: resolvedPanes };
-          const result = paneActions.saveLayout(snapshotForSave, workspaceById, graphSnapshot, modeState.mode);
+          setSaveState('saving');
+          const result = await paneActions.saveLayout(snapshotForSave, workspaceById, graphSnapshot, modeState.mode);
           if (result?.ok === true) {
             setSavedLayoutAvailable(true);
             setAddError(null);
@@ -993,8 +1039,9 @@ window.__ModuleLoader__.load({
         };
 
         /** 清除保存记录：当前界面保持不变，下次页面加载回到默认播种。 */
-        const handleClearSavedLayout = () => {
-          if (paneActions.clearSavedLayout() === true) {
+        const handleClearSavedLayout = async () => {
+          const cleared = await paneActions.clearSavedLayout();
+          if (cleared === true) {
             setSavedLayoutAvailable(false);
             setAddError(null);
             return;
@@ -1012,11 +1059,15 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 className: cx(css.button, css.saveLayout),
                 title: t('panel.saveHint'),
-                'aria-label': saveState === 'saved' ? t('panel.saved') : t('panel.save'),
+                'aria-label': saveState === 'saved'
+                  ? t('panel.saved')
+                  : saveState === 'saving' ? t('panel.saving') : t('panel.save'),
                 'data-state': saveState,
-                disabled: !canSaveLayout,
-                onClick: handleSaveLayout,
-              }, saveState === 'saved' ? t('panel.saved') : t('panel.save')),
+                disabled: !canSaveLayout || saveState === 'saving',
+                onClick: () => { void handleSaveLayout(); },
+              }, saveState === 'saved'
+                ? t('panel.saved')
+                : saveState === 'saving' ? t('panel.saving') : t('panel.save')),
               // 只有确实保存过时才出现；点它只删保存记录，当前界面一个窗格都不动。
               savedLayoutAvailable
                 ? h('button', {
@@ -1024,7 +1075,7 @@ window.__ModuleLoader__.load({
                     className: css.iconButton,
                     title: t('panel.clearSavedHint'),
                     'aria-label': t('panel.clearSaved'),
-                    onClick: handleClearSavedLayout,
+                    onClick: () => { void handleClearSavedLayout(); },
                   }, h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
                     h('path', {
                       d: 'M3 4.5h10M6.5 4.5V3h3v1.5M5 4.5l.5 8h5l.5-8',

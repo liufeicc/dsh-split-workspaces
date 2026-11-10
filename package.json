@@ -16,6 +16,7 @@
     "index.js",
     "host.constants.js",
     "host.store.js",
+    "host.layout.js",
     "host.service.js",
     "host.message.js",
     "host.wait.js",

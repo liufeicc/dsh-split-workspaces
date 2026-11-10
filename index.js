@@ -54,6 +54,7 @@
  *
  *   - `host.constants.js` —— 服务键、远端方法清单、超时与长度上限；
  *   - `host.store.js` —— 绑定表的落盘与读回；
+ *   - `host.layout.js` —— 平铺布局的落盘与读回（$DSH_HOME/storages/pane_layout.json）；
  *   - `host.service.js` —— `PaneDispatchService`（绑定表与派单状态）；
  *   - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取文本）；
  *   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路）；

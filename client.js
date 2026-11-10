@@ -243,64 +243,62 @@ window.__ModuleLoader__.load({
       /*
        * 布局保存/恢复的存储层。
        *
-       * 只存本机浏览器 localStorage：这是“界面偏好”而不是会话数据，放在客户端最轻，
-       * 也不需要新增 Host 服务。隐私模式/沙箱禁用它时读取一律当作“没有保存过”，
-       * 保存失败则把原因交给按钮旁边那行错误提示，不影响面板本身。
+       * 只有 Host 磁盘这一份持久化。桌面版每次启动端口可能变，浏览器的
+       * localStorage 按 origin 隔离，存两份反而会出现“Ctrl+R 能恢复、关掉重开
+       * 读的是另一份”的不一致；所以浏览器完全不存，Host 是唯一事实来源。
+       *
+       * 读 Host 是异步的，自动恢复流程会等它一次；保存也等待 Host 确认后再显示
+       * “已保存”，避免只写进内存/浏览器就以为持久化成功了。
        */
-      const readLocalStorage = () => {
-        try {
-          return typeof globalThis.localStorage === 'undefined' ? null : globalThis.localStorage;
-        } catch {
-          return null;
+      /** Host 布局缓存：undefined = 还没读过，null = 读过但没有。 */
+      let remoteSavedLayout;
+      let remoteLayoutLoaded = false;
+      let remoteLayoutLoading = null;
+      const readSavedLayout = () => (remoteLayoutLoaded ? remoteSavedLayout : null);
+      /**
+       * 读一次 Host 布局。
+       *
+       * @returns true 有保存过；false 明确没有；undefined Host 暂时不可达（调用方可重试）。
+       */
+      const loadSavedLayout = async () => {
+        if (remoteLayoutLoaded) return remoteSavedLayout !== null;
+        if (remoteLayoutLoading === null) {
+          remoteLayoutLoading = Promise.resolve(dispatchSync.loadLayout())
+            .then((payload) => {
+              if (payload === undefined) return undefined;
+              remoteLayoutLoaded = true;
+              remoteSavedLayout = mods.layout.isSavedPayload(payload) ? payload : null;
+              return remoteSavedLayout !== null;
+            })
+            .catch(() => undefined)
+            .finally(() => {
+              remoteLayoutLoading = null;
+            });
         }
-      };
-      const readSavedLayout = () => {
-        const storage = readLocalStorage();
-        if (storage === null) return null;
-        let raw;
-        try {
-          raw = storage.getItem(mods.layout.LAYOUT_STORAGE_KEY);
-        } catch {
-          return null;
-        }
-        if (raw === null || raw === undefined || raw === '') return null;
-        try {
-          const parsed = JSON.parse(raw);
-          return mods.layout.isSavedPayload(parsed) ? parsed : null;
-        } catch {
-          return null;
-        }
-      };
-      const writeSavedLayout = (payload) => {
-        const storage = readLocalStorage();
-        if (storage === null || typeof storage.setItem !== 'function') {
-          return { ok: false, reason: 'localStorage unavailable' };
-        }
-        try {
-          storage.setItem(mods.layout.LAYOUT_STORAGE_KEY, JSON.stringify(payload));
-          return { ok: true };
-        } catch (error) {
-          return { ok: false, reason: mods.presets.errorText(error) };
-        }
-      };
-      const clearSavedLayout = () => {
-        const storage = readLocalStorage();
-        if (storage === null || typeof storage.removeItem !== 'function') return false;
-        try {
-          storage.removeItem(mods.layout.LAYOUT_STORAGE_KEY);
-          return true;
-        } catch {
-          return false;
-        }
+        return remoteLayoutLoading;
       };
       /**
        * 保存当前界面。图/会话/模式都放在同一份 JSON 里，版本号由 layout 块决定。
+       *
+       * 等 Host 写盘确认后才返回成功；失败时把原因交给按钮旁边那行错误提示。
+       *
        * @returns `{ ok: true }` 或 `{ ok: false, reason }`。
        */
-      const persistLayout = (snapshot, workspaceById, graph, mode) => {
+      const persistLayout = async (snapshot, workspaceById, graph, mode) => {
         const payload = mods.layout.serialize(snapshot, workspaceById, graph, mode);
         if (payload === null) return { ok: false, reason: 'nothing to save' };
-        return writeSavedLayout(payload);
+        const saved = await dispatchSync.saveLayout(payload);
+        if (!saved.ok) return { ok: false, reason: saved.reason };
+        remoteSavedLayout = payload;
+        remoteLayoutLoaded = true;
+        return { ok: true };
+      };
+      const clearSavedLayout = async () => {
+        const cleared = await dispatchSync.clearLayout();
+        if (!cleared.ok) return false;
+        remoteSavedLayout = null;
+        remoteLayoutLoaded = true;
+        return true;
       };
       /**
        * 恢复保存的界面。窗格、任务分派图、面板模式分别落位；任何一部分坏掉都只是
@@ -399,6 +397,7 @@ window.__ModuleLoader__.load({
         saveLayout: (snapshot, workspaceById, graph, mode) => persistLayout(snapshot, workspaceById, graph, mode),
         restoreSavedLayout: (context) => restorePersistedLayout(context),
         hasSavedLayout: () => readSavedLayout() !== null,
+        loadSavedLayout: () => loadSavedLayout(),
         clearSavedLayout: () => clearSavedLayout(),
         loadPresets: () => presetStore.load(),
         loadMcp: () => mcpStore.load(),

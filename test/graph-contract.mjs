@@ -174,8 +174,9 @@ await settle();
 const mounted = stubForRemote.mounted ?? [];
 check('插件把 paneDispatch 命名空间挂到了远端网关上', mounted.length === 1 && mounted[0].package === '@local/dsh-split-workspaces', JSON.stringify(mounted.map((item) => item.package)));
 const descriptors = mounted.length === 0 ? [] : mounted[0].descriptors;
-check('命名空间只暴露 list 与 set 两个方法',
-  descriptors.map((item) => item.method).sort().join(',') === 'list,set', descriptors.map((item) => item.method).join(','));
+check('命名空间暴露绑定 list/set 与布局 read/write/clear 五个方法',
+  descriptors.map((item) => item.method).sort().join(',') === 'clearLayout,list,readLayout,set,writeLayout',
+  descriptors.map((item) => item.method).join(','));
 check('每个输入 codec 都是 strict（网关的硬要求）', descriptors.every((item) => item.parameters.every((param) => param.codec.mode === 'strict')));
 check('每个 strict codec 都带 create() schema 工厂（注册表的硬要求）',
   descriptors.every((item) => item.parameters.every((param) => typeof param.codec.create === 'function')));

@@ -28,8 +28,6 @@ window.__ModuleLoader__.load({
   factory() {
     /** 保存结构版本；不认识的版本直接当“没有保存过”。 */
     const LAYOUT_VERSION = 1;
-    /** localStorage 的键。 */
-    const LAYOUT_STORAGE_KEY = '@local/dsh-split-workspaces/saved-layout.v1';
     /** 分隔条比例的静态安全边界，与 paneStore 的拖动钳制一致。 */
     const MIN_RATIO = 0.06;
     const MAX_RATIO = 0.94;
@@ -329,7 +327,6 @@ window.__ModuleLoader__.load({
 
     return {
       LAYOUT_VERSION,
-      LAYOUT_STORAGE_KEY,
       isSavedPayload,
       serialize,
       restore,

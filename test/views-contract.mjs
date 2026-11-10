@@ -6,8 +6,9 @@
  *      不出现标签栏，并且仍然把 `chat`（或什么都不传）交给平台；
  *   2. 装了 Git 之类的视图后，每格出现标签栏，点哪个就把哪个视图 id
  *      作为 `conversation.session` 的 owner prop 传下去；
- *   3. 视图注册表、语言、开发者工具开关变化时，清单和标签栏要跟着变；
- *      选中的视图消失时回落到 Chat，而不是留一个空白窗格。
+ *   3. 视图注册表、语言变化时，清单和标签栏要跟着变；
+ *      选中的视图消失时回落到 Chat，而不是留一个空白窗格；
+ *   4. “轨迹”只在主对话提供，平铺窗格即使注册了它也固定不列。
  *
  * 用 `node test/views-contract.mjs` 单独运行。
  */
@@ -27,15 +28,14 @@ const { css, cx } = mods.styles;
 const entry = (id, label) => ({ options: { id, label } });
 
 /**
- * 用给定注册项造一个视图清单源，并记录它订阅到的三个来源（注册表 / 语言 /
- * 开发者工具开关），供“变化后要通知”这类断言主动触发。
+ * 用给定注册项造一个视图清单源，并记录它订阅到的两个来源（注册表 / 语言），
+ * 供“变化后要通知”这类断言主动触发。
  *
  * @param entries - 当前注册项数组（可以随测试替换）。
- * @param options.developerTools - 是否把开发者工具开关当作已开启。
  */
-function makeSource(entries, { developerTools = false } = {}) {
+function makeSource(entries) {
   const stub = createStubContext();
-  const notifications = { slots: undefined, locale: undefined, devTools: undefined };
+  const notifications = { slots: undefined, locale: undefined };
   stub.ctx.slots.entries = () => entries;
   stub.ctx.slots.subscribe = (_key, listener) => {
     notifications.slots = listener;
@@ -45,16 +45,6 @@ function makeSource(entries, { developerTools = false } = {}) {
     notifications.locale = listener;
     return () => {};
   };
-  if (developerTools) {
-    const enabled = {
-      getSnapshot: () => true,
-      subscribe: (listener) => {
-        notifications.devTools = listener;
-        return () => {};
-      },
-    };
-    stub.services.set('configForms', { developerTools: { enabled } });
-  }
   const viewTabs = createViewTabs(stub.ctx);
   return { stub, viewTabs, notifications };
 }
@@ -208,23 +198,18 @@ function renderedSessionView(call) {
   check('Git 消失后标签栏只剩对话（只有一个所以整条隐藏）', tabBar(pane.instance.tree) === undefined);
 }
 
-// --- 5. 轨迹标签受开发者工具开关控制 ----------------------------------------------
+// --- 5. 轨迹固定不出现在平铺窗格 ------------------------------------------------
 
 {
   const entries = [entry('chat', () => '对话'), entry('trajectory', () => '轨迹'), entry('git-panel', () => 'Git')];
-  const off = makeSource(entries);
-  check('开发者工具关闭时不列出轨迹', off.viewTabs.read().map((tab) => tab.id).join(',') === 'chat,git-panel');
+  const { viewTabs } = makeSource(entries);
+  check('平铺窗格不列出轨迹，只保留对话与 Git', viewTabs.read().map((tab) => tab.id).join(',') === 'chat,git-panel');
 
-  const on = makeSource(entries, { developerTools: true });
-  check('开发者工具开启时列出轨迹', on.viewTabs.read().map((tab) => tab.id).join(',') === 'chat,trajectory,git-panel');
-
-  let notified = 0;
-  on.viewTabs.subscribe(() => {
-    notified += 1;
-  });
-  const before = on.viewTabs.getVersion();
-  on.notifications.devTools();
-  check('开发者工具开关变化时推进版本', on.viewTabs.getVersion() === before + 1 && notified === 1);
+  // 只有“轨迹”作为额外视图时，窗格等价于只有 Chat：整条标签栏仍然隐藏。
+  const onlyTrajectory = makeSource([entry('chat', () => '对话'), entry('trajectory', () => '轨迹')]);
+  check('只有轨迹时标签栏仍然隐藏（清单里只剩对话）', onlyTrajectory.viewTabs.read().length === 1);
+  const onlyTrajectoryPane = mountPane(onlyTrajectory.viewTabs);
+  check('只有轨迹时窗格不渲染标签栏', tabBar(onlyTrajectoryPane.instance.tree) === undefined);
 }
 
 // --- 6. 坏标签函数与缺 id 的防御 ---------------------------------------------------

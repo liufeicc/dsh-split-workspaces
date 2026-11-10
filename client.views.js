@@ -7,9 +7,12 @@
  *
  * 本块只做两件事，且都不复制任何插件自己的界面：
  *   1. 从 `conversation.view` 槽位读出当前已注册的视图清单（id + 标签），包装成
- *      一个可订阅的小数据源；注册表、语言或“开发者工具”开关变化时通知窗格重渲染；
+ *      一个可订阅的小数据源；注册表或语言变化时通知窗格重渲染；
  *   2. 生成窗格主体：在 Factory 内容上方加一条标签栏，把用户选中的视图 id 作为
  *      owner prop 传给 `conversation.session`（平台的默认视图区正是读这个 prop）。
+ *
+ * “轨迹”只在主对话里提供，平铺窗格的标签栏固定不列它：窗格本来就窄，轨迹是逐事件
+ * 调试视图，用户明确要求从平铺里去掉；主对话的轨迹不受影响。
  *
  * 关键的零影响约束：没装额外视图插件时，槽位里只有 Chat 一个视图（甚至一个都没有）。
  * 这时本块不渲染标签栏，并且仍然把 `chat`（或什么都不传）交给平台 —— 与改造前
@@ -56,7 +59,7 @@ window.__ModuleLoader__.load({
      * `useSyncExternalStore` 对“快照必须可比较”的要求；真正的清单由 `read()` 现算，
      * 因为标签文案可能随语言变化。
      *
-     * @param ctx - 插件上下文（需要 `slots` / `locale`，`configForms` 可选）。
+     * @param ctx - 插件上下文（需要 `slots` / `locale`）。
      * @returns `{ subscribe, getVersion, read }`。
      */
     function createViewTabs(ctx) {
@@ -81,39 +84,24 @@ window.__ModuleLoader__.load({
       };
       const getVersion = () => version;
 
-      /**
-       * 开发者工具开关：平台主对话用它决定是否显示“轨迹”视图。
-       *
-       * 可能拿不到这个服务（精简客户端 / 测试替身），拿不到时按 platform 的默认值
-       * `false` 处理，也就是不显示轨迹。这个判断每次读清单时现算，不缓存，避免
-       * 用户刚在设置里打开开关、标签栏却还按旧值渲染。
-       */
-      const developerToolsEnabled = () => {
-        const service = ctx.get('configForms');
-        const enabled = service?.developerTools?.enabled;
-        return enabled?.getSnapshot?.() === true;
-      };
-
       /** 现算当前可显示的视图清单，顺序沿用槽位注册表自己的顺序。 */
       const read = () => {
-        const showTrajectory = developerToolsEnabled();
         const tabs = [];
         for (const entry of ctx.slots.entries('conversation.view')) {
           const id = entry.options?.id;
           // 平台只投影带 id 的注册项；没有 id 的条目无法被 `only` 选中。
           if (id === undefined) continue;
-          // 与平台主对话 header 的过滤规则保持一致：未开启开发者工具时不显示轨迹。
-          if (!showTrajectory && id === 'trajectory') continue;
+          // 轨迹是主对话的逐事件调试视图；平铺窗格固定不列出它。
+          if (id === 'trajectory') continue;
           tabs.push({ id, label: labelOf(entry) });
         }
         return tabs;
       };
 
       /*
-       * 订阅三个会改变清单外观的来源：
+       * 订阅两个会改变清单外观的来源：
        *   - 视图注册表：装/卸插件时增删标签；
-       *   - 语言：标签函数返回的文案会变；
-       *   - 开发者工具开关（可选）：决定轨迹标签是否出现。
+       *   - 语言：标签函数返回的文案会变。
        *
        * 全部挂在本插件自己的 effect 生命周期里，插件卸载时一次清干净。
        */
@@ -123,15 +111,6 @@ window.__ModuleLoader__.load({
       }
       if (typeof ctx.locale?.subscribe === 'function') {
         disposers.push(ctx.locale.subscribe(bump));
-      }
-      if (typeof ctx.inject === 'function') {
-        const disposeInject = ctx.inject(['configForms'], (scope) => {
-          scope.effect(() => {
-            const enabled = scope.get('configForms')?.developerTools?.enabled;
-            return enabled === undefined ? undefined : enabled.subscribe(bump);
-          }, 'split-workspaces: developer-tools view tabs');
-        });
-        if (typeof disposeInject === 'function') disposers.push(disposeInject);
       }
       ctx.effect(() => () => {
         for (const dispose of disposers.splice(0)) {

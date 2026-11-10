@@ -320,6 +320,7 @@ export function createStubContext({ presets = [], respond } = {}) {
         if (params === undefined || params === null) return template;
         return template.replace(/\{(\w+)\}/g, (match, name) => (params[name] === undefined ? match : String(params[name])));
       },
+      subscribe: () => () => {},
     },
     slots: {
       inject: (_key, callback) => {
@@ -329,6 +330,13 @@ export function createStubContext({ presets = [], respond } = {}) {
         registered.push({ ...options, component });
         return () => {};
       },
+      /*
+       * 视图清单源（client.views.js）只用到这三个读接口。替身默认给空清单；
+       * 需要验证标签栏的用例在装载后替换 entries / subscribe / getVersion 即可。
+       */
+      subscribe: () => () => {},
+      entries: () => [],
+      getVersion: () => 0,
     },
     /*
      * 远端网关替身：`$mount` 记下这次挂载的描述符，测试据此断言

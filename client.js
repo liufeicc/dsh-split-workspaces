@@ -128,6 +128,7 @@ window.__ModuleLoader__.load({
       './client.graph.view.js',
       './client.menu.js',
       './client.pane.js',
+      './client.views.js',
       './client.view.js',
     ];
 
@@ -143,8 +144,8 @@ window.__ModuleLoader__.load({
         return Promise.reject(new Error('client module loader 不支持包内代码块（require.async 缺失）'));
       }
       return Promise.all(CHUNK_FILES.map((file) => require.async(file)))
-        .then(([styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, view]) => ({
-          styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, view,
+        .then(([styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view]) => ({
+          styles, dicts, model, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view,
         }));
     }
 
@@ -175,6 +176,12 @@ window.__ModuleLoader__.load({
         skill: mods.skill,
         paneSlot: PANE_SLOT,
       });
+      /*
+       * 会话视图清单：每个窗格的标签栏都从这一个源读取。它只订阅注册表 / 语言 /
+       * 开发者工具开关，不持有任何插件自己的组件；没有额外视图插件时清单里只有
+       * Chat（或为空），窗格行为与改造前一致。
+       */
+      const viewTabs = mods.views.createViewTabs(ctx);
       const view = mods.view.createView({
         css,
         cx,
@@ -183,6 +190,8 @@ window.__ModuleLoader__.load({
         menu,
         pane,
         graph: mods.graphView,
+        views: mods.views,
+        viewTabs,
       });
 
       // 样式表：同一个页面重复加载时只插一次。

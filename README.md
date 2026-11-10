@@ -18,6 +18,13 @@ that currently holds focus is marked by a brand-coloured title bar.
   reuses the shared `conversation.content` Factory (the `embedded` variant), mounted under an
   explicit `SessionProvider` binding, so each pane is a complete conversation (transcript,
   input box, streaming output).
+- **A per-pane conversation view strip**: above each pane's conversation area, the panel lists
+  every registered `conversation.view` — by default just "Chat"; with the Git panel installed it
+  becomes "Chat / Git", and with developer tools enabled there is also "Trajectory". The strip
+  only reads the framework's registry and copies no plugin UI: clicking Git renders the Git
+  plugin's own panel. Each pane picks independently and defaults to Chat; **with no extra view
+  plugins (or only Chat) the strip is not rendered at all**, so the pane behaves exactly as
+  before.
 - **The `Open directory` icon** (the folder to the right of the workspace name): clicking it
   hands **that pane's** workspace directory to the system file manager (Linux `xdg-open`,
   macOS Finder, Windows Explorer). It does not implement this machinery itself; instead it
@@ -495,7 +502,7 @@ same directory with `require.async('./client.xxx.js')`, and the host serves them
 the whole implementation.
 
 - `client.js` — entry: loads the code blocks (styles / dictionaries / model / presets /
-  menu / pane / view), registers the slot, injects the styles, registers `Alt+arrow keys` as
+  conversation views / menu / pane / view), registers the slot, injects the styles, registers `Alt+arrow keys` as
   the framework's fixed shortcut and installs its keyboard handling on the document; it also
   provides `openWorkspaceDirectory(path)` (going through
   `remote.session.openWorkspacePath`) for the pane's "Open directory" button, and
@@ -503,11 +510,15 @@ the whole implementation.
   `sessionDeleteUi` service, hands "delete this row" to that plugin's confirmation dialog,
   and on success releases every pane pinned to that session with
   `paneStore.forgetSession`.
-- `client.view.js` — board layer: `Splitter` (the splitter bar), `PaneBody` (the conversation
-  inside a pane), `SplitPanel` (renders panes and splitters from the layout tree, the panel's
+- `client.view.js` — board layer: `Splitter` (the splitter bar),
+  `SplitPanel` (renders panes and splitters from the layout tree, the panel's
   top actions, and the "on screen" marker on the board root node), `installPaneKeys` (the
   document-level `Alt+arrow keys` handling, delegating focus to the pane block's
   `focusPaneInput`).
+- `client.views.js` — the per-pane conversation view strip: reads the registered
+  `conversation.view` entries (Chat / Trajectory / Git…), passes the selected view id as the
+  owner prop of the shared `conversation.content` Factory, and renders no strip at all when
+  no extra view plugin is installed (behaviour identical to before).
 - `client.pane.js` — pane layer: `PaneFrame` (workspace title, the **open-directory button**,
   the **replace-workspace icon** — its menu contents and the `New workspace…` path — split
   menu, mode, session (**every row ends with a delete button**), close) and the session
@@ -591,6 +602,10 @@ the whole implementation.
   only that pane, the layout tree and the other panes are the same objects; the menu
   candidates and the two "nothing to pick" sentences; both the `New workspace…` path and a
   picker that will not open) (`node test/layout-contract.mjs`).
+- `test/views-contract.mjs` — offline contract tests for the per-pane view strip
+  (`node test/views-contract.mjs`): zero views / Chat-only leaves the old behaviour untouched,
+  the strip appears and switches, blank sessions hide it, a vanished view falls back to Chat,
+  and Trajectory follows the developer-tools switch.
 - `test/drag-contract.mjs` — offline contract tests for the two kinds of dragging
   (`node test/drag-contract.mjs`): resizing with a splitter (including keyboard fine-tuning
   and double-click balance), and the whole chain of **drag-to-swap on the title bar**. The
@@ -686,6 +701,7 @@ seconds):
 
 ```bash
 node test/layout-contract.mjs
+node test/views-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs
 node test/preset-contract.mjs

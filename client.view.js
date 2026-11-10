@@ -59,8 +59,10 @@ window.__ModuleLoader__.load({
      * @param deps.model - 纯模型块（布局树工具、分屏候选、`createPaneStore` 等）。
      * @param deps.menu - 菜单块（弹出菜单与菜单行）。
      * @param deps.pane - 窗格块（`PaneFrame` 与「把光标送进某个窗格输入框」的 `focusPaneInput`）。
+     * @param deps.views - 会话视图块（`createPaneBody`：带视图标签栏的窗格主体）。
+     * @param deps.viewTabs - 会话视图清单源（入口块用 `createViewTabs` 建好）。
      */
-    function createView({ css, cx, errorText, model, menu, pane, graph }) {
+    function createView({ css, cx, errorText, model, menu, pane, graph, views, viewTabs }) {
       const { Popover, MenuItem } = menu;
       // 设计模式画布：只画卡片和箭头，校验与布局都在 `client.graph.model.js` 里算好。
       const { GraphBoard } = graph;
@@ -248,23 +250,14 @@ window.__ModuleLoader__.load({
         }, h('span', { className: css.splitterLine, 'aria-hidden': true }));
       }
 
-      /** 窗格里的对话只显示 Chat 视图，避免各窗格视图不一致。 */
-      function FixedChatView(props) {
-        return props.renderSlot('conversation.session', { view: 'chat' });
-      }
-      /** 固定的 Factory 选项对象：同一个引用才不会让 Factory 每次渲染都重建。 */
-      const PANE_FACTORY_OPTIONS = { slots: { views: FixedChatView } };
-
-      /** 窗格主体：共享的 Conversation Factory，用 embedded 变体。 */
-      function PaneBody(props) {
-        const session = props.useSession((value) => value);
-        const settling = session === undefined || session.openState === 'loading';
-        return props.renderFactorySlot('conversation.content', {
-          variant: 'embedded',
-          phase: settling ? 'settling' : 'active',
-          hero: false,
-        }, PANE_FACTORY_OPTIONS);
-      }
+      /**
+       * 窗格主体：共享的 Conversation Factory，用 embedded 变体。
+       *
+       * 视图标签栏与“把选中的视图 id 传给平台”这两件事都在 `client.views.js` 里：
+       * 本块只负责把清单源交过去。没有额外视图插件时它不会渲染标签栏，窗格行为
+       * 与改造前一致。
+       */
+      const PaneBody = views.createPaneBody({ css, cx, viewTabs });
 
       /** 整块棋盘。 */
       function SplitPanel(props) {

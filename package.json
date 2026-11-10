@@ -35,6 +35,7 @@
     "client.skill.js",
     "client.menu.js",
     "client.pane.js",
+    "client.views.js",
     "client.view.js",
     "cordis.patch.yml",
     "icon.svg",

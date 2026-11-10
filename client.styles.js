@@ -73,6 +73,20 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_pane[data-active=true] .dshSplitWs_wsName{color:inherit}',
       '.dshSplitWs_pane[data-active=true] .dshSplitWs_wsPath{color:inherit;opacity:.8}',
       '.dshSplitWs_paneBody{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}',
+      // 窗格自己的会话视图标签栏。壳与内容都显式撑满：标签栏出现/消失时只有
+      // 上方多一条固定高度的条，对话内容仍然吃到剩余高度，不会因为外层多包两层
+      // div 就把高度算丢。没有额外视图插件时标签栏不渲染，壳本身只是透明布局层。
+      '.dshSplitWs_paneViewShell{flex:1;min-height:0;display:flex;flex-direction:column}',
+      '.dshSplitWs_paneViewTabs{flex:none;display:flex;align-items:center;gap:18px;padding:0 12px;border-bottom:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);overflow-x:auto;overflow-y:hidden;scrollbar-width:none}',
+      '.dshSplitWs_paneViewTabs::-webkit-scrollbar{display:none}',
+      '.dshSplitWs_paneViewTab{flex:none;position:relative;padding:6px 0 8px;border:0;border-radius:0;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;font-weight:500;line-height:16px;white-space:nowrap;cursor:pointer}',
+      '.dshSplitWs_paneViewTab:hover{color:var(--dsw-alias-label-primary)}',
+      // 选中态与主对话 header 的标签一致：底部一条 2px 的主题强调色。
+      '.dshSplitWs_paneViewTab::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:2px;background:transparent}',
+      '.dshSplitWs_paneViewTabActive{color:var(--dsw-alias-state-business-primary)}',
+      '.dshSplitWs_paneViewTabActive::after{background:var(--dsw-alias-state-business-primary)}',
+      '.dshSplitWs_paneViewTab:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px;border-radius:4px}',
+      '.dshSplitWs_paneViewContent{flex:1;min-height:0;display:flex;flex-direction:column}',
       '.dshSplitWs_paneEmpty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}',
       '.dshSplitWs_paneError{flex:none;padding:6px 12px;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary);border-bottom:.5px solid var(--dsw-alias-border-l1)}',
       '.dshSplitWs_button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:.5px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;cursor:pointer}',
@@ -235,6 +249,11 @@ window.__ModuleLoader__.load({
       wsName: 'dshSplitWs_wsName',
       wsPath: 'dshSplitWs_wsPath',
       paneBody: 'dshSplitWs_paneBody',
+      paneViewShell: 'dshSplitWs_paneViewShell',
+      paneViewTabs: 'dshSplitWs_paneViewTabs',
+      paneViewTab: 'dshSplitWs_paneViewTab',
+      paneViewTabActive: 'dshSplitWs_paneViewTabActive',
+      paneViewContent: 'dshSplitWs_paneViewContent',
       paneEmpty: 'dshSplitWs_paneEmpty',
       paneError: 'dshSplitWs_paneError',
       button: 'dshSplitWs_button',

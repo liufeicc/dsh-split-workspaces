@@ -14,6 +14,11 @@
   自己的标题栏（工作区名与路径、`打开目录` 图标、`分屏` 图标、模式选择、MCP 开关、会话选择、关闭），
   窗格内部复用共享的 `conversation.content` Factory（`embedded` 变体），挂在显式的
   `SessionProvider` 绑定下，因此每个窗格都是一个完整对话（记录、输入框、流式输出）。
+- **每格的会话视图标签栏**：每个窗格的对话区上方会自动列出当前注册的 `conversation.view`
+  —— 默认是“对话”；装了 Git 面板就是“对话 / Git”，开发者选项开启时还会多一个“轨迹”。
+  标签栏只读框架的注册表，不复制任何插件自己的界面；点 Git 就是 Git 插件原本的面板。
+  每格独立选择、默认对话；**没装额外视图插件（或只有 Chat）时不渲染标签栏**，
+  窗格行为与改造前完全一致。
 - **`打开目录` 图标**（工作区名右边那个文件夹）：点它把**这一格**的工作区目录交给
   系统文件管理器（Linux 的 `xdg-open`、macOS 的 Finder、Windows 的资源管理器）。
   它没有自己实现这套东西，而是复用已经装好的 Session 远端命名空间
@@ -458,15 +463,18 @@ A 的模型多了一个 `dispatch_task` 工具：
 入口用 `require.async('./client.xxx.js')` 请求同目录文件，宿主按
 `/plugins/<包名>/client.xxx.js?rev=<版本>` 提供，因此入口不必背着全部实现。
 
-- `client.js` —— 入口：装载各代码块（样式 / 词典 / 模型 / 模式 / MCP / 菜单 / 窗格 / 视图）、
+- `client.js` —— 入口：装载各代码块（样式 / 词典 / 模型 / 模式 / MCP / 会话视图 / 菜单 / 窗格 / 视图）、
   注册插槽、注入样式，把 `Alt+方向键` 登记成框架的固定快捷键，并在文档上装上它的键盘处理；
   另外提供 `openWorkspaceDirectory(path)`（走 `remote.session.openWorkspacePath`）
   给窗格的「打开目录」按钮，以及 `requestSessionDelete(sessionId, displayTitle)` ——
   惰性解析 `dsh-session-delete` 的 `sessionDeleteUi` 服务，把「删除这一行」转交给它的确认弹窗，
   并在删成功后用 `paneStore.forgetSession` 松开所有钉着这个会话的窗格。
-- `client.view.js` —— 棋盘层：`Splitter`（分隔条）、`PaneBody`（窗格里的对话）、
+- `client.view.js` —— 棋盘层：`Splitter`（分隔条）、
   `SplitPanel`（按布局树渲染窗格与分隔条、面板顶部动作、棋盘根节点上的「在屏幕上」标记）、
   `installPaneKeys`（文档级的 `Alt+方向键` 处理，聚焦交给窗格块的 `focusPaneInput`）。
+- `client.views.js` —— 每格自己的会话视图标签栏：从框架的 `conversation.view` 槽位读清单
+  （对话 / 轨迹 / Git…），把选中的视图 id 作为 owner prop 交给共享的 `conversation.content`
+  Factory；没有额外视图插件时不渲染标签栏，窗格行为与改造前一致。
 - `client.pane.js` —— 窗格层：`PaneFrame`（工作区标题、**打开目录按钮**、**替换工作区图标**
   （菜单内容与「新建工作区…」那条路）、分屏菜单、模式、会话（每行末尾带**删除按钮**）、关闭）
   与它持有的会话引用；
@@ -523,6 +531,9 @@ A 的模型多了一个 `dispatch_task` 工具：
   **替换工作区**（存储只改那一格、布局树与别的窗格是同一个对象；菜单候选与两条「没得选」
   的措辞；`新建工作区…` 与选择器打不开两条路）的离线契约测试
   （`node test/layout-contract.mjs`）。
+- `test/views-contract.mjs` —— 窗格会话视图标签栏的离线契约测试
+  （`node test/views-contract.mjs`）：零视图 / 只有 Chat 时对原行为零影响、
+  标签栏出现与切换、空白会话隐藏、视图消失后的回退、轨迹受开发者工具开关控制。
 - `test/drag-contract.mjs` —— 两种拖动的离线契约测试（`node test/drag-contract.mjs`）：
   分隔条改尺寸（含键盘微调与双击均分），以及**标题栏拖动交换位置**的整条链路。
   后者只用一个假 `document` 替掉 `elementFromPoint` 与 `querySelector` 两个浏览器专属答案，
@@ -618,6 +629,7 @@ touch client.js
 
 ```bash
 node test/layout-contract.mjs
+node test/views-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs
 node test/preset-contract.mjs

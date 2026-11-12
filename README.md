@@ -189,8 +189,8 @@ that currently holds focus is marked by a brand-coloured title bar.
   and connects them with arrows into a directed tree — the graph *is* the authorization. Sessions
   with outgoing arrows get an agent-scoped `dispatch_task` tool and can hand work to another
   session, one target or several in parallel, with `wait: all | any | none`; each result also
-  lists the remaining idle targets as a reminder to keep distributing. See the dedicated
-  section below.
+  lists the remaining idle targets as a reminder to keep distributing, and a delivered task must
+  be reviewed before that target can take a new one. See the dedicated section below.
 - The `Add workspace` dropdown lists "workspaces that are not tiled yet" and also supports
   **creating** a workspace from the folder picker (`uiWorkspace.pickDirectory()`, or through
   the preload bridge under Desktop). The same "pick a directory → register a workspace"
@@ -222,6 +222,7 @@ the global one) whose description lists the available targets.
 | `task` | Task body. The target cannot see A's history, so background **and verifiable acceptance criteria** belong here. Omit it when waiting for a previous dispatch. When the target is already running, a `task` means a **correction**: stop its current round, resend the correction as a fresh user message, and restart the target (no new goal) |
 | `targets` | Array of targets. Each item may be an index, full title, title fragment, or session id. Required when more than one target is available; omitted with no `task`, it means "keep waiting on everything still running" |
 | `wait` | `all` (default) / `any` (return on the first deliverable) / `none` (do not wait) |
+| `reviews` | Review the previous delivery: array of `{ target, verdict: accepted \| rejected, note? }`. Mutually exclusive with `task` — review and dispatch are separate calls; `rejected` requires a `note`. See "After delivery" below |
 
 The call returns a batch: `{ status, results, stillRunning, note }`, where `results` holds one
 `{ target, status, deliverable, reply, progress, interruptedBy, note }` per target in request
@@ -242,6 +243,29 @@ a background watcher that records the conclusion. Because a dispatch must not be
 owner is nudged once per turn at `agent/turn-stopping` — injected into the next step, so the same
 turn continues one more step and collects the result instead of requiring user input.
 
+### After delivery: review before the next dispatch
+
+Once a target **really delivers** (`deliverable: true`), it enters "awaiting review". Without a
+recorded review verdict, the next dispatch **to the same target** is rejected outright; other
+targets are unaffected — the gate is per target, not global.
+
+Review is a separate call with `reviews` (an array):
+
+| Field | Meaning |
+|---|---|
+| `target` | Target to review: index, title fragment, or session id |
+| `verdict` | `accepted` or `rejected` |
+| `note` | Review evidence; **required when rejecting** — name the missing evidence and what you expect |
+
+- `accepted` clears the pending review; the target can take a new task.
+- `rejected` also clears it; follow up with `dispatch_task` + `task` carrying the specific gaps
+  (a correction if the target is still running). A rejection without `note` is refused.
+- Review and dispatch must be **separate calls**: sending `task` together with `reviews` is rejected.
+- Only `complete` counts as a delivery; `failed` / `blocked` / `paused` / `interrupted` do not
+  require review and do not block the next dispatch.
+- The pending-review state lives in Host memory and is cleared on restart: a review is about the
+  conclusion the model just saw, and forcing one after a restart would degrade into a blind checkbox.
+
 ### Boundaries worth knowing
 
 - **Multiple targets run in parallel**, each with its own waiter; results come back in request
@@ -253,6 +277,10 @@ turn continues one more step and collects the result instead of requiring user i
   prompt cache), so each dispatch/batch result appends the **other idle targets** — excluding
   this batch, targets still running, and targets whose earlier result is uncollected. A sees the
   remaining capacity in the same turn instead of stopping after one dispatch.
+- **Review before the next dispatch.** A real delivery puts the target in "awaiting review"; a
+  new dispatch to it is refused until a verdict is recorded. This is per target, so other idle
+  targets keep working. Both verdicts clear the state; `rejected` requires a `note`. The state is
+  memory-only and resets with the Host.
 - **One task per target at a time.** A `task` sent to a running target is a **correction**, not a
   second task: it first disarms automatic continuation, stops the current round (the same
   underlying action as the UI stop button: abort the turn, keep the inbox), resubmits the

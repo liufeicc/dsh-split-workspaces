@@ -13,7 +13,7 @@
  */
 
 import { MAX_BATCH_TARGETS, MAX_TASK_CHARS, TOOL_NAME } from './host.constants.js';
-import { normalizeWait, runBatch } from './host.batch.js';
+import { normalizeWait, runBatch, runReviews } from './host.batch.js';
 import { adoptOrphanGoals } from './host.watch.js';
 import { describeCandidates, matchBinding } from './host.message.js';
 
@@ -170,6 +170,14 @@ export function dispatchDescription(service, ownerId) {
     '不达标就**带着具体缺口重新派**：点名哪一条没有证据、期望看到什么。',
     '不要笼统地说「再做一遍」—— 那只会换来同一次偷懒。只有确实达标了，才把结论转述给用户。',
     '',
+    '## 先审核，再派新任务',
+    '每单**真正交付**（deliverable: true）之后，这个目标进入「待审核」：不记录审核结论，就不能再给它派新任务，',
+    '工具会直接拒绝。审核用 reviews 参数记录，审核与派单**必须分成两次调用**：',
+    '- `reviews: [{ target: "1", verdict: "accepted", note: "验收依据…" }]` —— 通过，之后可以派新任务；',
+    '- `reviews: [{ target: "1", verdict: "rejected", note: "缺哪条证据、期望看到什么" }]` —— 驳回，',
+    '  之后用 dispatch_task 带 task 把具体缺口发回去（对方正在跑时就是纠正）。驳回必须写 note。',
+    'failed / blocked / interrupted 不是交付，不需要审核。审核按目标记：审了 B 只放行 B，不影响 C、D。',
+    '',
     '## 过程稿与纠正',
     '目标还在跑时，results 里的 progress 是**过程稿**，deliverable 为 false：它可能被后面推翻，',
     '不能当成交付结论写进你的输出，也不能据此宣布完成。',
@@ -272,6 +280,25 @@ export function createDispatchTool(service, ownerId) {
           description: '这一批什么时候返回。all（默认）等全部有结论；any 第一个有结论就返回；'
             + 'none 不等 —— 给了 task 就是派完就走，没给 task 就是只看一眼状态。',
         },
+        reviews: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              target: { type: 'string', description: '要审核的目标：序号、标题或会话 id。' },
+              verdict: {
+                type: 'string',
+                enum: ['accepted', 'rejected'],
+                description: 'accepted = 验收通过；rejected = 驳回。',
+              },
+              note: { type: 'string', description: '审核依据；驳回时必填，写清缺哪条证据、期望看到什么。' },
+            },
+            required: ['target', 'verdict'],
+            additionalProperties: false,
+          },
+          description: '审核上一单的交付结论（每项 target + verdict + note）。与 task 互斥，必须单独调用；'
+            + '只有 deliverable: true 的上一单需要审，未审核前不能再给同一个目标派新任务。',
+        },
       },
       additionalProperties: false,
     },
@@ -308,12 +335,15 @@ export function createDispatchTool(service, ownerId) {
           + (value.stillRunning > 0 ? '（还有 ' + String(value.stillRunning) + ' 个在做）' : '');
         const lines = [head];
         for (const item of value.results) {
-          const flag = item.deliverable === true
-            ? '已交付'
-            : (item.interruptedBy === 'user' ? '用户手动停止，未交付' : '未交付');
+          let flag = '未交付';
+          if (item.status === 'accepted') flag = '审核通过';
+          else if (item.status === 'rejected') flag = '审核驳回';
+          else if (item.deliverable === true) flag = '已交付';
+          else if (item.interruptedBy === 'user') flag = '用户手动停止，未交付';
           lines.push('', '—— ' + item.target + '：' + item.status + '（' + flag + '）');
           if (typeof item.progress === 'string' && item.progress !== '') lines.push(item.progress);
-          else lines.push(item.reply === '' ? '（没有可读的结论）' : item.reply);
+          else if (item.reply !== '') lines.push(item.reply);
+          else if (item.status !== 'accepted' && item.status !== 'rejected') lines.push('（没有可读的结论）');
           if (item.note !== '') lines.push(item.note);
         }
         if (value.note !== '') lines.push('', value.note);
@@ -332,6 +362,21 @@ export function createDispatchTool(service, ownerId) {
 
       const bindings = service.bindings.get(ownerId) ?? [];
       const hasTask = task !== '';
+      /*
+       * 审核走单独的一条路：带 reviews 时不允许再带 task/targets，强制「先审后派」。
+       * 不把两件事揉进一次调用，审核记录才是一条明确的决策，而不是派单前的勾选。
+       */
+      const rawReviews = Array.isArray(args?.reviews) ? args.reviews : [];
+      if (rawReviews.length > 0) {
+        if (hasTask) throw new Error('审核与派单要分开调用：带 reviews 时不要带 task。');
+        if (Array.isArray(args?.targets) && args.targets.length > 0) {
+          throw new Error('审核用 reviews 里的 target 指名目标，不要同时给 targets。');
+        }
+        if (rawReviews.length > MAX_BATCH_TARGETS) {
+          throw new Error('一次最多审核 ' + MAX_BATCH_TARGETS + ' 个目标，请分几批。');
+        }
+        return runReviews({ service, ownerId, bindings, reviews: rawReviews });
+      }
       /*
        * 续等（不给 task）时先认领一次「可能因 Host 重启而丢掉的记录」。
        *

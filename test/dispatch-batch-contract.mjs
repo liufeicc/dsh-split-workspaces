@@ -928,4 +928,178 @@ const threeTargets = () => [
     && value.note.includes('丁会话'), value.note);
 }
 
+// ────────────────────── 交付后必须先审核，才能再派 ──────────────────────
+
+/*
+ * 用户要求：委派出去的任务要审核过，才能给同一个目标派新任务。
+ * 拦截按目标进行 —— 乙的单没审，只挡乙；丙、丁照常接活。
+ */
+{
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const first = tool.execute(
+    { task: '第一单', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '第一单完成，证据在 a.md'));
+  const value = await first;
+  check('交付后乙进入待审核', service.reviewOf('s-a', 's-b') !== undefined);
+  check('交付结果本身是 deliverable', value.results[0].deliverable === true, JSON.stringify(value));
+
+  let message = null;
+  try {
+    await tool.execute(
+      { task: '第二单', targets: ['乙会话'] },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    message = error.message;
+  }
+  check('未审核就再派给同一个目标会被拒绝',
+    typeof message === 'string' && message.includes('还没审核') && message.includes('reviews'), message);
+  check('拒绝时附上上一单结论的开头', typeof message === 'string' && message.includes('证据在 a.md'), message);
+
+  const other = await tool.execute(
+    { task: '给丙的活', targets: ['丙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('未审核不挡其他目标', other.status === 'dispatched', JSON.stringify(other));
+
+  const reviewed = await tool.execute(
+    { reviews: [{ target: '乙会话', verdict: 'accepted', note: 'a.md 证据齐全' }] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('审核通过返回 reviewed',
+    reviewed.status === 'reviewed' && reviewed.results[0].status === 'accepted', JSON.stringify(reviewed));
+  check('审核通过后待审核状态清掉', service.reviewOf('s-a', 's-b') === undefined);
+
+  const second = await tool.execute(
+    { task: '第二单', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('审核通过后可以再派', second.status === 'dispatched', JSON.stringify(second));
+}
+
+{
+  /*
+   * 驳回必须写清缺口；写清了就清掉待审核、放行重派。
+   * 另外两条边界：审核与派单不能混在一次调用；没交付过的目标不能审。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const first = tool.execute(
+    { task: '第一单', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '做完了'));
+  await first;
+
+  let message = null;
+  try {
+    await tool.execute(
+      { reviews: [{ target: '乙会话', verdict: 'rejected' }] },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    message = error.message;
+  }
+  check('驳回不写 note 会被拒绝', typeof message === 'string' && message.includes('驳回必须写清缺什么'), message);
+  check('校验失败不会把待审核状态清掉', service.reviewOf('s-a', 's-b') !== undefined);
+
+  const reviewed = await tool.execute(
+    { reviews: [{ target: '乙会话', verdict: 'rejected', note: '缺 a.md 的像素对比' }] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('驳回记得下来', reviewed.status === 'reviewed' && reviewed.results[0].status === 'rejected');
+  check('驳回后放行重派', service.reviewOf('s-a', 's-b') === undefined);
+
+  let mixed = null;
+  try {
+    await tool.execute(
+      { task: '新活', reviews: [{ target: '乙会话', verdict: 'accepted' }] },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    mixed = error.message;
+  }
+  check('审核与派单不能混在一次调用', typeof mixed === 'string' && mixed.includes('分开调用'), mixed);
+
+  let none = null;
+  try {
+    await tool.execute(
+      { reviews: [{ target: '丙会话', verdict: 'accepted' }] },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    none = error.message;
+  }
+  check('没有待审核的交付时审核会被拒绝', typeof none === 'string' && none.includes('没有待审核'), none);
+}
+
+{
+  /*
+   * 只有真正交付（complete）才需要审核；受阻、失败、中断都算「没交付」，
+   * 不该拿审核去挡下一单。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const running = tool.execute(
+    { task: '会受阻的活', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-b', 'blocked', '卡在权限');
+  emit('s-b', assistantEvent(1, '做不下去了'));
+  const value = await running;
+  check('受阻结果不算交付', value.results[0].deliverable === false, JSON.stringify(value));
+
+  const next = await tool.execute(
+    { task: '换个活', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('没交付就不需要审核，可直接再派', next.status === 'dispatched', JSON.stringify(next));
+}
+
+{
+  /*
+   * 「派完就走」的结论是在领取那一刻才交到模型手里的 —— 审核状态也必须晚到那一刻，
+   * 不能因为后台做完了就提前把目标锁住。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const dispatched = await tool.execute(
+    { task: '后台跑', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('派完就走先不要求审核', service.reviewOf('s-a', 's-b') === undefined, JSON.stringify(dispatched));
+
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '后台这单做完了'));
+  await settle();
+  const taken = await tool.execute(
+    { wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('领取交付结论后才进入待审核', service.reviewOf('s-a', 's-b') !== undefined, JSON.stringify(taken));
+
+  // 撤掉箭头 = 撤回授权，待审核记录也一起清掉，免得留下审不了、也拦不住的脏状态。
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [] });
+  check('撤掉箭头会清掉待审核记录', service.reviewOf('s-a', 's-b') === undefined);
+}
+
 report();

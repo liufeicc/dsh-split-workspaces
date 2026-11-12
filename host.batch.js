@@ -51,7 +51,7 @@
  */
 
 import { STATUS_INTERRUPTED, WAIT_ALL, WAIT_ANY, WAIT_NONE } from './host.constants.js';
-import { errorText, wrapTask } from './host.message.js';
+import { describeCandidates, errorText, matchBinding, wrapTask } from './host.message.js';
 import { redirectBatch } from './host.redirect.js';
 import {
   deliverAndWait,
@@ -316,15 +316,16 @@ export function batchStatus(results, aborted) {
  *   - 没给 task 却选中一个从没派过的目标（`idle`）。
  * 「目标正在跑」不再是冲突 —— 带 task 的调用会被当成纠正（先停当前轮再重新提交）。
  *
- * 三种都**直接拒绝**而不是猜：猜错的代价是模型以为事情已经办好了，而实际上没有。
+ * 四种都**直接拒绝**而不是猜：猜错的代价是模型以为事情已经办好了，而实际上没有。
  *
- * @param conflicts - `[{ binding, why }]`，`why` 是 `'interrupted'` / `'uncollected'` / `'idle'`。
+ * @param conflicts - `[{ binding, why, review? }]`，`why` 是 `'interrupted'` / `'uncollected'` / `'idle'` / `'review'`。
  * @returns 一整段可直接抛给模型的话。
  */
 function explainConflicts(conflicts) {
   const interrupted = conflicts.filter((item) => item.why === 'interrupted').map((item) => '「' + item.binding.label + '」');
   const uncollected = conflicts.filter((item) => item.why === 'uncollected').map((item) => '「' + item.binding.label + '」');
   const idle = conflicts.filter((item) => item.why === 'idle').map((item) => '「' + item.binding.label + '」');
+  const review = conflicts.filter((item) => item.why === 'review');
   const lines = [];
   if (interrupted.length > 0) {
     lines.push(
@@ -337,6 +338,17 @@ function explainConflicts(conflicts) {
       '这些目标上一次派单的**结果还没取**：' + uncollected.join('、') + '。',
       '先省略 task 把它们取回来（结果只会交付一次），再派新的。',
     );
+  }
+  if (review.length > 0) {
+    lines.push(
+      '这些目标上一单已经交付，但还没审核：' + review.map((item) => '「' + item.binding.label + '」').join('、') + '。',
+      '先对照验收标准自己复核，再用 dispatch_task 带 reviews 记录审核结论（accepted / rejected + 理由）；',
+      '审核之后才能给同一个目标派新任务。',
+    );
+    for (const item of review) {
+      const excerpt = typeof item.review?.excerpt === 'string' ? item.review.excerpt.trim() : '';
+      if (excerpt !== '') lines.push('「' + item.binding.label + '」的结论开头：' + excerpt);
+    }
   }
   if (idle.length > 0) {
     lines.push(
@@ -459,7 +471,17 @@ export async function runBatch(options) {
     const key = ownerId + '\u0000' + binding.id;
     const pending = service.pending.get(key);
     if (task !== '') {
-      if (pending === undefined) fresh.push({ binding, key });
+      if (pending === undefined) {
+        /*
+         * 上一单交付了、还没审核：这一单不能派。
+         *
+         * 与「结果没取」的区别：结果已经交给模型看过了，缺的是**验收动作**。按目标拦，
+         * 只堵这一个 worker；其他空闲目标照常可以接活。
+         */
+        const review = service.reviewOf(ownerId, binding.id);
+        if (review === undefined) fresh.push({ binding, key });
+        else conflicts.push({ binding, why: 'review', review });
+      }
       // 有结论却没收 = 「结果还没取」，与「还在跑」是两回事，得分开说。
       else if (pending.settled !== null && pending.settled !== undefined) {
         conflicts.push({
@@ -577,7 +599,9 @@ export async function runBatch(options) {
         // 有结论了就交付并结清：领取一次之后不再重复给，避免同一段结论反复进上下文。
         const settled = entry.settled;
         service.forget(key);
-        byId.set(binding.id, shapeResult(binding.label, settled, entry.replaced));
+        const shaped = shapeResult(binding.label, settled, entry.replaced);
+        if (shaped.deliverable === true) service.markReviewNeeded(ownerId, binding, shaped);
+        byId.set(binding.id, shaped);
       } else {
         byId.set(binding.id, {
           target: binding.label,
@@ -710,7 +734,14 @@ export async function runBatch(options) {
       // 还在跑就留着 pending，下一轮接着等；有结论了就结清（并掐掉后台监视）。
       if (isTerminalStatus(outcome.status)) service.forget(item.key);
     }
-    byId.set(item.binding.id, shapeResult(item.binding.label, outcome, record === undefined || record === null ? null : record.replaced));
+    const shaped = shapeResult(
+      item.binding.label,
+      outcome,
+      record === undefined || record === null ? null : record.replaced,
+    );
+    // 真正交付的结论进入「待审核」：同一个目标下一次派单必须先过这一关。
+    if (shaped.deliverable === true) service.markReviewNeeded(ownerId, item.binding, shaped);
+    byId.set(item.binding.id, shaped);
   }
   for (const failure of failures) {
     byId.set(failure.binding.id, {
@@ -769,6 +800,80 @@ export async function runBatch(options) {
     if (hint !== '') note = note === '' ? hint : note + '\n\n' + hint;
   }
   return { status, results, stillRunning, note };
+}
+
+/**
+ * 记录一次审核（`dispatch_task` 的 `reviews` 参数）。
+ *
+ * 审核按目标进行：
+ *   - 只有**真的交付过**（deliverable: true）且还没审核的目标才能审；
+ *   - 通过或驳回都会清掉待审核状态 —— 驳回之后就能带着缺口重派；
+ *   - 驳回必须写清缺什么，否则重派时还是同一句「再做一遍」。
+ *
+ * 先整批校验、再整批落账：任何一项不合法都不改动已审状态，避免「批里错一个、
+ * 前面几个已经被清掉」的半截状态。
+ *
+ * @param options.service - 绑定表（读写待审核记录）。
+ * @param options.ownerId - 发起方会话 id。
+ * @param options.bindings - 这个会话可派的目标。
+ * @param options.reviews - 模型给的数组 `[{ target, verdict, note? }]`。
+ * @returns `{ status: 'reviewed', results, stillRunning: 0, note }`。
+ */
+export function runReviews(options) {
+  const { service, ownerId, bindings, reviews } = options;
+  const plan = [];
+  const seen = new Set();
+  for (const raw of reviews) {
+    const targetText = typeof raw?.target === 'string' ? raw.target.trim() : '';
+    if (targetText === '') throw new Error('reviews 里每一项都要给 target（序号、标题或会话 id）。');
+    const binding = matchBinding(bindings, targetText);
+    if (binding === null) {
+      throw new Error(
+        '没认出要审核哪个目标：' + targetText + '。当前可派的是：\n' + describeCandidates(bindings),
+      );
+    }
+    if (seen.has(binding.id)) throw new Error('同一个目标一次只能审一次：「' + binding.label + '」。');
+    seen.add(binding.id);
+    const verdict = raw?.verdict;
+    if (verdict !== 'accepted' && verdict !== 'rejected') {
+      throw new Error('reviews 里的 verdict 只能是 accepted 或 rejected。');
+    }
+    const note = typeof raw?.note === 'string' ? raw.note.trim() : '';
+    if (verdict === 'rejected' && note === '') {
+      throw new Error('驳回必须写清缺什么（note），否则重派时对方还是不知道要补哪一条。');
+    }
+    if (service.reviewOf(ownerId, binding.id) === undefined) {
+      throw new Error(
+        '「' + binding.label + '」没有待审核的交付：只有上一单真的交付了（deliverable: true）才需要审核；'
+        + 'failed / blocked / interrupted 不需要。',
+      );
+    }
+    plan.push({ binding, verdict, note });
+  }
+  if (plan.length === 0) throw new Error('reviews 是空的：至少给一项 { target, verdict }。');
+
+  const results = [];
+  for (const item of plan) {
+    service.takeReview(ownerId, item.binding.id);
+    results.push({
+      target: item.binding.label,
+      status: item.verdict,
+      deliverable: false,
+      reply: '',
+      progress: '',
+      interruptedBy: '',
+      note: item.verdict === 'accepted'
+        ? '审核通过。现在可以给这个目标派新任务。'
+        : '已记录驳回。用 dispatch_task 带 task 把具体缺口发回去'
+          + (item.note === '' ? '。' : '：' + item.note),
+    });
+  }
+  return {
+    status: 'reviewed',
+    results,
+    stillRunning: 0,
+    note: '审核已记录。通过的目标可以派新任务；驳回的目标请带着 note 里的具体缺口重派。',
+  };
 }
 
 /** `wait` 参数的取值归一（模型给别的值时退回默认的 `all`）。 */

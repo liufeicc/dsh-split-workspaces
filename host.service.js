@@ -56,6 +56,17 @@ export class PaneDispatchService {
      */
     this.pending = new Map();
     /**
+     * 已经交付、还没审核的单子：`「owner\u0000target」 → { target, status, excerpt, at }`。
+     *
+     * 为什么要单独存：结论一旦被取走，`pending` 里那条记录就删了；而「验收」是交付之后
+     * 的下一道闸 —— 没有这份状态，主会话派完一个立刻给同一个目标塞下一单，上一单的
+     * 结论就没人看了。按目标记，只拦同一个 worker，不拖累其他空闲目标。
+     *
+     * 只活在内存里：Host 重启后清零。审核是模型对「它刚看到的结论」做的动作；
+     * 重启后结论已不在上下文里，强行要求审核只会退化成空勾选。
+     */
+    this.reviews = new Map();
+    /**
      * 已经结清过的派单（`ownerId\u0000targetId`）。
      *
      * 只用来挡住「重启认领」的误判：正常领取之后 pending 会空，但目标上的 goal 还在，
@@ -170,6 +181,14 @@ export class PaneDispatchService {
     for (const key of [...this.pending.keys()]) {
       const [pendingOwner, target] = key.split('\u0000');
       if (pendingOwner === owner && !kept.has(target)) this.forget(key);
+    }
+    /*
+     * 撤箭头同样撤回「上一单待审核」：这个目标已经不该再从这个会话接活了，
+     * 留一条审不了、又拦不住（因为不再可派）的记录只会让状态越积越脏。
+     */
+    for (const key of [...this.reviews.keys()]) {
+      const [reviewOwner, target] = key.split('\u0000');
+      if (reviewOwner === owner && !kept.has(target)) this.reviews.delete(key);
     }
     // 每次改动都落盘：箭头是人工一条条画的，频率极低，不值得为它做防抖。
     this.saved = saveStore(this.snapshotOwners());
@@ -310,6 +329,51 @@ export class PaneDispatchService {
     return list;
   }
 
+  /**
+   * 记一条「已交付、待审核」。
+   *
+   * 只留结论开头一小段：未审核时要用它提醒主会话「你还有哪一单没验收」，但不能把
+   * 整篇结论再灌一次上下文。
+   *
+   * @param ownerId - 发起方会话 id。
+   * @param binding - 目标绑定 `{ id, label }`。
+   * @param outcome - 交付结果 `{ status, reply }`。
+   */
+  markReviewNeeded(ownerId, binding, outcome) {
+    const reply = typeof outcome?.reply === 'string' ? outcome.reply : '';
+    this.reviews.set(ownerId + '\u0000' + binding.id, {
+      target: binding.label,
+      status: typeof outcome?.status === 'string' ? outcome.status : 'complete',
+      excerpt: reply.length > 240 ? reply.slice(0, 240) + '…' : reply,
+      at: Date.now(),
+    });
+  }
+
+  /**
+   * 某个目标有没有待审核的交付。
+   *
+   * @param ownerId - 发起方会话 id。
+   * @param targetId - 目标会话 id。
+   * @returns 记录；没有时 undefined。
+   */
+  reviewOf(ownerId, targetId) {
+    return this.reviews.get(ownerId + '\u0000' + targetId);
+  }
+
+  /**
+   * 取走待审核记录（审核通过或驳回都算审过）。
+   *
+   * @param ownerId - 发起方会话 id。
+   * @param targetId - 目标会话 id。
+   * @returns 被取走的记录；没有时 undefined。
+   */
+  takeReview(ownerId, targetId) {
+    const key = ownerId + '\u0000' + targetId;
+    const entry = this.reviews.get(key);
+    this.reviews.delete(key);
+    return entry;
+  }
+
   /** 插件卸载时清空，避免热重载留下上一份绑定。 */
   clear() {
     for (const key of [...this.pending.keys()]) this.forget(key);
@@ -317,5 +381,6 @@ export class PaneDispatchService {
     this.labels.clear();
     this.concluded.clear();
     this.adopting.clear();
+    this.reviews.clear();
   }
 }

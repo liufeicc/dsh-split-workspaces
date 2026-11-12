@@ -1,11 +1,13 @@
 /**
- * 多工作区平铺 —— 委派绑定表的落盘与读回。
+ * 多工作区平铺 —— 委派绑定表与「待审核」记录的落盘与读回。
  *
  * 委派关系（「谁可以把任务派给谁」）是**部署级**的事实，不是某个浏览器的偏好，
- * 所以必须存在 Host 上。这里负责两件事：
+ * 所以必须存在 Host 上。待审核记录同理：它记的是「上一单交付了、还没验收」，
+ * Host 重启后这条账不能凭空消失（结论留在目标会话的历史里，仍然可以回去复核）。
+ * 这里负责两件事：
  *
- *   1. 把内存里的绑定表写成磁盘上的 JSON；
- *   2. 启动时把它读回来，读不懂就当作空表。
+ *   1. 把内存里的绑定表、待审核记录写成磁盘上的 JSON；
+ *   2. 启动时把它们读回来，读不懂就当作空表。
  *
  * 两个边界值得记住：
  *   - `makeTarget` 是这个「{ id, label, note? }」形状的唯一构造点，四处构造只要有一处
@@ -110,6 +112,72 @@ export function saveStore(owners) {
     mkdirSync(dirname(file), { recursive: true });
     const temp = file + '.tmp-' + process.pid;
     writeFileSync(temp, JSON.stringify({ version: STORE_VERSION, owners }, null, 2), 'utf8');
+    renameSync(temp, file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 「待审核」记录的落盘位置。与绑定表分开：坏了只丢审核账，不会连箭头一起丢。 */
+function reviewStorePath() {
+  return join(dshHome(), 'storages', 'pane_dispatch_reviews.json');
+}
+
+/**
+ * 从磁盘读回「待审核」记录。
+ *
+ * 与绑定表一样：文件缺失、JSON 坏了、版本对不上都当作空表 —— 丢的是「还没验收」这条
+ * 提醒，下一次交付会重新记。读不懂时让插件加载失败才是更糟的取舍。
+ *
+ * @returns `{ entries: Array<{ owner, target, label, status, excerpt, at }> }`。
+ */
+export function loadReviews() {
+  const empty = { version: STORE_VERSION, entries: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(reviewStorePath(), 'utf8'));
+  } catch {
+    return empty;
+  }
+  if (parsed === null || typeof parsed !== 'object') return empty;
+  if (parsed.version !== STORE_VERSION) return empty;
+  const entries = [];
+  const seen = new Set();
+  for (const row of Array.isArray(parsed.entries) ? parsed.entries : []) {
+    if (row === null || typeof row !== 'object') continue;
+    const owner = typeof row.owner === 'string' ? row.owner.trim() : '';
+    const target = typeof row.target === 'string' ? row.target.trim() : '';
+    if (owner === '' || target === '' || owner === target) continue;
+    const key = owner + '\u0000' + target;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push({
+      owner,
+      target,
+      label: typeof row.label === 'string' && row.label !== '' ? row.label : target,
+      status: typeof row.status === 'string' && row.status !== '' ? row.status : 'complete',
+      excerpt: typeof row.excerpt === 'string' ? row.excerpt.slice(0, 1000) : '',
+      at: typeof row.at === 'number' && Number.isFinite(row.at) ? row.at : 0,
+    });
+  }
+  return { version: STORE_VERSION, entries };
+}
+
+/**
+ * 把「待审核」记录写回磁盘。
+ *
+ * 与绑定表同样的原子替换；频率也低（每单交付/审核各一次），不做防抖。
+ *
+ * @param entries - `[{ owner, target, label, status, excerpt, at }]`。
+ * @returns 是否写成功；失败**不抛**（审核主流程不该因为落盘失败而中断）。
+ */
+export function saveReviews(entries) {
+  const file = reviewStorePath();
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const temp = file + '.tmp-' + process.pid;
+    writeFileSync(temp, JSON.stringify({ version: STORE_VERSION, entries }, null, 2), 'utf8');
     renameSync(temp, file);
     return true;
   } catch {

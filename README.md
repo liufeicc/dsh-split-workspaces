@@ -263,8 +263,9 @@ Review is a separate call with `reviews` (an array):
 - Review and dispatch must be **separate calls**: sending `task` together with `reviews` is rejected.
 - Only `complete` counts as a delivery; `failed` / `blocked` / `paused` / `interrupted` do not
   require review and do not block the next dispatch.
-- The pending-review state lives in Host memory and is cleared on restart: a review is about the
-  conclusion the model just saw, and forcing one after a restart would degrade into a blind checkbox.
+- The pending-review state is persisted (`~/.dsh/storages/pane_dispatch_reviews.json`), so the gate
+  survives a Host restart. The conclusion itself stays in the target session's history, so A can
+  still go back and review it; removing the arrow clears the record.
 
 ### Boundaries worth knowing
 
@@ -280,7 +281,7 @@ Review is a separate call with `reviews` (an array):
 - **Review before the next dispatch.** A real delivery puts the target in "awaiting review"; a
   new dispatch to it is refused until a verdict is recorded. This is per target, so other idle
   targets keep working. Both verdicts clear the state; `rejected` requires a `note`. The state is
-  memory-only and resets with the Host.
+  persisted to disk and survives a Host restart; removing the arrow clears it.
 - **One task per target at a time.** A `task` sent to a running target is a **correction**, not a
   second task: it first disarms automatic continuation, stops the current round (the same
   underlying action as the UI stop button: abort the turn, keep the inbox), resubmits the

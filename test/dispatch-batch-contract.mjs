@@ -5,7 +5,7 @@
  * 跑法：`node test/dispatch-batch-contract.mjs`
  */
 import {
-  assistantEvent, boot, check, fakeMultiGoals, host, report, settle, turnEndEvent, twoTargets,
+  assistantEvent, boot, check, fakeMultiGoals, host, reboot, report, settle, turnEndEvent, twoTargets,
 } from './dispatch-harness.mjs';
 
 // ────────────────────── 一次派给多个目标（批处理） ──────────────────────
@@ -1100,6 +1100,80 @@ const threeTargets = () => [
   // 撤掉箭头 = 撤回授权，待审核记录也一起清掉，免得留下审不了、也拦不住的脏状态。
   service.set({ owner: 's-a', ownerLabel: '甲', targets: [] });
   check('撤掉箭头会清掉待审核记录', service.reviewOf('s-a', 's-b') === undefined);
+}
+
+// ────────────────────── 待审核状态跨 Host 重启 ──────────────────────
+
+{
+  /*
+   * 待审核记录必须落盘。理由：结论留在目标会话的历史里，主会话重启后仍然可以回去
+   * 复核 —— 不是「上下文没了所以没法审」，而是「账没了」。重启后继续拦，审完才放行。
+   */
+  const goals = fakeMultiGoals();
+  const first = boot({ goals });
+  const service = first.ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const running = first.tool.execute(
+    { task: '重启前的一单', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-b', 'complete');
+  first.emit('s-b', assistantEvent(1, '结论在乙会话的历史里'));
+  await running;
+  check('重启前乙处于待审核', service.reviewOf('s-a', 's-b') !== undefined);
+
+  // 同一个 DSH_HOME、同一个目标服务：模拟 Host 进程重启。
+  const second = reboot({ goals });
+  const restored = second.ctx.get('paneDispatch');
+  check('重启后待审核状态从磁盘恢复', restored.reviewOf('s-a', 's-b') !== undefined,
+    JSON.stringify([...restored.reviews.keys()]));
+
+  let message = null;
+  try {
+    await second.tool.execute(
+      { task: '重启后的新单', targets: ['乙会话'] },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    message = error.message;
+  }
+  check('重启后未审核仍然拦截', typeof message === 'string' && message.includes('还没审核'), message);
+  check('拦截提示指向目标会话历史', typeof message === 'string' && message.includes('历史'), message);
+
+  const reviewed = await second.tool.execute(
+    { reviews: [{ target: '乙会话', verdict: 'accepted', note: '回看乙会话历史，证据齐全' }] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('重启后可以审核',
+    reviewed.status === 'reviewed' && reviewed.results[0].status === 'accepted', JSON.stringify(reviewed));
+
+  // 审核结果也要落盘：再重启一次，不该又冒出同一条待审核。
+  const third = reboot({ goals });
+  check('审核后重启不再要求重复审核', third.ctx.get('paneDispatch').reviewOf('s-a', 's-b') === undefined);
+}
+
+{
+  // 撤箭头会清掉待审核并落盘；重启后不能把已经撤回授权的那条记录复活。
+  const goals = fakeMultiGoals();
+  const first = boot({ goals });
+  const service = first.ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const running = first.tool.execute(
+    { task: '撤箭头前的一单', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-b', 'complete');
+  first.emit('s-b', assistantEvent(1, '做完了'));
+  await running;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [] });
+
+  const second = reboot({ goals });
+  check('撤箭头后重启不会复活待审核',
+    second.ctx.get('paneDispatch').reviewOf('s-a', 's-b') === undefined);
 }
 
 report();

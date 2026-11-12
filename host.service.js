@@ -13,7 +13,7 @@
  */
 
 import { DISPATCH_SLICE_MS } from './host.constants.js';
-import { loadStore, makeTarget, saveStore } from './host.store.js';
+import { loadReviews, loadStore, makeTarget, saveReviews, saveStore } from './host.store.js';
 import { clearLayoutFile, loadLayoutFile, saveLayoutFile } from './host.layout.js';
 
 /**
@@ -62,8 +62,8 @@ export class PaneDispatchService {
      * 的下一道闸 —— 没有这份状态，主会话派完一个立刻给同一个目标塞下一单，上一单的
      * 结论就没人看了。按目标记，只拦同一个 worker，不拖累其他空闲目标。
      *
-     * 只活在内存里：Host 重启后清零。审核是模型对「它刚看到的结论」做的动作；
-     * 重启后结论已不在上下文里，强行要求审核只会退化成空勾选。
+     * **会落盘**（`storages/pane_dispatch_reviews.json`）：Host 重启后这条账继续有效。
+     * 结论本身留在目标会话的历史里，主会话重启后照样能回去复核，所以没有理由把闸放开。
      */
     this.reviews = new Map();
     /**
@@ -94,6 +94,25 @@ export class PaneDispatchService {
       this.bindings.set(owner.id, owner.targets.map((item) => Object.freeze(makeTarget(item.id, item.label, item.note))));
       this.labels.set(owner.id, owner.label);
     }
+    /*
+     * 待审核记录也要读回来，但只恢复「箭头还在」的那些：用户撤掉的边、删掉的会话
+     * 不该再拿一条审不了、也拦不住的记录占着。
+     */
+    let pruned = false;
+    for (const row of loadReviews().entries) {
+      const targets = this.bindings.get(row.owner);
+      if (targets === undefined || !targets.some((item) => item.id === row.target)) {
+        pruned = true;
+        continue;
+      }
+      this.reviews.set(row.owner + '\u0000' + row.target, {
+        target: row.label,
+        status: row.status,
+        excerpt: row.excerpt,
+        at: row.at,
+      });
+    }
+    if (pruned) this.persistReviews();
   }
 
   /**
@@ -121,6 +140,35 @@ export class PaneDispatchService {
       });
     }
     return owners;
+  }
+
+  /** 把当前内存里的待审核记录原样写成落盘格式。 */
+  snapshotReviews() {
+    const entries = [];
+    for (const [key, entry] of this.reviews) {
+      const [owner, target] = key.split('\u0000');
+      entries.push({
+        owner,
+        target,
+        label: entry.target,
+        status: entry.status,
+        excerpt: entry.excerpt,
+        at: entry.at,
+      });
+    }
+    return entries;
+  }
+
+  /**
+   * 把待审核记录写回磁盘。
+   *
+   * 落盘失败不抛：审核/派单的主流程不该因为一次写盘失败而中断 —— 内存里的闸还在，
+   * 只是这一条记录熬不过下一次重启。
+   *
+   * @returns 是否写成功。
+   */
+  persistReviews() {
+    return saveReviews(this.snapshotReviews());
   }
 
   /**
@@ -186,10 +234,15 @@ export class PaneDispatchService {
      * 撤箭头同样撤回「上一单待审核」：这个目标已经不该再从这个会话接活了，
      * 留一条审不了、又拦不住（因为不再可派）的记录只会让状态越积越脏。
      */
+    let reviewsChanged = false;
     for (const key of [...this.reviews.keys()]) {
       const [reviewOwner, target] = key.split('\u0000');
-      if (reviewOwner === owner && !kept.has(target)) this.reviews.delete(key);
+      if (reviewOwner === owner && !kept.has(target)) {
+        this.reviews.delete(key);
+        reviewsChanged = true;
+      }
     }
+    if (reviewsChanged) this.persistReviews();
     // 每次改动都落盘：箭头是人工一条条画的，频率极低，不值得为它做防抖。
     this.saved = saveStore(this.snapshotOwners());
     for (const listener of [...this.listeners]) {
@@ -347,6 +400,7 @@ export class PaneDispatchService {
       excerpt: reply.length > 240 ? reply.slice(0, 240) + '…' : reply,
       at: Date.now(),
     });
+    this.persistReviews();
   }
 
   /**
@@ -370,7 +424,10 @@ export class PaneDispatchService {
   takeReview(ownerId, targetId) {
     const key = ownerId + '\u0000' + targetId;
     const entry = this.reviews.get(key);
-    this.reviews.delete(key);
+    if (entry !== undefined) {
+      this.reviews.delete(key);
+      this.persistReviews();
+    }
     return entry;
   }
 

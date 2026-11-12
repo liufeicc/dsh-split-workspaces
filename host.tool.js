@@ -177,6 +177,7 @@ export function dispatchDescription(service, ownerId) {
     '- `reviews: [{ target: "1", verdict: "rejected", note: "缺哪条证据、期望看到什么" }]` —— 驳回，',
     '  之后用 dispatch_task 带 task 把具体缺口发回去（对方正在跑时就是纠正）。驳回必须写 note。',
     'failed / blocked / interrupted 不是交付，不需要审核。审核按目标记：审了 B 只放行 B，不影响 C、D。',
+    '待审核状态会落盘，Host 重启后仍然有效；上一单的结论也留在目标会话的历史里，随时可以回去复核。',
     '',
     '## 过程稿与纠正',
     '目标还在跑时，results 里的 progress 是**过程稿**，deliverable 为 false：它可能被后面推翻，',

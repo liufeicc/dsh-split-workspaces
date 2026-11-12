@@ -344,6 +344,7 @@ function explainConflicts(conflicts) {
       '这些目标上一单已经交付，但还没审核：' + review.map((item) => '「' + item.binding.label + '」').join('、') + '。',
       '先对照验收标准自己复核，再用 dispatch_task 带 reviews 记录审核结论（accepted / rejected + 理由）；',
       '审核之后才能给同一个目标派新任务。',
+      '上一单的结论也留在各自目标会话的历史里，Host 重启后照样可以回去复核。',
     );
     for (const item of review) {
       const excerpt = typeof item.review?.excerpt === 'string' ? item.review.excerpt.trim() : '';

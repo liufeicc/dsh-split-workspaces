@@ -143,32 +143,132 @@ import {
 
 {
   /*
-   * 给一个「还在跑上件事」的目标再给 task → 当成**纠正**排队，不新建目标、不打断。
+   * 给一个「还在跑上件事」的目标再给 task → 当成**纠正**：先停止当前轮，
+   * 再把纠正作为一条新用户消息重新提交，并重新启动目标；不新建目标。
    *
-   * 旧行为是直接拒绝。真用起来的问题是：A 看到过程稿发现方向不对，却改不了，
-   * 只能等目标按错的方向跑完。现在改成排一条纠正消息，目标下一轮会看到。
+   * 旧行为是直接拒绝。上一版改成排队到下一轮 —— 当前轮仍会按错的方向跑完。
+   * 现在按用户要求走「停止按钮 + 再次输入」的语义。
    */
   const goals = fakeMultiGoals();
-  const { tool, ctx, emit, promptCalls } = boot({ goals });
+  let seq = 0;
+  const agentStatus = { status: 'idle' };
+  const { tool, ctx, emit, promptCalls, agentCancelCalls, order } = boot({
+    goals,
+    agents: new Map([['s-b', agentStatus]]),
+    /*
+     * 模拟真实停止：`agent.cancel` 会让当前轮以 aborted 收尾。
+     * 这个用例同时验证 A 自己的等待不会把插件的停止误读成「用户接管」。
+     */
+    onCancel: (request) => {
+      seq += 1;
+      emit(request.sessionId, turnEndEvent(seq, 'aborted', request.cause));
+    },
+  });
   ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
 
-  const running = tool.execute({ task: '第一件事' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
+  const controller = new AbortController();
+  const running = tool.execute({ task: '第一件事' }, { agent: { id: 's-a' }, signal: controller.signal });
   await settle();
+  // 派单后目标进入运行态：纠正应当先停下这一轮，再重发。
+  agentStatus.status = 'running';
 
-  const redirected = await tool.execute({ task: '第二件事' }, { agent: { id: 's-a' }, signal: new AbortController().signal });
-  check('给正在跑的目标带 task 会被当成纠正排队，而不是拒绝',
+  const redirected = await tool.execute({ task: '第二件事' }, { agent: { id: 's-a' }, signal: controller.signal });
+  check('给正在跑的目标带 task 会被当成纠正，而不是拒绝',
     redirected.status === 'redirected' && redirected.results[0]?.status === 'redirected',
     JSON.stringify(redirected));
   check('纠正没有新建第二个目标', goals.created.length === 1, String(goals.created.length));
-  check('纠正以排队方式投递（mode: queue），不打断当前轮',
+  check('纠正先停止目标的当前轮（abort 当前轮并保留 inbox）',
+    agentCancelCalls.length === 1
+    && agentCancelCalls[0].sessionId === 's-b'
+    && agentCancelCalls[0].cause?.kind === 'hook'
+    && agentCancelCalls[0].options?.keepInbox === true,
+    JSON.stringify(agentCancelCalls));
+  check('停止原因不是 user（插件不能冒充用户接管）',
+    agentCancelCalls[0]?.cause?.kind !== 'user',
+    JSON.stringify(agentCancelCalls[0]));
+  check('顺序是「先停止、再重新输入」', order.join(',') === 'cancel,prompt', order.join(','));
+  check('纠正以普通用户消息投递（mode: queue）',
     promptCalls.length === 1 && promptCalls[0].request.mode === 'queue', JSON.stringify(promptCalls));
-  check('纠正消息里点明这不是新任务',
-    promptCalls[0].request.content[0].text.includes('不是新任务'),
+  check('纠正消息说明上一轮是被停止的、不是新任务',
+    promptCalls[0].request.content[0].text.includes('停止了你上一轮的推进')
+    && promptCalls[0].request.content[0].text.includes('不是新任务'),
     promptCalls[0].request.content[0].text);
+  check('停止前先挂起自动推进、重发后重新启动',
+    goals.calls.disarm.join(',') === 's-b' && goals.calls.resume.join(',') === 's-b',
+    JSON.stringify(goals.calls));
+  check('重新启动后目标回到 active + armed',
+    goals.get({ session: { id: 's-b' } })?.phase === 'active'
+    && goals.get({ session: { id: 's-b' } })?.activation === 'armed',
+    JSON.stringify(goals.get({ session: { id: 's-b' } })));
+  check('插件自己的停止不会被当成用户接管（第一单仍在等）',
+    redirected.results[0]?.interruptedBy === '',
+    JSON.stringify(redirected.results[0]));
 
   goals.done('s-b', 'complete');
-  emit('s-b', assistantEvent(1, '第一件事做完了'));
-  await running;
+  emit('s-b', assistantEvent(2, '第一件事做完了'));
+  const first = await running;
+  check('第一单照常拿到结论，没有被纠正的中间停止打断',
+    first.status === 'complete' && first.results[0]?.reply === '第一件事做完了',
+    JSON.stringify(first));
+  controller.abort();
+}
+
+{
+  /*
+   * 停止真的把目标暂停了：纠正流程必须把它重新启动，而不是留在 paused。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx } = boot({
+    goals,
+    onCancel: (request) => goals.pause(request.sessionId),
+  });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  const controller = new AbortController();
+  const running = tool.execute({ task: '第一件事' }, { agent: { id: 's-a' }, signal: controller.signal });
+  await settle();
+  const redirected = await tool.execute({ task: '第二件事' }, { agent: { id: 's-a' }, signal: controller.signal });
+
+  const view = goals.get({ session: { id: 's-b' } });
+  check('停止把目标暂停时，纠正会把它重新启动',
+    redirected.status === 'redirected' && view?.phase === 'active' && view?.activation === 'armed',
+    JSON.stringify({ redirected, view }));
+  check('被暂停后确实走了 resume', goals.calls.pause.join(',') === 's-b' && goals.calls.resume.join(',') === 's-b',
+    JSON.stringify(goals.calls));
+
+  controller.abort();
+  await running.catch(() => undefined);
+}
+
+{
+  /*
+   * 停止之后投递失败：目标不能留在「已 disarm、没人接着推」的半路状态。
+   * 这时整次调用按失败处理，并把自动推进恢复回去。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, promptCalls } = boot({ goals, promptThrowsAt: 1 });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  const controller = new AbortController();
+  const running = tool.execute({ task: '第一件事' }, { agent: { id: 's-a' }, signal: controller.signal });
+  await settle();
+  let failure;
+  try {
+    await tool.execute({ task: '第二件事' }, { agent: { id: 's-a' }, signal: controller.signal });
+  } catch (reason) {
+    failure = reason;
+  }
+
+  const view = goals.get({ session: { id: 's-b' } });
+  check('纠正投递失败时整次调用报错', failure instanceof Error && failure.message.includes('拒绝接收'),
+    failure === undefined ? 'no error' : failure.message);
+  check('投递失败后自动推进被恢复（不留在 disarm）',
+    goals.calls.resume.join(',') === 's-b' && view?.phase === 'active' && view?.activation === 'armed',
+    JSON.stringify({ calls: goals.calls, view }));
+  check('投递失败没有再塞第二条消息', promptCalls.length === 1, String(promptCalls.length));
+
+  controller.abort();
+  await running.catch(() => undefined);
 }
 
 {

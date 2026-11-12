@@ -11,8 +11,8 @@
  *
  *   1. **分流**：把请求拆成「新派」「续等」「纠正」三拨，并检查语义冲突
  *      （给了 task 却选中一个已有结论没收的目标 / 没给 task 却选中一个从没派过的目标）。
- *      目标正在跑时给 task 不再报错，而是当成**纠正**排队 —— 这是 A 看到过程稿之后
- *      唯一能改方向的路。
+ *      目标正在跑时给 task 不再报错，而是当成**纠正**：先停当前轮，再把纠正作为
+ *      新消息重新提交 —— 这是 A 看到过程稿之后唯一能改方向的路。
  *   2. **预检**：把这一批新派的目标**全部**查一遍忙闲，全部空闲才动手。
  *      少了这一步就会出现「派出去一半」：目标 B 建好了、目标 C 报忙，模型拿到一个
  *      半截状态，还得自己猜哪些生效了。
@@ -153,7 +153,7 @@ function composeItemNote(outcome, interruptedBy) {
   if (status === 'running') {
     const rounds = Number(outcome?.rounds ?? 0);
     lines.push(rounds > 0 ? '已到第 ' + String(rounds) + ' 轮。' : '目标还在做。');
-    lines.push('这是过程稿，不是交付结论；方向不对时，可以用 dispatch_task 带 task 给这个目标发纠正（会排队到它的下一轮）。');
+    lines.push('这是过程稿，不是交付结论；方向不对时，可以用 dispatch_task 带 task 给这个目标发纠正（会先停止它的当前轮，再把纠正作为新消息重新提交，并重新启动目标）。');
   } else if (status === 'complete' && outcome?.deliverable === false) {
     lines.push('目标已完成，但结论没能自动恢复；去目标会话里看最后一条回复。');
   } else if (interruptedBy === 'user') {
@@ -314,7 +314,7 @@ export function batchStatus(results, aborted) {
  *   - 目标刚被用户手动停止并接管（`interrupted`）；
  *   - 上一次派单有结论还没取（`uncollected`）；
  *   - 没给 task 却选中一个从没派过的目标（`idle`）。
- * 「目标正在跑」不再是冲突 —— 带 task 的调用会被当成纠正排队。
+ * 「目标正在跑」不再是冲突 —— 带 task 的调用会被当成纠正（先停当前轮再重新提交）。
  *
  * 三种都**直接拒绝**而不是猜：猜错的代价是模型以为事情已经办好了，而实际上没有。
  *
@@ -434,9 +434,11 @@ export async function runBatch(options) {
          * 目标正在跑，而且 A 给了新内容：这是**纠正**，不是第二个任务。
          *
          * 旧行为是直接报「目标忙」，于是 A 看到过程稿发现方向不对也改不了，只能等它
-         * 按错的方向跑完。现在改成排队一条纠正消息 —— 不新建 goal、不打断当前轮，
-         * 目标在下一轮会看到。用户手动停止过的目标不在这里（settled 已存在，走
-         * `interrupted` 冲突），避免 A 越过用户去驱动目标。
+         * 按错的方向跑完。上一版改成排队一条消息到下一轮 —— 当前轮仍然会按错的
+         * 方向跑完。现在按用户要求：先停止目标当前轮（与界面停止按钮同一条路径），
+         * 再把纠正作为一条新消息重新提交，并重新启动目标（用户手停 / 我们停掉的
+         * paused 状态都会拉起）。用户手动停止过的目标不在这里（settled 已存在，
+         * 走 `interrupted` 冲突），避免 A 越过用户去驱动目标。
          */
         redirects.push({ binding, key });
       }
@@ -704,7 +706,8 @@ export async function runBatch(options) {
   let note = '';
   if (status === 'running') {
     note = '还有 ' + stillRunning + ' 个目标在做。返回里的 progress 是**过程稿**，可能被后面推翻，'
-      + '不是交付结论；可以据此判断方向，并用 dispatch_task 带 task 给目标发纠正。'
+      + '不是交付结论；可以据此判断方向，并用 dispatch_task 带 task 给目标发纠正'
+      + '（会先停止它的当前轮，再把纠正作为新消息重新提交）。'
       + '要继续等就**继续调用** dispatch_task 并省略 task 与 targets，接着等下一段，直到状态不再是 running。';
   } else if (status === STATUS_INTERRUPTED) {
     note = '这一批被用户手动停止了：用户接管了目标，这一单未交付。'

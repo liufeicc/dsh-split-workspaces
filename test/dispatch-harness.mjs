@@ -55,11 +55,21 @@ export async function settle() {
  *
  * @param options.agents - `Map<sessionId, { status }>`，用于「目标是否空闲」的判定。
  * @param options.promptThrows - 让投递本身失败，用来检查失败路径的措辞。
+ * @param options.promptThrowsAt - 只让第 n 次 prompt 失败（1 起算），其余照常。
+ * @param options.onCancel - `agent.cancel()` 被调用时执行，用来模拟「停止把目标暂停了」。
  */
-function createHostContext({ agents = new Map(), promptThrows = false, goals = null } = {}) {
+function createHostContext({
+  agents = new Map(),
+  promptThrows = false,
+  promptThrowsAt = null,
+  onCancel = null,
+  goals = null,
+} = {}) {
   const listeners = new Set();
   const otherListeners = new Map();
   const promptCalls = [];
+  const agentCancelCalls = [];
+  const order = [];
   const resolveCalls = [];
   const registered = [];
   const services = new Map();
@@ -69,19 +79,31 @@ function createHostContext({ agents = new Map(), promptThrows = false, goals = n
   services.set('sessionController', {
     /**
      * 唤醒目标的入口（真实实现会按预设与子代理归属策略恢复冷会话）。
-     * 替身只需给出一个带 `session.id` 的 agent —— `waitForGoal` 靠它筛事件。
+     * 替身只需给出一个带 `session.id` 与 `cancel()` 的 agent —— 纠正流程要停它。
      */
     async resolveAgent(sessionId) {
       resolveCalls.push(sessionId);
-      return { agent: { id: sessionId, session: { id: sessionId } } };
+      return {
+        agent: {
+          id: sessionId,
+          session: { id: sessionId },
+          status: agents.get(sessionId)?.status ?? 'idle',
+          cancel(cause, cancelOptions) {
+            agentCancelCalls.push({ sessionId, cause, options: cancelOptions });
+            order.push('cancel');
+            if (typeof onCancel === 'function') onCancel({ sessionId, cause, options: cancelOptions });
+          },
+        },
+      };
     },
     async prompt(request, signal) {
       promptCalls.push({ request, signal });
+      order.push('prompt');
       if (signal === undefined || signal === null || typeof signal.throwIfAborted !== 'function') {
         throw new TypeError('signal.throwIfAborted is not a function');
       }
       signal.throwIfAborted();
-      if (promptThrows) throw new Error('目标会话拒绝接收');
+      if (promptThrows || promptThrowsAt === promptCalls.length) throw new Error('目标会话拒绝接收');
       return { accepted: true };
     },
   });
@@ -135,7 +157,7 @@ function createHostContext({ agents = new Map(), promptThrows = false, goals = n
     for (const handler of [...(otherListeners.get(event) ?? [])]) handler(payload);
   };
 
-  return { ctx, promptCalls, resolveCalls, registered, emit, fire, services };
+  return { ctx, promptCalls, agentCancelCalls, order, resolveCalls, registered, emit, fire, services };
 }
 
 /** 每个用例一个全新的 DSH_HOME —— 绑定表会落盘，共用一个目录会互相污染。 */
@@ -238,26 +260,77 @@ export function fakeGoals({ failCreate = false } = {}) {
  *
  * 单目标那版只有一个 `view`，两个目标会互相覆盖 —— 多目标用例必须按会话分开。
  *
+ * 这里带上了真实 goal 的最小状态机字段（`id` / `revision` / `activation`）与
+ * `disarm` / `resume`：纠正流程会先挂起自动推进，停止后重新启动，测试必须能验证
+ * 这两步真的发生了。
+ *
  * @param options.failFor - 这些会话在创建目标时抛错，用来验证「部分失败」。
  */
 export function fakeMultiGoals({ failFor = new Set() } = {}) {
   const views = new Map();
+  const calls = { disarm: [], resume: [], pause: [] };
   return {
     created: [],
+    calls,
     create(agent, request) {
       const id = agent.session.id;
       if (failFor.has(id)) throw new Error('an active goal already exists');
       this.created.push({ id, objective: request.objective });
-      views.set(id, { phase: 'active', objective: request.objective, blockedReason: undefined });
+      views.set(id, {
+        id: 'goal-' + id,
+        revision: 1,
+        phase: 'active',
+        activation: 'armed',
+        objective: request.objective,
+        maxGoalRounds: 20,
+        roundsStarted: 0,
+        blockedReason: undefined,
+      });
       return views.get(id);
     },
     get(agent) {
       return views.get(agent.session.id);
     },
+    /** 与真实 `goals.disarm` 一样：只改进程内的激活标记，不动 durable phase/revision。 */
+    disarm(agent) {
+      const id = agent.session.id;
+      const view = views.get(id);
+      if (view === undefined) return undefined;
+      views.set(id, { ...view, activation: 'disarmed' });
+      calls.disarm.push(id);
+      return views.get(id);
+    },
+    /** 与真实 `goals.resume` 一样：恢复 active + armed，并推进 revision。 */
+    resume(agent, ref) {
+      const id = agent.session.id;
+      const view = views.get(id);
+      if (view === undefined) throw new Error('no goal to resume');
+      if (ref !== undefined && (view.id !== ref.id || view.revision !== ref.revision)) {
+        throw new Error('stale goal ref');
+      }
+      if (view.phase === 'complete') throw new Error('goal is already complete');
+      if (view.phase === 'active' && view.activation === 'armed') {
+        throw new Error('goal is already active and armed');
+      }
+      if (view.roundsStarted >= view.maxGoalRounds) throw new Error('goal exhausted its rounds');
+      views.set(id, { ...view, phase: 'active', activation: 'armed', revision: view.revision + 1 });
+      calls.resume.push(id);
+      return views.get(id);
+    },
+    /** 模拟「停止把目标暂停了」：真实暂停是 durable 变更，会推进 revision。 */
+    pause(id) {
+      const view = views.get(id);
+      if (view === undefined) return;
+      views.set(id, { ...view, phase: 'paused', activation: 'disarmed', revision: view.revision + 1 });
+      calls.pause.push(id);
+    },
     done(id, phase, explanation) {
+      const view = views.get(id) ?? {};
       views.set(id, {
-        ...views.get(id),
+        ...view,
         phase,
+        activation: 'disarmed',
+        revision: Number(view.revision ?? 0) + 1,
         blockedReason: explanation === undefined ? undefined : { code: 'round-limit', message: explanation },
       });
     },

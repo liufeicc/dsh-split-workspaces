@@ -74,8 +74,26 @@ export const MAX_BATCH_TARGETS = 8;
  */
 export const STATUS_INTERRUPTED = 'interrupted';
 
-/** 一条「纠正」已经排队到目标下一轮（不是立即打断，也不是新任务）。 */
+/** 一条「纠正」已经停止目标当前轮，并作为新消息重新提交（不是新任务）。 */
 export const STATUS_REDIRECTED = 'redirected';
+
+/**
+ * 插件停止目标当前轮时写进 `turn/end` 的取消原因。
+ *
+ * 必须是 `hook` 而不是 `user`：`aborted.user` 在 A 的后台监视/等待里代表
+ * 「用户接管了这一单」。插件发起的纠正不能冒充用户，否则 A 会把自己的停止
+ * 误读成用户抢单。
+ */
+export const REDIRECT_CANCEL_REASON = 'pane-dispatch-redirect';
+
+/**
+ * 纠正时等目标当前轮真正停下来的上限。
+ *
+ * 只用来等 `turn/end` 收尾，不是任务超时：正常情况下几毫秒就回来了。设上限是
+ * 防止某个不响应 abort 的工具把「停一下再重发」挂死；超时后照常重发，只是
+ * 个别目标轮的 disarm 竞争会留给后续事件处理。
+ */
+export const REDIRECT_STOP_TIMEOUT_MS = 3000;
 
 /** `wait` 的三档：等全部、等第一个、或者根本不等。 */
 export const WAIT_ALL = 'all';

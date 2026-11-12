@@ -388,6 +388,43 @@ async function collect(waiters, wait, links) {
 }
 
 /**
+ * 这一批之外、此刻空闲、可以直接接新单的目标名单。
+ *
+ * 为什么需要它：工具描述刻意不写忙闲（写了每轮都变，提示词缓存全废），于是 A 派完一批
+ * 就不知道还有谁闲着 —— 真机上出现过「三个 worker 都空了，A 只派了一个就收工」。
+ * 把空闲名单挂在**这一批的结果**后面，是既不增加往返、又不破坏缓存的时机。
+ *
+ * 三种目标不算空闲：
+ *   1. 本批已经派过的（不重复提示）；
+ *   2. 这个会话还有没取走的结论（要先收结果，再派会被拒）；
+ *   3. 此刻正在跑一个回合（runningText 非 null）。
+ *
+ * @param ctx - 宿主上下文。
+ * @param service - 绑定表。
+ * @param ownerId - 发起方会话 id。
+ * @param batch - 本批已操作的目标。
+ * @returns 可直接拼进 note 的一句话；没有其他空闲目标时返回空串。
+ */
+function idleNote(ctx, service, ownerId, batch) {
+  const all = service.bindings.get(ownerId) ?? [];
+  if (all.length <= 1) return '';
+  const used = new Set(batch.map((item) => item.id));
+  const idle = [];
+  for (let index = 0; index < all.length; index += 1) {
+    const item = all[index];
+    if (used.has(item.id)) continue;
+    // pending 存在 = 这个会话对它有在途单或没取的结论，两种情况都不该再派。
+    if (service.pending.has(ownerId + '\u0000' + item.id)) continue;
+    if (runningText(ctx, item) !== null) continue;
+    idle.push((index + 1) + ') ' + item.label);
+  }
+  if (idle.length === 0) return '';
+  return '另外还有 ' + String(idle.length) + ' 个可派目标此刻空闲：' + idle.join('、') + '。'
+    + '如果这次没派完的活还能拆成相对独立的部分，优先继续派给它们（targets 一次列全），'
+    + '不要让它们空着，也不要自己顺手做完 —— 用户连箭头就是希望这些活由它们承担。';
+}
+
+/**
  * 一次多目标派单的完整流程。
  *
  * @param options.ctx - 宿主上下文。
@@ -581,20 +618,25 @@ export async function runBatch(options) {
 
     const stillRunning = results.filter((item) => item.status === 'running').length;
     if (task !== '') {
+      const hint = idleNote(ctx, service, ownerId, bindings);
+      const baseNote = '已经派出去了，不用在这里等。你可以先做自己的事；'
+        + '如果结果里提示还有空闲目标、而手上还有能拆出去的活，先继续派给它们，再回来收结果。'
+        + '需要结果时再调用一次 dispatch_task（省略 task 与 targets）来取。'
+        + '不收尾是不会结束的 —— 这个回合结束前会提醒你一次。';
       return {
         status: 'dispatched',
         results,
         stillRunning,
-        note: '已经派出去了，不用在这里等。你可以先做自己的事；需要结果时再调用一次 dispatch_task'
-          + '（省略 task 与 targets）来取。不收尾是不会结束的 —— 这个回合结束前会提醒你一次。',
+        note: hint === '' ? baseNote : baseNote + '\n\n' + hint,
       };
     }
+    const hint = stillRunning === 0 ? idleNote(ctx, service, ownerId, bindings) : '';
     return {
       status: batchStatus(results, signal.aborted),
       results,
       stillRunning,
       note: stillRunning === 0
-        ? ''
+        ? hint
         : '还有 ' + String(stillRunning) + ' 个目标在跑。返回里的 progress 是过程稿，不是交付结论。'
           + '可以再用 wait: none 看一眼，或者用默认的 wait: all 阻塞着等它们出结论。',
     };
@@ -717,6 +759,14 @@ export async function runBatch(options) {
       + '只有 deliverable 为 true 的 reply 才是交付结论，其余内容都只是过程稿。';
   } else if (status === 'failed') {
     note = '这一批一个都没派出去，先按 reply 里的原因处理，再重新派。';
+  }
+  /*
+   * 只在整批有结论之后提示空闲目标：还在跑时 note 的主题是「接着等下一段」，
+   * 再塞一句「还有谁空闲」会把下一步指令搅乱。
+   */
+  if (status !== 'running') {
+    const hint = idleNote(ctx, service, ownerId, bindings);
+    if (hint !== '') note = note === '' ? hint : note + '\n\n' + hint;
   }
   return { status, results, stillRunning, note };
 }

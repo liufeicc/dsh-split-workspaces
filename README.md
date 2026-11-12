@@ -188,7 +188,8 @@ that currently holds focus is marked by a brand-coloured title bar.
 - **Design mode + task dispatch**: a second panel mode that draws each **session** as a card
   and connects them with arrows into a directed tree — the graph *is* the authorization. Sessions
   with outgoing arrows get an agent-scoped `dispatch_task` tool and can hand work to another
-  session, one target or several in parallel, with `wait: all | any | none`. See the dedicated
+  session, one target or several in parallel, with `wait: all | any | none`; each result also
+  lists the remaining idle targets as a reminder to keep distributing. See the dedicated
   section below.
 - The `Add workspace` dropdown lists "workspaces that are not tiled yet" and also supports
   **creating** a workspace from the folder picker (`uiWorkspace.pickDirectory()`, or through
@@ -245,6 +246,13 @@ turn continues one more step and collects the result instead of requiring user i
 
 - **Multiple targets run in parallel**, each with its own waiter; results come back in request
   order. The tool never guesses "probably all of them" — name them when there is more than one.
+- **Prefer distributing, and results name the idle targets.** The tool description makes
+  delegation the default: when targets are idle and the work splits into independent chunks,
+  list several targets in one `targets` array rather than dispatching one and waiting. The
+  owner cannot see idleness in the tool description (that would change every round and kill the
+  prompt cache), so each dispatch/batch result appends the **other idle targets** — excluding
+  this batch, targets still running, and targets whose earlier result is uncollected. A sees the
+  remaining capacity in the same turn instead of stopping after one dispatch.
 - **One task per target at a time.** A `task` sent to a running target is a **correction**, not a
   second task: it first disarms automatic continuation, stops the current round (the same
   underlying action as the UI stop button: abort the turn, keep the inbox), resubmits the

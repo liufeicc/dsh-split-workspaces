@@ -829,4 +829,103 @@ function realishGoals() {
     value.note.includes('deliverable'), value.note);
 }
 
+// ────────────────────── 派完一批后报「还有谁空闲」 ──────────────────────
+
+/*
+ * 真机问题：三个 worker 都空着，主会话只派了一个就收工。
+ * 工具描述刻意不写忙闲（写了每轮都变，提示词缓存全废），所以空闲名单必须跟着
+ * **这一批的结果**回来 —— 这是 A 唯一能在同一回合看到「还能继续派」的时机。
+ */
+const threeTargets = () => [
+  { id: 's-b', label: '乙会话' },
+  { id: 's-c', label: '丙会话' },
+  { id: 's-d', label: '丁会话' },
+];
+
+{
+  const goals = fakeMultiGoals();
+  const { tool, ctx } = boot({ goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: threeTargets() });
+
+  const value = await tool.execute(
+    { task: '只派给乙', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('派完就走的结果里列出其余空闲目标',
+    value.note.includes('还有 2 个可派目标此刻空闲')
+    && value.note.includes('2) 丙会话') && value.note.includes('3) 丁会话'), value.note);
+  check('空闲提示要求优先继续派，而不是自己做',
+    value.note.includes('优先继续派给它们') && value.note.includes('不要自己顺手做完'), value.note);
+}
+
+{
+  // 正在跑回合的目标不是空闲目标。
+  const agents = new Map([['s-c', { status: 'running' }]]);
+  const goals = fakeMultiGoals();
+  const { tool, ctx } = boot({ agents, goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: threeTargets() });
+
+  const value = await tool.execute(
+    { task: '只派给乙', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('正在跑的目标不算空闲',
+    value.note.includes('还有 1 个可派目标此刻空闲') && value.note.includes('3) 丁会话')
+    && !value.note.includes('丙会话'), value.note);
+}
+
+{
+  // 有结论没取的目标要先收结果，再派会被拒，不能算「空闲」。
+  const goals = fakeMultiGoals();
+  const { tool, ctx } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: threeTargets() });
+  service.pending.set('s-a\u0000s-c', {
+    replaced: null,
+    settled: { status: 'complete', reply: '上一单的结论还没取' },
+    controller: null,
+    progress: '',
+  });
+
+  const value = await tool.execute(
+    { task: '只派给乙', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('有结论没取的目标不算空闲',
+    value.note.includes('还有 1 个可派目标此刻空闲') && value.note.includes('3) 丁会话')
+    && !value.note.includes('丙会话'), value.note);
+}
+
+{
+  // 全部目标都派上了，就不该再提示「还有谁空闲」。
+  const goals = fakeMultiGoals();
+  const { tool, ctx } = boot({ goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: threeTargets() });
+
+  const value = await tool.execute(
+    { task: '三个一起干', targets: ['乙会话', '丙会话', '丁会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('没有剩余空闲目标时不加提示', !value.note.includes('可派目标此刻空闲'), value.note);
+}
+
+{
+  // 阻塞批次收尾时也要提示：主会话拿到结论那一刻，正是决定「继续派还是收工」的时机。
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  ctx.get('paneDispatch').set({ owner: 's-a', ownerLabel: '甲', targets: threeTargets() });
+
+  const running = tool.execute(
+    { task: '只派给乙', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '乙做完了'));
+  const value = await running;
+  check('阻塞批次有结论后也列出空闲目标',
+    value.note.includes('还有 2 个可派目标此刻空闲') && value.note.includes('丙会话')
+    && value.note.includes('丁会话'), value.note);
+}
+
 report();

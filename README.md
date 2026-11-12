@@ -257,8 +257,9 @@ Review is a separate call with `reviews` (an array):
 | `verdict` | `accepted` or `rejected` |
 | `note` | Review evidence; **required when rejecting** — name the missing evidence and what you expect |
 
-- `accepted` clears the pending review; the target can take a new task.
-- `rejected` also clears it; follow up with `dispatch_task` + `task` carrying the specific gaps
+- `accepted` clears the pending review and the completed goal; the bar disappears, and the target
+  can take a new task.
+- `rejected` also clears both; follow up with `dispatch_task` + `task` carrying the specific gaps
   (a correction if the target is still running). A rejection without `note` is refused.
 - Review and dispatch must be **separate calls**: sending `task` together with `reviews` is rejected.
 - Only `complete` counts as a delivery; `failed` / `blocked` / `paused` / `interrupted` do not
@@ -266,6 +267,24 @@ Review is a separate call with `reviews` (an array):
 - The pending-review state is persisted (`~/.dsh/storages/pane_dispatch_reviews.json`), so the gate
   survives a Host restart. The conclusion itself stays in the target session's history, so A can
   still go back and review it; removing the arrow clears the record.
+
+### The "Mark reviewed" action on the goal bar
+
+A `complete` goal is no longer hidden: it stays on the GoalBar as **Awaiting Review** with a check
+icon (tooltip "Mark reviewed"). Clicking it calls the existing `goals.clear`, and only then does
+the goal disappear. It applies to **user-created goals** and **dispatch-created goals** alike.
+
+- A model `reviews` verdict also clears the completed goal, so the bar disappears.
+- If the human clicks first, the goal is already gone; the next dispatch treats that as reviewed
+  and releases the pending-review record instead of blocking.
+- The UI comes from the core patch `patches/dsh-goal-awaiting-review`: re-run
+  `./apply-dsh-patches.sh` after a DSH upgrade and refresh the browser. No Host restart.
+- A refresh/restart does not hide it again: the `complete` goal is in the session event log and is
+  replayed by the projection; the review record is persisted too. If the conclusion was not
+  collected before a restart, `adoptOrphanGoals` backfills a review record for the completed goal
+  so the bar and the dispatch gate agree.
+- Boundary: creating a new goal (`/goal` or `goals.create`) **replaces** a complete goal, which
+  skips the review. That is existing goal-domain semantics; this plugin does not change it.
 
 ### Boundaries worth knowing
 

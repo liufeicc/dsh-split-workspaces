@@ -345,6 +345,7 @@ function explainConflicts(conflicts) {
       '先对照验收标准自己复核，再用 dispatch_task 带 reviews 记录审核结论（accepted / rejected + 理由）；',
       '审核之后才能给同一个目标派新任务。',
       '上一单的结论也留在各自目标会话的历史里，Host 重启后照样可以回去复核。',
+      '如果目标已经删除或不再需要接活，撤掉箭头会一并清掉这条审核记录。',
     );
     for (const item of review) {
       const excerpt = typeof item.review?.excerpt === 'string' ? item.review.excerpt.trim() : '';
@@ -438,6 +439,40 @@ function idleNote(ctx, service, ownerId, batch) {
 }
 
 /**
+ * 人已经点过目标条上的「审核完成」：goal 被清掉了，但插件的待审核记录还在。
+ *
+ * 以 goal 为真相 —— 目标上已经没有 complete 的 goal（或换成了新 goal），就说明审核
+ * 这一步已经被人做过，把记录清掉、放行新派单。读不到目标状态时保留审核闸：宁严勿松。
+ *
+ * @param ctx - 宿主上下文。
+ * @param service - 绑定表。
+ * @param ownerId - 发起方会话 id。
+ * @param bindings - 这一次要派的目标。
+ */
+async function releaseHumanReviewed(ctx, service, ownerId, bindings) {
+  const support = goalSupport(ctx);
+  if (support === null) return;
+  for (const binding of bindings) {
+    if (service.reviewOf(ownerId, binding.id) === undefined) continue;
+    let agent;
+    try {
+      agent = await resolveTargetAgent(support, binding);
+    } catch {
+      continue;
+    }
+    let view;
+    try {
+      view = support.goals.get(agent);
+    } catch {
+      continue;
+    }
+    if (view === undefined || view === null || view.phase !== 'complete') {
+      service.takeReview(ownerId, binding.id);
+    }
+  }
+}
+
+/**
  * 一次多目标派单的完整流程。
  *
  * @param options.ctx - 宿主上下文。
@@ -461,6 +496,13 @@ export async function runBatch(options) {
    */
   if (nonBlocking && support === null) {
     throw new Error('这个部署没有目标服务，做不到「派完就走」：请省略 wait（默认 all），同步等到结论。');
+  }
+  /*
+   * 人可能已经点了目标条上的「审核完成」——goal 被清掉，插件的待审核记录还在。
+   * 派新单之前以 goal 为真相对齐一次，避免人工审核之后还被旧记录拦住。
+   */
+  if (task !== '' && support !== null) {
+    await releaseHumanReviewed(ctx, service, ownerId, bindings);
   }
 
   // ── 1. 分流：哪些是新派、哪些是续等、哪些其实是在纠正 ──────────────────
@@ -820,8 +862,8 @@ export async function runBatch(options) {
  * @param options.reviews - 模型给的数组 `[{ target, verdict, note? }]`。
  * @returns `{ status: 'reviewed', results, stillRunning: 0, note }`。
  */
-export function runReviews(options) {
-  const { service, ownerId, bindings, reviews } = options;
+export async function runReviews(options) {
+  const { ctx, service, ownerId, bindings, reviews } = options;
   const plan = [];
   const seen = new Set();
   for (const raw of reviews) {
@@ -853,9 +895,26 @@ export function runReviews(options) {
   }
   if (plan.length === 0) throw new Error('reviews 是空的：至少给一项 { target, verdict }。');
 
+  const support = goalSupport(ctx);
   const results = [];
   for (const item of plan) {
     service.takeReview(ownerId, item.binding.id);
+    /*
+     * 审核完就把那个已完成的 goal 清掉：GoalBar 上的「待审核」随之消失，目标也不再
+     * 占着「complete 只能被 create 替换」的位置。清不掉（目标已清、会话读不到）不回滚
+     * 审核记录 —— 记录已经落账，用户还可以在目标条上点「审核完成」收尾。
+     */
+    if (support !== null) {
+      try {
+        const agent = await resolveTargetAgent(support, item.binding);
+        const view = support.goals.get(agent);
+        if (view !== undefined && view !== null && view.phase === 'complete') {
+          support.goals.clear(agent, { id: view.id, revision: view.revision });
+        }
+      } catch {
+        /* 留给目标条上的「审核完成」按钮。 */
+      }
+    }
     results.push({
       target: item.binding.label,
       status: item.verdict,

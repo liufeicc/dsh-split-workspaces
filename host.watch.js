@@ -290,6 +290,14 @@ export async function adoptOrphanGoals(ctx, service, ownerId) {
       }
       if (!isOurGoal(view)) continue;
       if (view.phase === 'complete') {
+        /*
+         * goal 还在 complete，但审核记录可能没建：最典型的是重启前结论还没被取走，
+         * `deliverable: false` 的认领记录不会触发审核。补一条待审核记录，让 GoalBar
+         * 上的「待审核」和插件的派单闸保持一致；已有记录就不覆盖。
+         */
+        if (service.reviewOf(ownerId, binding.id) === undefined) {
+          service.markReviewNeeded(ownerId, binding, { status: 'complete', reply: '' });
+        }
         // 已经做完、结论只剩在目标会话的历史里：给一条能指导下一步的说明。
         service.pending.set(key, {
           replaced: undefined,

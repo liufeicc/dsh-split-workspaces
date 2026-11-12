@@ -178,6 +178,8 @@ export function dispatchDescription(service, ownerId) {
     '  之后用 dispatch_task 带 task 把具体缺口发回去（对方正在跑时就是纠正）。驳回必须写 note。',
     'failed / blocked / interrupted 不是交付，不需要审核。审核按目标记：审了 B 只放行 B，不影响 C、D。',
     '待审核状态会落盘，Host 重启后仍然有效；上一单的结论也留在目标会话的历史里，随时可以回去复核。',
+    '审核通过/驳回后，那个已完成的 goal 会被清掉，目标条上的「待审核」随之消失。',
+    '如果用户在目标条上先点了「审核完成」（对勾按钮），下次派单会按 goal 已清掉处理，直接放行。',
     '',
     '## 过程稿与纠正',
     '目标还在跑时，results 里的 progress 是**过程稿**，deliverable 为 false：它可能被后面推翻，',
@@ -376,7 +378,7 @@ export function createDispatchTool(service, ownerId) {
         if (rawReviews.length > MAX_BATCH_TARGETS) {
           throw new Error('一次最多审核 ' + MAX_BATCH_TARGETS + ' 个目标，请分几批。');
         }
-        return runReviews({ service, ownerId, bindings, reviews: rawReviews });
+        return runReviews({ ctx: service.ctx, service, ownerId, bindings, reviews: rawReviews });
       }
       /*
        * 续等（不给 task）时先认领一次「可能因 Host 重启而丢掉的记录」。

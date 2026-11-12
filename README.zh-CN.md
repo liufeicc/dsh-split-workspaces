@@ -250,14 +250,32 @@ A 的模型多了一个 `dispatch_task` 工具：
 | `verdict` | `accepted`（验收通过）或 `rejected`（驳回） |
 | `note` | 审核依据；**驳回时必填**，写清缺哪条证据、期望看到什么 |
 
-- `accepted`：清掉待审核状态，之后可以给这个目标派新任务。
-- `rejected`：同样清掉待审核状态，之后用 `dispatch_task` 带 `task` 把具体缺口发回去
-  （对方正在跑时就是纠正）。不写 `note` 会被拒绝 ——「再做一遍」这种空话没有意义。
+- `accepted`：清掉待审核状态，之后可以给这个目标派新任务。那个已完成的 goal 也会被清掉，
+  目标条上的「待审核」随之消失。
+- `rejected`：同样清掉待审核状态和已完成的 goal，之后用 `dispatch_task` 带 `task` 把具体缺口
+  发回去（对方正在跑时就是纠正）。不写 `note` 会被拒绝 ——「再做一遍」这种空话没有意义。
 - 审核与派单**必须分开调用**：带 `reviews` 时再带 `task` 会被拒绝。
 - 只有 `complete`（真正交付）才需要审核；`failed` / `blocked` / `paused` / `interrupted`
   算「没交付」，不挡下一单。
 - 待审核状态会落盘（`~/.dsh/storages/pane_dispatch_reviews.json`）：Host 重启后这条账仍然有效，
   未审核照样拦。上一单的结论留在目标会话的历史里，重启后可以回去复核；撤掉箭头会清掉记录。
+
+### 目标条上的「审核完成」
+
+`complete` 的 goal 不再被 GoalBar 隐藏，而是显示为「待审核的目标」，右侧有一个对勾图标
+（tooltip「审核完成」）。点击走现有的 `goals.clear`，goal 这时才真正消失。它对
+**用户创建的 goal** 和**委派产生的 goal** 一视同仁。
+
+- 模型 `reviews` 通过/驳回时，也会顺手清掉那个 `complete` goal —— 目标条同步消失。
+- 人先点了「审核完成」时，goal 已经被清掉；插件下次派单会以 goal 为准，把待审核记录
+  一并放行，不会再拦。
+- 这条 UI 来自核心补丁 `patches/dsh-goal-awaiting-review`：升级 DSH 后跑一次
+  `./apply-dsh-patches.sh`，并刷新浏览器。Host 不需要重启。
+- 刷新/重启后不会「又看不见」：`complete` 的 goal 写在会话事件日志里，重启后投影重放；
+  待审核记录也落盘。如果重启前结论还没被取走，`adoptOrphanGoals` 会给完整的 goal
+  补一条待审核记录，保证目标条和派单闸一致。
+- 边界：用 `/goal` 或 `goals.create` 新建目标会**替换**掉 `complete` 的旧 goal，等于跳过审核。
+  这是 goal 领域现有语义，本插件不改。
 
 ### 派不出去的时候，错误会说到点子上
 

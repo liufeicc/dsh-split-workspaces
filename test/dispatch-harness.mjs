@@ -252,6 +252,9 @@ export function fakeGoals({ failCreate = false } = {}) {
       // 真实形状是 { code, message }；早先的替身误写成了 explanation，把 bug 一起藏住了。
       this.view = { ...this.view, phase, blockedReason: explanation === undefined ? undefined : { code: 'round-limit', message: explanation } };
     },
+    clear() {
+      this.view = null;
+    },
   };
 }
 
@@ -268,7 +271,7 @@ export function fakeGoals({ failCreate = false } = {}) {
  */
 export function fakeMultiGoals({ failFor = new Set() } = {}) {
   const views = new Map();
-  const calls = { disarm: [], resume: [], pause: [] };
+  const calls = { disarm: [], resume: [], pause: [], clear: [] };
   return {
     created: [],
     calls,
@@ -323,6 +326,17 @@ export function fakeMultiGoals({ failFor = new Set() } = {}) {
       if (view === undefined) return;
       views.set(id, { ...view, phase: 'paused', activation: 'disarmed', revision: view.revision + 1 });
       calls.pause.push(id);
+    },
+    /** 与真实 `goals.clear` 一样：任何 phase 都能清（含 complete），清完就没有目标了。 */
+    clear(agent, ref) {
+      const id = agent.session.id;
+      const view = views.get(id);
+      if (view === undefined) throw new Error('no goal to clear');
+      if (ref !== undefined && (view.id !== ref.id || view.revision !== ref.revision)) {
+        throw new Error('stale goal ref');
+      }
+      views.delete(id);
+      calls.clear.push(id);
     },
     done(id, phase, explanation) {
       const view = views.get(id) ?? {};

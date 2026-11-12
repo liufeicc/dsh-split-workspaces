@@ -977,6 +977,8 @@ const threeTargets = () => [
   check('审核通过返回 reviewed',
     reviewed.status === 'reviewed' && reviewed.results[0].status === 'accepted', JSON.stringify(reviewed));
   check('审核通过后待审核状态清掉', service.reviewOf('s-a', 's-b') === undefined);
+  check('审核通过会清掉目标上的 complete goal',
+    goals.get({ session: { id: 's-b' } }) === undefined && goals.calls.clear.includes('s-b'));
 
   const second = await tool.execute(
     { task: '第二单', targets: ['乙会话'], wait: 'none' },
@@ -1102,6 +1104,39 @@ const threeTargets = () => [
   check('撤掉箭头会清掉待审核记录', service.reviewOf('s-a', 's-b') === undefined);
 }
 
+{
+  /*
+   * 用户在目标条上点「审核完成」：GoalBar 走 goals.clear，goal 直接消失。
+   * 插件的待审核记录不能继续拦着 —— 下次派单以 goal 已清为准放行。
+   */
+  const goals = fakeMultiGoals();
+  const { tool, ctx, emit } = boot({ goals });
+  const service = ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const running = tool.execute(
+    { task: '第一单', targets: ['乙会话'] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  await settle();
+  goals.done('s-b', 'complete');
+  emit('s-b', assistantEvent(1, '做完了'));
+  await running;
+  check('人工审核前乙处于待审核', service.reviewOf('s-a', 's-b') !== undefined);
+
+  const bob = { session: { id: 's-b' } };
+  const view = goals.get(bob);
+  goals.clear(bob, { id: view.id, revision: view.revision });
+  check('人工点审核完成后 goal 被清掉', goals.get(bob) === undefined);
+
+  const next = await tool.execute(
+    { task: '第二单', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('人工审核后派单闸放行', next.status === 'dispatched', JSON.stringify(next));
+  check('放行时清掉旧的待审核记录', service.reviewOf('s-a', 's-b') === undefined);
+}
+
 // ────────────────────── 待审核状态跨 Host 重启 ──────────────────────
 
 {
@@ -1174,6 +1209,61 @@ const threeTargets = () => [
   const second = reboot({ goals });
   check('撤箭头后重启不会复活待审核',
     second.ctx.get('paneDispatch').reviewOf('s-a', 's-b') === undefined);
+}
+
+{
+  /*
+   * 重启前结论还没被取走：goal 还是 complete，但审核记录没建。
+   * adoptOrphanGoals 认领时补一条待审核记录，保证目标条上的「待审核」和派单闸一致。
+   */
+  const goals = fakeMultiGoals();
+  const first = boot({ goals });
+  const service = first.ctx.get('paneDispatch');
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  const dispatched = await first.tool.execute(
+    { task: '跑完但先不取', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('这一单先派出去了', dispatched.status === 'dispatched', JSON.stringify(dispatched));
+  goals.done('s-b', 'complete');
+  first.emit('s-b', assistantEvent(1, '做完了，但主会话还没取'));
+  await settle();
+
+  // 重启：pending 归零，但 goal 还是 complete，审核记录也还没建。
+  const second = reboot({ goals });
+  const restored = second.ctx.get('paneDispatch');
+  check('重启前还没有待审核记录', restored.reviewOf('s-a', 's-b') === undefined);
+
+  // 主会话回来查状态：认领孤儿单，补出待审核记录。
+  const collected = await second.tool.execute(
+    { wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('重启认领拿到的是「结论没能恢复」', collected.results[0].deliverable === false, JSON.stringify(collected));
+  check('重启认领补出了待审核记录', restored.reviewOf('s-a', 's-b') !== undefined);
+
+  let message = null;
+  try {
+    await second.tool.execute(
+      { task: '重启后的新单', targets: ['乙会话'] },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    message = error.message;
+  }
+  check('重启后 complete 的 goal 仍然拦住新派单',
+    typeof message === 'string' && message.includes('还没审核'), message);
+
+  // 人工点「审核完成」清掉 goal 后，再派就放行。
+  const bob = { session: { id: 's-b' } };
+  const view = goals.get(bob);
+  goals.clear(bob, { id: view.id, revision: view.revision });
+  const next = await second.tool.execute(
+    { task: '人工审核后的新单', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('人工审核后放行', next.status === 'dispatched', JSON.stringify(next));
 }
 
 report();

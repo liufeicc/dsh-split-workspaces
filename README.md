@@ -362,6 +362,7 @@ None of these were architecture problems — they were boundary problems, and tw
 | Un-dispatchable after a target blocks | once B was `blocked`, A could never dispatch again | `goals.create` only replaces a `complete` goal; `blocked` / `paused` must be cleared first |
 | Conclusion and terminal state split across two windows | the watcher had the text but could not hand it over | the watcher used to re-subscribe every 5 minutes; the text arrived in one window and the terminal state in the next. A single long-lived subscription removed it |
 | Orphaned results after a Host restart | the work finished, but resuming answered "you never dispatched that"; the end-of-turn nudge counted the same empty table and stayed silent | `pending` lives only in memory, so a restart zeroes it while the target's goal keeps running. Neither side recognises the dispatch any more. Fixed by not persisting it: reclaim on demand from the `[任务分派]` goal prefix — the goal is the source of truth |
+| A new arrow invisible to the owner until reload | the model could not name the new target until Ctrl+R | the scoped tool's `description` was computed as a string at registration time; DSH re-reads `definition.description` whenever it assembles the prompt, so making it a getter reflects binding changes on the next step |
 
 The common thread: **the same fact was stored twice without saying which copy is authoritative.**
 After the fixes the rule is: the background watcher starts at dispatch time, always sees more,

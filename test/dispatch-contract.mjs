@@ -51,6 +51,31 @@ check('远程方法都带 request 形参（否则网关会拒绝客户端发来�
   'list=' + String(host.PaneDispatchService.prototype.list.length)
   + ' set=' + String(host.PaneDispatchService.prototype.set.length));
 
+/*
+ * 工具描述必须是「每次读取都反映最新绑定」的 getter。
+ *
+ * 用户新增一条箭头后，如果描述还是注册那一刻算好的字符串，主会话的模型下一轮
+ * 只会说得出旧目标 —— 之前必须刷新页面才认识新连接。dsh-tools 每次组装提示词
+ * 都会重新读 `definition.description`，所以 getter 能在下一次 step 看到新名单。
+ */
+check('工具描述是动态 getter：新增目标后同一个工具对象立即反映出来', (() => {
+  freshHome();
+  const service = new host.PaneDispatchService({});
+  const tool = host.createDispatchTool(service, 's-a');
+  service.set({ owner: 's-a', targets: [{ id: 's-b', label: 'B 会话' }] });
+  const before = tool.description;
+  service.set({ owner: 's-a', targets: [{ id: 's-b', label: 'B 会话' }, { id: 's-c', label: 'C 会话' }] });
+  return before.includes('B 会话')
+    && !before.includes('C 会话')
+    && tool.description.includes('C 会话');
+})());
+check('没有绑定时描述明确说「还没有连箭头」', (() => {
+  freshHome();
+  const service = new host.PaneDispatchService({});
+  const tool = host.createDispatchTool(service, 's-a');
+  return tool.description.includes('还没有连任何委派箭头');
+})());
+
 check('绑定表去掉重复、自派与空 id', (() => {
   freshHome();
   const service = new host.PaneDispatchService({});

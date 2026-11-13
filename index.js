@@ -122,20 +122,38 @@ export function apply(ctx) {
     const scoped = new Map();
     const agents = ctx.get('agents');
 
-    /** 按会话当前的绑定重建它的作用域工具；没有绑定时撤掉，让全局那份露出来。 */
+    /** 让作用域工具的「有 / 无」与会话当前的绑定保持一致；描述内容由 getter 自己刷新。 */
     const refresh = (agentId) => {
+      if (typeof agentId !== 'string' || agentId === '') return;
+      const roster = service.bindings.get(agentId);
       const previous = scoped.get(agentId);
-      if (previous !== undefined) {
+      /*
+       * 没有绑定了：撤掉作用域工具，让全局那份（“还没有连箭头”）露出来。
+       * 这是**唯一**必须重新注册的场景之一。
+       */
+      if (roster === undefined || roster.length === 0) {
+        if (previous === undefined) return;
         scoped.delete(agentId);
         try {
           previous();
         } catch {
-          /* 旧工具的 disposer 失败不该拦着新的一版装上 */
+          /* 旧工具的 disposer 失败不该拦着清理 */
         }
+        return;
       }
-      if (typeof agentId !== 'string' || agentId === '') return;
-      const roster = service.bindings.get(agentId);
-      if (roster === undefined || roster.length === 0) return;
+      /*
+       * 已经有作用域工具：**不重新注册**。
+       *
+       * 工具描述的 `description` 是 getter（见 `host.tool.js`），DSH 每次组装
+       * 提示词都会重新读它，所以新增/删除目标会自动反映到下一次 step。以前这里
+       * 每次绑定变化都 dispose + register，既可能让当前回合的工具集抖动，也没能
+       * 解决“新增连接要刷新才认识”的问题 —— 真正的原因是描述在注册时被算成了
+       * 字符串。现在只负责「有 → 无」「无 → 有」的切换。
+       */
+      if (previous !== undefined) {
+        void adoptOrphanGoals(ctx, service, agentId).catch(() => {});
+        return;
+      }
       const agent = agents === undefined || agents === null || typeof agents.get !== 'function'
         ? undefined
         : agents.get(agentId);

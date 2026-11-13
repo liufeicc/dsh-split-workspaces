@@ -262,7 +262,20 @@ export function dispatchDescription(service, ownerId) {
 export function createDispatchTool(service, ownerId) {
   return {
     name: TOOL_NAME,
-    description: dispatchDescription(service, ownerId),
+    /*
+     * 用 getter，而不是在注册那一刻算好字符串。
+     *
+     * DSH 每次组装提示词都会重新读 `definition.description`（`dsh-tools` 的
+     * `schemaOf` 从工具定义上解构这个字段），所以绑定表一变，下一次 step 就能
+     * 看见新的目标名单 —— 不需要重新注册工具，也不需要用户刷新页面。
+     *
+     * 早先是固定字符串：新增一条箭头时 Host 的绑定表已经更新，但模型看到的仍是
+     * 注册时的旧名单，必须 Ctrl+R 刷新页面才认识新目标。改成 getter 后这条时间差
+     * 从结构上消失了。
+     */
+    get description() {
+      return dispatchDescription(service, ownerId);
+    },
     parameters: {
       type: 'object',
       properties: {

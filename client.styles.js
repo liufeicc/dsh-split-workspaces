@@ -93,9 +93,12 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}',
       '.dshSplitWs_button:disabled{opacity:.55;cursor:default}',
       '.dshSplitWs_button:focus-visible,.dshSplitWs_trigger:focus-visible,.dshSplitWs_iconButton:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
-      // 保存按钮的固定宽度：标签在“保存布局 / 已保存”之间切换时，右上角不能跟着跳。
-      '.dshSplitWs_saveLayout{min-width:86px;justify-content:center}',
-      '.dshSplitWs_saveLayout[data-state=saved]{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}',
+      // 保存按钮现在是一个图标按钮：尺寸交给 `.dshSplitWs_iconButton`，这里只补状态色。
+      '.dshSplitWs_saveLayout{min-width:0;justify-content:center}',
+      '.dshSplitWs_saveLayout[data-state=saved]{color:var(--dsw-alias-state-success-primary)}',
+      '.dshSplitWs_saveSpinner{animation:dshSplitWsSpin .9s linear infinite}',
+      '@keyframes dshSplitWsSpin{to{transform:rotate(360deg)}}',
+      '@media (prefers-reduced-motion:reduce){.dshSplitWs_saveSpinner{animation:none}}',
       '.dshSplitWs_primary{background:var(--dsw-alias-brand-primary);border-color:transparent;color:var(--dsw-alias-bg-base)}',
       '.dshSplitWs_primary:hover:not(:disabled){background:var(--dsw-alias-brand-primary)}',
       '.dshSplitWs_iconButton{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}',
@@ -386,6 +389,7 @@ window.__ModuleLoader__.load({
       paneError: 'dshSplitWs_paneError',
       button: 'dshSplitWs_button',
       saveLayout: 'dshSplitWs_saveLayout',
+      saveSpinner: 'dshSplitWs_saveSpinner',
       primary: 'dshSplitWs_primary',
       iconButton: 'dshSplitWs_iconButton',
       iconButtonOpen: 'dshSplitWs_iconButtonOpen',

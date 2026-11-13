@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
      * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
      * 正是「无法确认浏览器到底加载了哪一版」。
      */
-    const CLIENT_BUILD = '2026-11-13f';
+    const CLIENT_BUILD = '2026-11-13g';
 
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
@@ -1128,17 +1128,54 @@ window.__ModuleLoader__.load({
               modeSwitch,
               h('button', {
                 type: 'button',
-                className: cx(css.button, css.saveLayout),
+                className: cx(css.iconButton, css.saveLayout),
                 title: t('panel.saveHint'),
                 'aria-label': saveState === 'saved'
                   ? t('panel.saved')
                   : saveState === 'saving' ? t('panel.saving') : t('panel.save'),
                 'data-state': saveState,
+                'data-action': 'save-layout',
                 disabled: !canSaveLayout || saveState === 'saving',
                 onClick: () => { void handleSaveLayout(); },
               }, saveState === 'saved'
-                ? t('panel.saved')
-                : saveState === 'saving' ? t('panel.saving') : t('panel.save')),
+                ? h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                  h('path', {
+                    d: 'M3.2 8.3l3.1 3.1 6.5-7',
+                    stroke: 'currentColor',
+                    strokeWidth: 1.5,
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'round',
+                  }))
+                : saveState === 'saving'
+                  ? h('svg', {
+                    className: css.saveSpinner,
+                    width: 14,
+                    height: 14,
+                    viewBox: '0 0 16 16',
+                    fill: 'none',
+                    'aria-hidden': true,
+                  }, h('circle', {
+                    cx: 8,
+                    cy: 8,
+                    r: 5.2,
+                    stroke: 'currentColor',
+                    strokeWidth: 1.5,
+                    strokeLinecap: 'round',
+                    strokeDasharray: '20 12',
+                  }))
+                  : h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                    h('path', {
+                      d: 'M3.5 2.5h7.2l1.8 1.8v9.2h-9v-11z',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.3,
+                      strokeLinejoin: 'round',
+                    }),
+                    h('path', {
+                      d: 'M5.8 2.5v3.2h4.4V2.5M5.8 13.5V9.8h4.4v3.7',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.3,
+                      strokeLinejoin: 'round',
+                    }))),
               // 只有确实保存过时才出现；点它只删保存记录，当前界面一个窗格都不动。
               savedLayoutAvailable
                 ? h('button', {

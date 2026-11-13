@@ -25,7 +25,7 @@ that currently holds focus is marked by a brand-coloured title bar.
   Git renders the Git plugin's own panel. Each pane picks independently and defaults to Chat;
   **with no extra view plugins (or only Chat) the strip is not rendered at all**, so the pane
   behaves exactly as before.
-- **Save layout / auto-restore**: the "Save layout" button in the top-right writes the current
+- **Save layout / auto-restore**: the save icon in the top-right (with a tooltip) writes the current
   board (split directions, ratios, pane order, focus), each pane's session and Agent preset,
   the **dispatch graph (edges + notes)**, and the current panel mode to the Host's
   `$DSH_HOME/storages/pane_layout.json`.

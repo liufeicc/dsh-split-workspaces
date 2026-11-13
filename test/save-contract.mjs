@@ -307,9 +307,10 @@ const board = await renderBoard(mod, {
 });
 const tree = board.render().tree;
 await settle();
-const saveButtons = findAll(tree, (node) => node.type === 'button'
-  && (node.children[0] === '保存布局' || node.children[0] === '已保存' || node.children[0] === '保存中…'));
-check('右上角渲染出“保存布局”按钮', saveButtons.length === 1);
+const saveButtons = findAll(tree, (node) => node.type === 'button' && node.props['data-action'] === 'save-layout');
+check('右上角渲染出保存图标按钮', saveButtons.length === 1);
+check('保存按钮是图标而不是文字',
+  saveButtons[0].children.length === 1 && saveButtons[0].children[0]?.type === 'svg');
 saveButtons[0].props.onClick();
 for (let index = 0; index < 5; index += 1) await settle();
 check('点保存按钮把两个窗格写入 Host', Array.isArray(writtenLayout?.panes) && writtenLayout.panes.length === 2);

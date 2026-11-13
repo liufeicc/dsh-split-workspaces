@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
      * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
      * 正是「无法确认浏览器到底加载了哪一版」。
      */
-    const CLIENT_BUILD = '2026-11-02a';
+    const CLIENT_BUILD = '2026-11-13f';
 
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
@@ -707,10 +707,11 @@ window.__ModuleLoader__.load({
             rows.push({ row: summary, workspace: owner });
           }
           /*
-           * 全局按「最近更新」排序，而不是按工作区分组。
+           * 这个顺序只决定**树根**在布局里的先后（以及同一层无上级节点之间的次序）。
            *
-           * 布局会把「没有任何箭头」的会话排在左边第一列，所以这一列实际上就是会话
-           * 花名册 —— 按最近用过的顺序排，用户要找的那个通常就在最上面。
+           * 候选花名册不再用这个全局顺序：它按工作区分组、组内按会话名字母排（见
+           * `graphLayout` 里的 `groupSessionsByWorkspace`）。这里保留「最近更新」
+           * 是为了让树根的顺序稳定且贴近使用习惯。
            */
           rows.sort((left, right) => (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0));
           return rows.map(({ row, workspace }) => {
@@ -718,6 +719,9 @@ window.__ModuleLoader__.load({
             return {
               key: row.id,
               label: title === undefined || title === '' ? t('pane.untitled') : title,
+              // 分组用：同一个工作区的候选卡片聚在一起。会话不属于任何工作区时留空，
+              // 由模型把它归入「未归属工作区」并固定排在最后。
+              workspaceKey: workspace === undefined ? '' : workspace.workspaceId,
               workspaceTitle: workspace === undefined ? t('pane.unknownWorkspace') : workspace.title,
               running: row.running === true,
               inPane: inPane.has(row.id),
@@ -733,11 +737,41 @@ window.__ModuleLoader__.load({
         }, [graphCards]);
 
         /**
-         * 布局用的节点顺序：**有箭头的会话排前面**，没连过的排在后面。
+         * 用户从左侧选择器拖进画布、但还没连线的会话。
          *
-         * 布局会把「没有任何入边」的节点都放在第一列（根），顺序就是这里给的顺序。
-         * 于是第一列前半段是当前这棵树的根，后半段是会话花名册 —— 树在上面、候选在下面，
-         * 不用在一大堆孤立卡片里找自己画的那个。
+         * 这份状态**不落盘**：箭头（绑定表）才是需要持久化的授权关系；待连线卡片只是
+         * 编辑过程中的暂存，刷新后重新从左侧拖一次即可。已连线的会话不在布局里用它
+         * （见 `graphLayout` 的过滤），删掉箭头后它会自动回到「待连线」。
+         */
+        const [stagedSessions, setStagedSessions] = useState(() => new Set());
+
+        /** 把一个真实会话加入画布；未知 id 直接忽略，避免画出一张查不到内容的空卡。 */
+        const stageSession = useCallback((sessionId) => {
+          if (typeof sessionId !== 'string' || sessionId === '') return;
+          if (!graphCardById.has(sessionId)) return;
+          setStagedSessions((current) => {
+            if (current.has(sessionId)) return current;
+            const next = new Set(current);
+            next.add(sessionId);
+            return next;
+          });
+        }, [graphCardById]);
+
+        /** 把待连线会话移出画布；已连线的会话不在这里移除（那要删箭头）。 */
+        const unstageSession = useCallback((sessionId) => {
+          setStagedSessions((current) => {
+            if (!current.has(sessionId)) return current;
+            const next = new Set(current);
+            next.delete(sessionId);
+            return next;
+          });
+        }, []);
+
+        /**
+         * 画布布局：左边是**用户从选择器拖进来的待连线会话**，右边是已经连成树的会话。
+         *
+         * 画布不再平铺全部会话：谁出现在画布上由用户在选择器里决定。待连线卡片连上
+         * 箭头之后自动从左侧列进入右侧的树；删掉箭头又回到待连线列。
          */
         const graphLayout = useMemo(() => {
           const connected = new Set();
@@ -745,12 +779,45 @@ window.__ModuleLoader__.load({
             connected.add(edge.from);
             connected.add(edge.to);
           }
-          const keys = [
-            ...graphCards.filter((card) => connected.has(card.key)).map((card) => card.key),
-            ...graphCards.filter((card) => !connected.has(card.key)).map((card) => card.key),
-          ];
-          return graphModel.layoutGraph(graphState.edges, keys);
-        }, [graphState.edges, graphCards, graphModel]);
+          const treeKeys = graphCards.filter((card) => connected.has(card.key)).map((card) => card.key);
+          const stagedKeys = graphCards
+            .filter((card) => stagedSessions.has(card.key) && !connected.has(card.key))
+            .map((card) => card.key);
+          return graphModel.layoutGraphWithStaged(graphState.edges, treeKeys, stagedKeys);
+        }, [graphState.edges, graphCards, graphModel, stagedSessions]);
+
+        /**
+         * 左侧二级选择器的数据：工作区 → **还没加入画布**的会话。
+         *
+         * 一旦会话被拖进画布（待连线）或已经连进树，它就不再出现在左侧：列表里始终只有
+         * 「还能加入的」，用户不用在已加入的条目里辨认状态。把它移出画布（卡片右上角 ×，
+         * 或删掉箭头后回到待连线再移出）之后，它会重新出现在这里。
+         *
+         * 分组与字母排序交给模型（`groupSessionsByWorkspace`）；没有任何可选项的工作区
+         * 整组隐藏，避免展开一个空组。
+         */
+        const pickerGroups = useMemo(() => {
+          const connected = new Set();
+          for (const edge of graphState.edges) {
+            connected.add(edge.from);
+            connected.add(edge.to);
+          }
+          return graphModel.groupSessionsByWorkspace(graphCards, { unknownLabel: t('pane.unknownWorkspace') })
+            .map((group) => ({
+              key: group.key,
+              label: group.label,
+              items: group.items
+                .map((id) => graphCardById.get(id))
+                .filter((card) => card !== undefined && !connected.has(card.key) && !stagedSessions.has(card.key))
+                .map((card) => ({
+                  key: card.key,
+                  label: card.label,
+                  workspaceTitle: card.workspaceTitle,
+                  running: card.running === true,
+                })),
+            }))
+            .filter((group) => group.items.length > 0);
+        }, [graphCards, graphCardById, graphState.edges, stagedSessions, graphModel, t]);
 
         /**
          * 把画出来的箭头换算成 Host 的绑定表，并在它变化时同步过去。
@@ -948,16 +1015,20 @@ window.__ModuleLoader__.load({
           diagnostic: 'build ' + CLIENT_BUILD
             + ' · 关系 ' + String(graphState.edges.length)
             + ' · 会话 ' + String(graphCards.length)
+            + ' · 待连线 ' + String(stagedSessions.size)
             + ' · 同步 ' + dispatchState.status
             + (dispatchState.error === null || dispatchState.error === undefined ? '' : '（' + dispatchState.error + '）'),
           layout: graphLayout,
           graph: graphModel,
+          pickerGroups,
           actions: {
             addEdge: graphActions.addEdge,
             removeEdge: graphActions.removeEdge,
             // 少了这一行：编辑器打开后点「保存」会调一个 undefined —— 什么都不发生。
             setNote: graphActions.setNote,
             openPane: openPaneFromGraph,
+            stageSession,
+            unstageSession,
           },
           t,
           css,

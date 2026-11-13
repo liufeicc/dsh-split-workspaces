@@ -200,14 +200,30 @@ that currently holds focus is marked by a brand-coloured title bar.
 ## Design mode: draw the delegation tree as arrows
 
 The panel has two modes: **tile** (the default, everything described above) and **design**.
-Design mode draws every **session** as a card and connects them with arrows into a directed
-tree — the arrow direction *is* the delegation direction, and deleting an arrow revokes the
-authorization. There is no second configuration: the graph is the permission.
+Design mode lets you drag **sessions** from the left-hand picker onto the canvas and connect
+them with arrows into a directed tree — the arrow direction *is* the delegation direction, and
+deleting an arrow revokes the authorization. There is no second configuration: the graph is the
+permission.
 
 - **Draw one**: drag from the dot on a card's right edge onto another card.
 - **Delete one**: click the small cross at the arrow's midpoint.
 - **Sessions, not panes**: the same session opened in two panes still has one card, and
   closing a pane never deletes an arrow. Only deleting the session drops its edges.
+- **Candidates grouped by workspace**: the canvas no longer tiles every session. A left-hand
+  picker groups sessions by workspace (groups sorted alphabetically, collapsed by default);
+  open a workspace to list its session cards, then drag one onto the canvas (or click it) to add
+  it. **Added sessions disappear from the left-hand list** and come back only after being removed
+  from the canvas. A dragged card first waits in the canvas's left-hand "unwired" column with a
+  dashed border; it joins the tree on the right only after an arrow is drawn, and drops back to
+  unwired when that arrow is deleted. Sessions that belong to no registered workspace go into an
+  "unknown workspace" group at the end.
+- **Wire after dropping**: on the canvas, drag from a card's right-edge light dot onto another
+  card to create a relation; the × at the top-right of an unwired card removes it from the canvas.
+- **Trees stack as whole blocks**: when several disconnected trees exist, each tree is laid out
+  on its own and the next tree starts below the previous tree's bottom edge, so arrows and
+  notes from different trees never interleave.
+- **Colour by origin**: cards from the same workspace and arrows from the same source session
+  share one neon colour; every connection carries a highlight flowing towards the arrowhead.
 
 Two invariants keep it a tree: no cycles, and at most one parent per session. Both are
 enforced by a pure function (`validateEdge`) before the edge is added.
@@ -671,8 +687,8 @@ the whole implementation.
   `dsh-mcp-workspace-policy`).
 - `client.graph.model.js` — the pure model: the four edge checks, layered layout, drop
   resolution, and the graph → bindings conversion. No React, so it runs under Node.
-- `client.graph.view.js` — the design-mode canvas: cards, bezier arrows, drag-to-connect,
-  delete buttons.
+- `client.graph.view.js` — design mode: the collapsible workspace/session picker that drags
+  cards onto the canvas, plus cards, bezier arrows, drag-to-connect and delete buttons.
 - `client.skill.js` — the per-workspace SKILL switch: same shape as the MCP block, but its items
   come from scanning the skill directory and every row carries a description; empty / missing /
   broken directory each get their own message.

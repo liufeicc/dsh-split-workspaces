@@ -40,6 +40,44 @@ window.__ModuleLoader__.load({
     const GAP_Y = 22;
     const PAD = 28;
 
+    /**
+     * 两棵独立的委派树之间的垂直间距。
+     *
+     * 必须比同一棵树内部的行距（`GAP_Y`）明显大：否则第二棵树的根看起来像第一棵树的
+     * 下一行子节点，用户会把两棵树读成一棵。现在每棵树都作为一个**整体块**堆叠，
+     * 这条间距就是块与块之间的分隔。
+     */
+    const TREE_GAP = 56;
+
+    /**
+     * 文本排序器。
+     *
+     * 「按字母排序」在中文环境里就是按拼音（浏览器/Node 的 ICU 会处理），数字按
+     * `numeric` 排（`session 2` 在 `session 10` 前面）。环境没有完整 ICU 时退回
+     * 逐字符比较 —— 排序结果可能不理想，但绝不能因此让整个画布挂掉。
+     */
+    const textCollator = (() => {
+      try {
+        return new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+      } catch {
+        return null;
+      }
+    })();
+
+    /**
+     * 比较两个显示名。
+     *
+     * 空值统一当成空串（否则 `undefined` 会把排序器弄乱）；完全相同时返回 0，调用方
+     * 再按 key 兜底排序，保证同一份数据每次算出来的顺序一致。
+     */
+    function compareText(left, right) {
+      const a = left === undefined || left === null ? '' : String(left);
+      const b = right === undefined || right === null ? '' : String(right);
+      if (a === b) return 0;
+      if (textCollator !== null) return textCollator.compare(a, b);
+      return a < b ? -1 : 1;
+    }
+
     /** 一条委派说明的最大长度（字符）。它会进工具描述，太长会把上下文吃掉。 */
     const EDGE_NOTE_MAX = 200;
 
@@ -319,9 +357,20 @@ window.__ModuleLoader__.load({
      * 一旦某个子树更深，BFS 会把浅的那个节点放得比它的下级还靠左，箭头就会往回画。
      * 取「到根的最长路径」保证每条边一定是从左指向右。
      *
+     * ## 多棵树必须整块堆叠
+     *
+     * 画布上可以同时存在多棵互不相连的树。早期实现把所有节点按「深度」放进同一批
+     * 列里，于是第二棵树的根会和第一棵树的子节点落在相邻行，两棵树的箭头与说明
+     * 交缠在一起，根本看不清哪条线属于哪棵树。
+     *
+     * 现在先按连通分量把森林拆成若干棵树，**每棵树单独布局**，再按根的出现顺序把
+     * 整块垂直堆叠，块与块之间留 `TREE_GAP`。这样第二棵树的所有节点都在第一棵树
+     * 的最底边之下，不会再穿插。
+     *
      * @param edges - 边数组。
-     * @param keys - 参与布局的窗格 key（顺序即同层内的初始次序）。
-     * @param options - 可覆盖的尺寸常量（离线测试里用小一点的值方便断言）。
+     * @param keys - 参与布局的会话 key（顺序即根与同层内的初始次序）。
+     * @param options - 可覆盖的尺寸常量（离线测试里用小一点的值方便断言），
+     *   其中 `treeGap` 覆盖两棵树之间的间距。
      * @returns `{ items, width, height }`，`items` 每项 `{ key, x, y, w, h, depth }`。
      */
     function layoutGraph(edges, keys, options) {
@@ -330,66 +379,250 @@ window.__ModuleLoader__.load({
       const gapX = options?.gapX ?? GAP_X;
       const gapY = options?.gapY ?? GAP_Y;
       const pad = options?.pad ?? PAD;
-      const present = Array.isArray(keys) ? keys.filter((key) => typeof key === 'string') : [];
+      const treeGap = options?.treeGap ?? TREE_GAP;
+      // 去重：同一个 key 进来两次只画一张卡片，否则两张卡片会完全重叠。
+      const present = [];
+      const presentSet = new Set();
+      for (const key of Array.isArray(keys) ? keys : []) {
+        if (typeof key !== 'string' || presentSet.has(key)) continue;
+        presentSet.add(key);
+        present.push(key);
+      }
       const keySet = new Set(present);
       const usable = (Array.isArray(edges) ? edges : [])
         .filter((edge) => keySet.has(edge.from) && keySet.has(edge.to) && edge.from !== edge.to);
-      // 最长路径分层：反复松弛，轮数上限 = 节点数（有环也一定会停）。
-      const depth = new Map(present.map((key) => [key, 0]));
-      for (let round = 0; round < present.length; round += 1) {
-        let changed = false;
-        for (const edge of usable) {
-          const candidate = (depth.get(edge.from) ?? 0) + 1;
-          if (candidate > (depth.get(edge.to) ?? 0)) {
-            depth.set(edge.to, candidate);
-            changed = true;
+      const orderIndex = new Map(present.map((key, index) => [key, index]));
+
+      /*
+       * 先按连通分量拆森林。
+       *
+       * 合法数据里每个节点最多一个上级，所以「没有入边的节点」就是每棵树的根；
+       * 从根做一次 DFS 就收集到整棵树。环上的节点没有根可达（数据异常时才会出现），
+       * 兜底再按 present 顺序收一遍，保证不会漏画卡片。
+       */
+      const parentOf = new Map();
+      const childrenOf = new Map();
+      for (const edge of usable) {
+        if (!parentOf.has(edge.to)) parentOf.set(edge.to, edge.from);
+        const children = childrenOf.get(edge.from);
+        if (children === undefined) childrenOf.set(edge.from, [edge.to]);
+        else children.push(edge.to);
+      }
+      const visited = new Set();
+      const components = [];
+      const collect = (root) => {
+        const component = [];
+        const stack = [root];
+        visited.add(root);
+        while (stack.length > 0) {
+          const current = stack.pop();
+          component.push(current);
+          for (const child of childrenOf.get(current) ?? []) {
+            if (visited.has(child)) continue;
+            visited.add(child);
+            stack.push(child);
           }
         }
-        if (!changed) break;
-      }
-      // 同层排序：先按「上级在本层里的次序」，再按传入顺序 —— 一棵子树因此聚在一起。
-      const parentOf = new Map();
-      for (const edge of usable) if (!parentOf.has(edge.to)) parentOf.set(edge.to, edge.from);
-      const orderIndex = new Map(present.map((key, index) => [key, index]));
-      const columns = new Map();
-      for (const key of present) {
-        const level = depth.get(key) ?? 0;
-        const column = columns.get(level);
-        if (column === undefined) columns.set(level, [key]);
-        else column.push(key);
-      }
-      const columnOrder = [...columns.keys()].sort((a, b) => a - b);
-      const placed = new Map();
+        components.push(component);
+      };
+      for (const key of present) if (!parentOf.has(key) && !visited.has(key)) collect(key);
+      for (const key of present) if (!visited.has(key)) collect(key);
+
       const items = [];
-      for (const level of columnOrder) {
-        const column = columns.get(level);
-        column.sort((a, b) => {
-          const pa = parentOf.get(a);
-          const pb = parentOf.get(b);
-          const ra = pa === undefined ? Number.MAX_SAFE_INTEGER : (placed.get(pa) ?? orderIndex.get(pa) ?? 0);
-          const rb = pb === undefined ? Number.MAX_SAFE_INTEGER : (placed.get(pb) ?? orderIndex.get(pb) ?? 0);
-          if (ra !== rb) return ra - rb;
-          return (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0);
-        });
-        column.forEach((key, index) => {
-          placed.set(key, index);
-          items.push({
-            key,
-            x: pad + level * (cardW + gapX),
-            y: pad + index * (cardH + gapY),
-            w: cardW,
-            h: cardH,
-            depth: level,
+      let cursor = 0;
+      let maxWidth = 0;
+      for (const component of components) {
+        const componentSet = new Set(component);
+        const componentEdges = usable.filter((edge) => componentSet.has(edge.from) && componentSet.has(edge.to));
+        const componentParent = new Map();
+        for (const edge of componentEdges) if (!componentParent.has(edge.to)) componentParent.set(edge.to, edge.from);
+
+        // 最长路径分层：只在这棵树内部松弛。
+        const depth = new Map(component.map((key) => [key, 0]));
+        for (let round = 0; round < component.length; round += 1) {
+          let changed = false;
+          for (const edge of componentEdges) {
+            const candidate = (depth.get(edge.from) ?? 0) + 1;
+            if (candidate > (depth.get(edge.to) ?? 0)) {
+              depth.set(edge.to, candidate);
+              changed = true;
+            }
+          }
+          if (!changed) break;
+        }
+
+        const columns = new Map();
+        for (const key of component) {
+          const level = depth.get(key) ?? 0;
+          const column = columns.get(level);
+          if (column === undefined) columns.set(level, [key]);
+          else column.push(key);
+        }
+        const columnOrder = [...columns.keys()].sort((a, b) => a - b);
+        const placed = new Map();
+        for (const level of columnOrder) {
+          const column = columns.get(level);
+          column.sort((a, b) => {
+            const pa = componentParent.get(a);
+            const pb = componentParent.get(b);
+            const ra = pa === undefined ? Number.MAX_SAFE_INTEGER : (placed.get(pa) ?? orderIndex.get(pa) ?? 0);
+            const rb = pb === undefined ? Number.MAX_SAFE_INTEGER : (placed.get(pb) ?? orderIndex.get(pb) ?? 0);
+            if (ra !== rb) return ra - rb;
+            return (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0);
           });
-        });
+          column.forEach((key, index) => {
+            placed.set(key, index);
+            items.push({
+              key,
+              x: pad + level * (cardW + gapX),
+              // cursor 是这棵树在整块画布里的顶部偏移；块内仍然从 pad 开始。
+              y: pad + cursor + index * (cardH + gapY),
+              w: cardW,
+              h: cardH,
+              depth: level,
+            });
+          });
+        }
+
+        const maxColumn = columnOrder.length === 0 ? 0 : (columnOrder[columnOrder.length - 1] + 1);
+        const tallest = Math.max(0, ...columnOrder.map((level) => (columns.get(level) ?? []).length));
+        const width = maxColumn === 0 ? cardW : maxColumn * cardW + (maxColumn - 1) * gapX;
+        const height = tallest === 0 ? cardH : tallest * cardH + (tallest - 1) * gapY;
+        maxWidth = Math.max(maxWidth, width);
+        cursor += height + treeGap;
       }
-      const maxColumn = columnOrder.length === 0 ? 0 : (columnOrder[columnOrder.length - 1] + 1);
-      const tallest = Math.max(0, ...columnOrder.map((level) => (columns.get(level) ?? []).length));
+
+      // cursor 在最后一棵树后面多留了一个 treeGap，减掉；没有任何树时用单卡高度兜底。
+      const stackedHeight = components.length === 0 ? 0 : cursor - treeGap;
       return {
         items,
-        width: pad * 2 + (maxColumn === 0 ? cardW : maxColumn * cardW + (maxColumn - 1) * gapX),
-        height: pad * 2 + (tallest === 0 ? cardH : tallest * cardH + (tallest - 1) * gapY),
+        width: pad * 2 + (maxWidth === 0 ? cardW : maxWidth),
+        height: pad * 2 + (stackedHeight === 0 ? cardH : stackedHeight),
       };
+    }
+
+    /**
+     * 把**还没连线**的会话卡片按工作区分组，供左侧花名册展示。
+     *
+     * 分组的动机很具体：任务分派列出的是全部已存在的会话，工作区一多、会话一多，
+     * 「哪张卡片属于哪个工作区」只能靠卡片左上角那行小字去认，找起来很费劲。
+     * 分组之后，每个工作区有一行标题，组内按会话名排序，找目标变成两级定位。
+     *
+     * ## 排序规则（都是「按字母」）
+     *
+     *   - **组之间**：按工作区显示名排；名字相同时按工作区 key 兜底。
+     *   - **组内**：按会话显示名排；名字相同时按会话 id 兜底。
+     *   - **不属于任何工作区的会话**（工作区被删了、会话还留着）固定排在最后：
+     *     它们不是用户可以「去那个工作区找」的东西，混在字母序中间只会碍事。
+     *
+     * 返回的 `items` 是会话 id 数组；视图层只负责把 id 映射回卡片。
+     *
+     * @param cards - 候选卡片数组，每项 `{ key, label, workspaceKey, workspaceTitle }`。
+     * @param options.unknownLabel - 「未归属工作区」的本地化显示名。
+     * @returns `[{ key, label, items: [sessionId] }]`。
+     */
+    function groupSessionsByWorkspace(cards, options) {
+      const unknownLabel = options?.unknownLabel ?? '';
+      const groups = new Map();
+      for (const card of Array.isArray(cards) ? cards : []) {
+        if (card === null || typeof card !== 'object') continue;
+        if (typeof card.key !== 'string' || card.key === '') continue;
+        const hasWorkspace = typeof card.workspaceKey === 'string' && card.workspaceKey !== '';
+        const groupKey = hasWorkspace ? card.workspaceKey : '';
+        const groupLabel = hasWorkspace
+          ? (typeof card.workspaceTitle === 'string' && card.workspaceTitle !== '' ? card.workspaceTitle : card.workspaceKey)
+          : unknownLabel;
+        const entry = groups.get(groupKey);
+        if (entry === undefined) {
+          groups.set(groupKey, { key: groupKey, label: groupLabel, cards: [card] });
+        } else {
+          // 同一工作区的卡片可能来自不同的会话行，标题以第一个非空的为准。
+          if (entry.label === '' && groupLabel !== '') entry.label = groupLabel;
+          entry.cards.push(card);
+        }
+      }
+      const ordered = [...groups.values()];
+      ordered.sort((left, right) => {
+        // 未归属组固定垫底，不参与字母序。
+        const leftOrphan = left.key === '';
+        const rightOrphan = right.key === '';
+        if (leftOrphan !== rightOrphan) return leftOrphan ? 1 : -1;
+        return compareText(left.label, right.label) || compareText(left.key, right.key);
+      });
+      return ordered.map((group) => {
+        const rows = [...group.cards];
+        rows.sort((left, right) => compareText(left.label, right.label) || compareText(left.key, right.key));
+        return { key: group.key, label: group.label, items: rows.map((card) => card.key) };
+      });
+    }
+
+    /**
+     * 整块画布的布局：左边一列是**用户从选择器拖进来的待连线会话**，右边是已经连成树的会话。
+     *
+     * 为什么待连线会话单独占一列：画布不再平铺全部会话（那样会话一多就没法找），
+     * 用户先在左侧选择器里选好，再把卡片拖进来。拖进来的卡片先停在左列等连线，
+     * 连上箭头之后才进入右侧的树。这样一眼就能分清：
+     * **左列 = 还没连线的卡片，右侧 = 已经连好的树**。
+     *
+     * 树的内部布局完全复用 `layoutGraph`：整体水平平移一列，根仍在左、子仍往右，
+     * 卡片与箭头的样子都不变。没有待连线卡片时，平移量为 0，画布与以前一模一样。
+     *
+     * @param edges - 已连接的边数组。
+     * @param treeKeys - 树上会话的 key（顺序决定同层内的初始次序）。
+     * @param stagedKeys - 已拖入画布、但还没连线的会话 key（按拖入顺序）。
+     * @param options - 可覆盖的尺寸常量（离线测试里用小的值方便断言）。
+     * @returns `{ items, width, height }`，`items` 每项 `{ key, x, y, w, h, depth, staged? }`。
+     */
+    function layoutGraphWithStaged(edges, treeKeys, stagedKeys, options) {
+      const cardW = options?.cardW ?? CARD_W;
+      const cardH = options?.cardH ?? CARD_H;
+      const gapX = options?.gapX ?? GAP_X;
+      const gapY = options?.gapY ?? GAP_Y;
+      const pad = options?.pad ?? PAD;
+
+      const tree = layoutGraph(edges, treeKeys, options);
+      /*
+       * 待连线卡片去重，并且不能与树上的会话重复：
+       * 已连接的卡片由树来画，若它同时还在待连线表里，同一张卡片会被画两遍，
+       * 其中一份还会停在旧位置。
+       */
+      const seen = new Set(tree.items.map((item) => item.key));
+      const staged = [];
+      for (const key of Array.isArray(stagedKeys) ? stagedKeys : []) {
+        if (typeof key !== 'string' || key === '' || seen.has(key)) continue;
+        seen.add(key);
+        staged.push(key);
+      }
+      // 没有待连线卡片：完全退回原来的树布局，绝不因为多了这一层而改动老画面。
+      if (staged.length === 0) {
+        return { items: tree.items, width: tree.width, height: tree.height };
+      }
+
+      const items = [];
+      let y = pad;
+      staged.forEach((key, index) => {
+        items.push({ key, x: pad, y, w: cardW, h: cardH, depth: 0, staged: true });
+        y += cardH;
+        if (index < staged.length - 1) y += gapY;
+      });
+      const stagedHeight = y + pad;
+
+      let width;
+      let height;
+      if (tree.items.length > 0) {
+        // 树的左边缘让出一列（卡片宽 + 列间距），待连线列自己占最左边一列。
+        const shift = cardW + gapX;
+        for (const item of tree.items) {
+          items.push({ ...item, x: item.x + shift });
+        }
+        width = tree.width + shift;
+        height = Math.max(tree.height, stagedHeight);
+      } else {
+        // 画布上只有待连线卡片：只剩左列，不要再留一列空白。
+        width = pad * 2 + cardW;
+        height = stagedHeight;
+      }
+      return { items, width, height };
     }
 
     /**
@@ -472,7 +705,9 @@ window.__ModuleLoader__.load({
       sanitizeEdges,
       resolveDrop,
       edgesFromBindings,
+      groupSessionsByWorkspace,
       layoutGraph,
+      layoutGraphWithStaged,
       bindingsFromEdges,
     };
   },

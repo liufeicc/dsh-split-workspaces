@@ -80,6 +80,81 @@ check('链式结构按最长路径分层（浅节点不会跑到它下级右边�
   return depth('a') < depth('b') && depth('b') < depth('c');
 })());
 
+// ── 多棵树：整块堆叠，不能穿插 ──
+const forest = graph.layoutGraph(
+  [edge('a', 'b'), edge('c', 'd')],
+  ['a', 'b', 'c', 'd'],
+  { cardW: 100, cardH: 50, gapX: 40, gapY: 10, pad: 5, treeGap: 30 },
+);
+const forestAt = (key) => forest.items.find((item) => item.key === key);
+check('第二棵树整体排在第一棵树下面（整块堆叠）',
+  forestAt('c').y === forestAt('a').y + 50 + 30 && forestAt('d').y === forestAt('c').y,
+  JSON.stringify({ a: forestAt('a').y, c: forestAt('c').y, d: forestAt('d').y }));
+check('第二棵树的根在第一棵树最底边之下，不会和它的子节点穿插',
+  forestAt('c').y >= forestAt('b').y + 50 + 30,
+  JSON.stringify({ b: forestAt('b').y, c: forestAt('c').y }));
+check('两棵树各自保持根在左、子往右',
+  forestAt('b').x > forestAt('a').x && forestAt('d').x === forestAt('b').x);
+check('画布高度包住两棵树', forest.height === 5 * 2 + 50 + 30 + 50, String(forest.height));
+const forestWide = graph.layoutGraph(
+  [edge('a', 'b'), edge('a', 'c'), edge('d', 'e')],
+  ['a', 'b', 'c', 'd', 'e'],
+  { cardW: 100, cardH: 50, gapX: 40, gapY: 10, pad: 5, treeGap: 30 },
+);
+const wideAt = (key) => forestWide.items.find((item) => item.key === key);
+check('块高度按这棵树最高的列算，第二棵树从它的底边之后开始',
+  wideAt('d').y === 5 + (50 + 50 + 10) + 30,
+  JSON.stringify({ d: wideAt('d').y }));
+
+// ── 候选按工作区分组（左列花名册） ──
+const rosterCards = [
+  { key: 's-z', label: 'zeta', workspaceKey: 'ws-2', workspaceTitle: 'Beta' },
+  { key: 's-a', label: 'alpha', workspaceKey: 'ws-1', workspaceTitle: 'alpha' },
+  { key: 's-m', label: 'mid', workspaceKey: 'ws-1', workspaceTitle: 'alpha' },
+  { key: 's-o', label: 'orphan', workspaceKey: '', workspaceTitle: '' },
+  { key: 's-b', label: 'beta', workspaceKey: 'ws-3', workspaceTitle: 'Beta 2' },
+];
+const roster = graph.groupSessionsByWorkspace(rosterCards, { unknownLabel: '未归属' });
+check('候选按工作区分组，同一工作区只出现一个组', roster.length === 4, String(roster.length));
+check('组按工作区名排序（大小写不敏感）',
+  roster.map((group) => group.label).join(',') === 'alpha,Beta,Beta 2,未归属',
+  roster.map((group) => group.label).join(','));
+check('组内按会话名排序', roster[0].items.join(',') === 's-a,s-m', roster[0].items.join(','));
+check('未归属工作区的会话固定排在最后', roster[roster.length - 1].key === '', roster[roster.length - 1].key);
+
+const stagedLayout = graph.layoutGraphWithStaged(
+  [edge('a', 'b')],
+  ['a', 'b'],
+  ['x', 'y'],
+  { cardW: 100, cardH: 50, gapX: 40, gapY: 10, pad: 5 },
+);
+const stagedItem = (key) => stagedLayout.items.find((item) => item.key === key);
+check('待连线卡片在画布左列，树整体右移一列',
+  stagedItem('x').x === 5 && stagedItem('a').x === 5 + 100 + 40,
+  'x=' + String(stagedItem('x').x) + ' a=' + String(stagedItem('a').x));
+check('待连线卡片按拖入顺序垂直排列，互相不重叠',
+  stagedItem('x').y === 5 && stagedItem('y').y === 5 + 50 + 10,
+  'x.y=' + String(stagedItem('x').y) + ' y.y=' + String(stagedItem('y').y));
+check('待连线卡片带 staged 标记，树节点没有',
+  stagedItem('x').staged === true && stagedItem('a').staged === undefined);
+check('画布高度取两列中较高的一列', stagedLayout.height === 5 + 50 + 10 + 50 + 5,
+  String(stagedLayout.height));
+check('只有待连线卡片时只剩左列，不留树列空白', (() => {
+  const only = graph.layoutGraphWithStaged([], [], ['x'], { cardW: 100, cardH: 50, pad: 5 });
+  return only.width === 5 * 2 + 100 && only.items.length === 1 && only.items[0].staged === true;
+})());
+check('待连线表里混入已连接的会话时不会重复画同一个节点', (() => {
+  const dedup = graph.layoutGraphWithStaged([edge('a', 'b')], ['a', 'b'], ['a', 'c'], {});
+  return dedup.items.filter((item) => item.key === 'a').length === 1;
+})());
+check('没有待连线卡片时布局与原来的树布局完全一致', (() => {
+  const plain = graph.layoutGraph([edge('a', 'b')], ['a', 'b'], {});
+  const withStaged = graph.layoutGraphWithStaged([edge('a', 'b')], ['a', 'b'], [], {});
+  return JSON.stringify(plain.items) === JSON.stringify(withStaged.items)
+    && plain.width === withStaged.width
+    && plain.height === withStaged.height;
+})());
+
 // ── 落点判定 ──
 check('松手落在卡片上就算命中', (() => {
   const resolved = graph.resolveDrop([], layout, 'a', { x: at('b').x + 2, y: at('b').y + 2 });
@@ -337,29 +412,110 @@ check('默认高亮的是平铺', modeButtons[0].props['aria-pressed'] === true 
 
 // 切到设计模式（真实路径：点按钮 → store 变 → 重渲染）
 modeButtons[1].props.onClick();
-const graphTree = board.render().tree;
+/*
+ * 后续要验证「拖入会话」和「已连线/待连线」两种卡片同屏，必须复用同一个
+ * 父组件挂载实例：待连线集合是组件 state，重新 mount 一次就回到空集合。
+ */
+const panel = board.render();
+const graphTree = panel.tree;
 const graphDom = graphBoardOf(graphTree);
 check('切到设计模式后渲染出画布', graphDom !== undefined);
-const cards = findAll(graphDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCard'));
-check('每个真实会话一张卡片（空白会话不算）', cards.length === 3, String(cards.length));
-check('没在棋盘上打开的会话也出现（候选是全部已存在会话）',
-  cards.some((card) => card.props['data-session'] === 's-c'));
-check('卡片按会话 key，不是窗格 key', cards.every((card) => typeof card.props['data-session'] === 'string' && card.props['data-session'].startsWith('s-')));
-check('卡片上写着工作区名与会话标题', (() => {
-  const text = JSON.stringify(graphDom.tree);
-  return text.includes('alpha') && text.includes('beta');
-})());
-check('每张卡片都有右边缘的出线端口（拖动起点）', findAll(graphDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.includes('dshSplitWs_graphPort')).length === 3);
-
-// 真正加一条边（两端都是会话 id）
 const graphActions = injected.graphActions;
-graphActions.addEdge('s-a', 's-b');
-const withEdge = graphBoardOf(board.render().tree);
-const paths = findAll(withEdge.tree, (node) => node.type === 'path' && typeof node.props?.d === 'string' && node.props.d.startsWith('M '));
-check('画出了一条箭头路径', paths.length === 1, String(paths.length));
-check('箭头带指向目标的多边形', findAll(withEdge.tree, (node) => node.type === 'polygon').length === 1);
+const findCards = (dom) => findAll(dom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCard'));
+const cardsAtStart = findCards(graphDom);
+check('画布不再平铺全部会话（初始化时是空的）', cardsAtStart.length === 0, String(cardsAtStart.length));
+check('空画布提示从左侧拖入会话', (() => {
+  const text = JSON.stringify(graphDom.tree);
+  return text.includes('从左侧') || text.includes('拖到这里');
+})());
 
-const editButton = findAll(withEdge.tree, (node) => typeof node.props?.className === 'string' && node.props.className.includes('dshSplitWs_graphEdgeEdit'))[0];
+/*
+ * 左侧二级选择器：第一级是工作区，默认全部折叠；点开后才列出该工作区的会话。
+ * GraphPicker 是独立组件，需要单独挂载才能触发它自己的展开状态。
+ */
+const pickerNode = findAll(graphDom.tree, byName('GraphPicker'))[0];
+const picker = pickerNode === undefined ? undefined : mount(pickerNode.type, pickerNode.props);
+check('设计模式左侧渲染出会话选择器', picker !== undefined);
+const findPickerItems = (dom) => findAll(dom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerItem'));
+const groupHeads = findAll(picker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerGroupHead'));
+check('选择器按工作区分组（每个工作区一组）', groupHeads.length === 3, String(groupHeads.length));
+check('选择器默认折叠，先让用户选工作区', findPickerItems(picker).length === 0, String(findPickerItems(picker).length));
+groupHeads[0].props.onClick();
+picker.flush();
+const pickerItems = findPickerItems(picker);
+check('点开工作区后才列出它的会话', pickerItems.length === 1 && pickerItems[0].props['data-session'] === 's-a',
+  JSON.stringify(pickerItems.map((item) => item.props['data-session'])));
+
+/*
+ * 把会话拖到画布：选择器写私有 MIME，画布的 onDrop 读出来交给 stageSession。
+ * 这里模拟的是这条真实链路，而不是直接调 setState。
+ */
+const scrollNode = findAll(graphDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphScroll'))[0];
+const transferFor = (id) => ({
+  getData: (type) => (type === 'application/x-dsh-split-workspace-session' || type === 'text/plain' ? id : ''),
+});
+scrollNode.props.onDrop({ preventDefault: () => {}, dataTransfer: transferFor('s-a') });
+panel.flush();
+const stagedBoard = graphBoardOf(panel.tree);
+const stagedCards = findCards(stagedBoard);
+check('拖入一个会话后画布出现一张卡片', stagedCards.length === 1 && stagedCards[0].props['data-session'] === 's-a',
+  JSON.stringify(stagedCards.map((card) => card.props['data-session'])));
+check('刚拖进来的卡片是待连线状态', stagedCards[0].props['data-staged'] === 'true');
+
+// 再拖一个进来，并把 s-a → s-b 连上，检查「树 + 待连线」同屏。
+stagedBoard.props.actions.stageSession('s-c');
+panel.flush();
+graphActions.addEdge('s-a', 's-b');
+/*
+ * 外部 graphStore 的变化不会让父组件变成 dirty（测试替身的 useSyncExternalStore
+ * 不订阅），所以这里用 render() 强制再跑一次组件函数、重新读快照 —— 不能重新
+ * mount，否则待连线集合会丢。
+ */
+panel.render();
+const mixedBoard = graphBoardOf(panel.tree);
+const mixedCards = findCards(mixedBoard);
+const mixedCardOf = (sessionId) => mixedCards.find((card) => card.props['data-session'] === sessionId);
+check('已连接的会话移到右侧树列，待连线卡片留在左侧',
+  parseFloat(mixedCardOf('s-a').props.style.left) > parseFloat(mixedCardOf('s-c').props.style.left),
+  's-a=' + mixedCardOf('s-a').props.style.left + ' s-c=' + mixedCardOf('s-c').props.style.left);
+check('待连线卡片带虚线标记，已连接卡片没有',
+  mixedCardOf('s-c').props['data-staged'] === 'true' && mixedCardOf('s-a').props['data-staged'] === 'false',
+  JSON.stringify({ 's-c': mixedCardOf('s-c').props['data-staged'], 's-a': mixedCardOf('s-a').props['data-staged'] }));
+check('画出了箭头，且待连线卡片没有造成第二张重复卡片',
+  findAll(mixedBoard.tree, (node) => node.type === 'polygon').length === 1 && mixedCards.length === 3,
+  'cards=' + String(mixedCards.length));
+const edgePaths = findAll(mixedBoard.tree, (node) => node.type === 'path' && typeof node.props?.className === 'string' && node.props.className.includes('dshSplitWs_graphEdge') && !node.props.className.includes('dshSplitWs_graphEdgeFlow'));
+const flowPaths = findAll(mixedBoard.tree, (node) => node.type === 'path' && typeof node.props?.className === 'string' && node.props.className.includes('dshSplitWs_graphEdgeFlow'));
+check('每条关系都有基础线与一层流动高光', edgePaths.length === 1 && flowPaths.length === 1,
+  'base=' + String(edgePaths.length) + ' flow=' + String(flowPaths.length));
+check('基础线与箭头按源会话取同一种霓虹色（不是写死的青色）',
+  typeof edgePaths[0].props.stroke === 'string'
+  && edgePaths[0].props.stroke.startsWith('#')
+  && edgePaths[0].props.stroke.slice(0, 7) === findAll(mixedBoard.tree, (node) => node.type === 'polygon')[0].props.fill,
+  String(edgePaths[0].props.stroke));
+check('已加入画布的会话从左侧选择器消失',
+  (() => {
+    const groups = findAll(mixedBoard.tree, byName('GraphPicker'))[0].props.groups;
+    return groups.length === 0;
+  })());
+
+// 待连线卡片右上角的 × 能把它移出画布，并让它重新出现在左侧选择器。
+const removeStaged = findAll(mixedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCardRemove'))[0];
+removeStaged.props.onClick({ stopPropagation: () => {} });
+panel.flush();
+const afterUnstage = graphBoardOf(panel.tree);
+const pickerAfter = findAll(afterUnstage.tree, byName('GraphPicker'))[0];
+const pickerKeysAfter = pickerAfter.props.groups.flatMap((group) => group.items).map((item) => item.key);
+check('点 × 把待连线卡片移出画布，并放回左侧选择器',
+  findCards(afterUnstage).every((card) => card.props['data-session'] !== 's-c')
+  && findCards(afterUnstage).length === 2
+  && pickerKeysAfter.includes('s-c'),
+  JSON.stringify({
+    cards: findCards(afterUnstage).map((card) => card.props['data-session']),
+    picker: pickerKeysAfter,
+  }));
+
+const editButton = findAll(mixedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.includes('dshSplitWs_graphEdgeEdit'))[0];
 check('每条边中点有一个编辑按钮', editButton !== undefined);
 
 /*

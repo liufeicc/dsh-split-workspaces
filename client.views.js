@@ -175,7 +175,17 @@ window.__ModuleLoader__.load({
         const activeId = active === null ? null : active.id;
         const views = useMemo(() => makeViews(activeId), [activeId]);
         const factoryOptions = useMemo(() => ({ slots: { views } }), [views]);
-        const session = props.useSession((value) => value);
+        /*
+         * 只订阅 `openState` 和 `blank` 两个字段，不订阅整个会话快照。
+         *
+         * 这个组件每重渲染一次，就会把下面整个 `conversation.content` Factory
+         * 重新渲染一遍；而流式输出时会话快照每个 token 都会变。四个窗格同时
+         * 输出时，按整个快照订阅等于每个 token 都多跑一遍对话视图的渲染。
+         * `useSession` 是带选择器的（`Object.is` 比较结果），这里返回的都是
+         * 原始值，所以只有会话开关 / 空白状态真正变化时才会重渲染。
+         */
+        const openState = props.useSession((value) => value?.openState);
+        const blank = props.useSession((value) => value?.blank === true);
         /*
          * 「正在打开」不等于「还在等第一条消息」。
          *
@@ -189,13 +199,13 @@ window.__ModuleLoader__.load({
          * `blank` 初值是 true，但平台在 retain / 列表同步时会先按会话表校正
          * （`handleBlank`），所以已有历史的会话不会被误判成空白。
          */
-        const settling = session === undefined
-          || (session.openState === 'loading' && session.blank === true);
+        const settling = openState === undefined
+          || (openState === 'loading' && blank === true);
         /*
          * 空白会话不显示标签栏：与主对话 header 的规则一致（第一条消息发出前
          * 只有 Hero 和输入框，没有视图标签）。会话一开始，标签栏自动出现。
          */
-        const showTabs = !settling && session?.blank !== true && tabs.length > 1;
+        const showTabs = !settling && blank !== true && tabs.length > 1;
         const content = h('div', { className: css.paneViewContent },
           props.renderFactorySlot('conversation.content', {
             variant: 'embedded',

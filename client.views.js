@@ -176,7 +176,21 @@ window.__ModuleLoader__.load({
         const views = useMemo(() => makeViews(activeId), [activeId]);
         const factoryOptions = useMemo(() => ({ slots: { views } }), [views]);
         const session = props.useSession((value) => value);
-        const settling = session === undefined || session.openState === 'loading';
+        /*
+         * 「正在打开」不等于「还在等第一条消息」。
+         *
+         * 平台在 `data-content-phase=settling` 时会把**整块输入区**隐藏
+         * （`[data-content-phase=settling] .composerSeat{visibility:hidden}`），
+         * 于是目标栏、任务栏、token 速率栏会跟着一起消失。主对话的判定是
+         * 「会话还是空白 + 正在打开」（见 `ConversationMainPanel`），不是只要
+         * `openState === 'loading'` 就算 —— 已有历史的会话在重连/重新打开时，
+         * 内容可以照常显示，把输入区藏掉只会造成几秒钟的闪烁。
+         *
+         * `blank` 初值是 true，但平台在 retain / 列表同步时会先按会话表校正
+         * （`handleBlank`），所以已有历史的会话不会被误判成空白。
+         */
+        const settling = session === undefined
+          || (session.openState === 'loading' && session.blank === true);
         /*
          * 空白会话不显示标签栏：与主对话 header 的规则一致（第一条消息发出前
          * 只有 Hero 和输入框，没有视图标签）。会话一开始，标签栏自动出现。

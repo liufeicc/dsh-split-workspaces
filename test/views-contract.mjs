@@ -160,7 +160,7 @@ function renderedSessionView(call) {
   check('退订后不再收到通知', notified === beforeUnsubscribe, 'notified=' + String(notified));
 }
 
-// --- 3. 空会话 / 会话加载中：不显示标签栏 ------------------------------------------
+// --- 3. 空会话 / 会话加载中：只对「空白会话加载」进入 settling ----------------------
 
 {
   const { viewTabs } = makeSource([entry('chat', () => '对话'), entry('git-panel', () => 'Git')]);
@@ -168,9 +168,22 @@ function renderedSessionView(call) {
   check('空白会话不显示标签栏', tabBar(blankPane.instance.tree) === undefined);
   check('空白会话仍把 chat 交给平台', renderedSessionView(blankPane.lastFactoryCall()).owner.view === 'chat');
 
-  const loadingPane = mountPane(viewTabs, { openState: 'loading' });
-  check('会话加载中不显示标签栏', tabBar(loadingPane.instance.tree) === undefined);
-  check('会话加载中传 settling 阶段给 Factory', loadingPane.lastFactoryCall().input.phase === 'settling');
+  /*
+   * 空白会话第一次打开：内容还不存在，输入区该先藏起来（与主视图一致），
+   * 避免在还没有任何消息时露出一个绑定中的输入框。
+   */
+  const loadingBlankPane = mountPane(viewTabs, { openState: 'loading', blank: true });
+  check('空白会话加载中不显示标签栏', tabBar(loadingBlankPane.instance.tree) === undefined);
+  check('空白会话加载中传 settling 阶段给 Factory', loadingBlankPane.lastFactoryCall().input.phase === 'settling');
+
+  /*
+   * 已有历史的会话重新打开（断线重连、窗口重开）：它不是 settling。
+   * 这里若传 settling，平台 CSS 会把整块输入区 visibility:hidden，
+   * 目标栏 / 任务栏 / token 速率栏会一起消失几秒 —— 就是用户看到的闪烁。
+   */
+  const loadingExistingPane = mountPane(viewTabs, { openState: 'loading', blank: false });
+  check('已有历史的会话加载中仍显示标签栏', tabBar(loadingExistingPane.instance.tree) !== undefined);
+  check('已有历史的会话加载中传 active 阶段给 Factory', loadingExistingPane.lastFactoryCall().input.phase === 'active');
 }
 
 // --- 4. 视图消失后的回退 ----------------------------------------------------------

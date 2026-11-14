@@ -16,6 +16,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { DISPATCH_SLICE_MS, DISPATCH_TIMEOUT_MS, STATUS_INTERRUPTED } from './host.constants.js';
+import { classifyGoal, liveAgent } from './host.goal-state.js';
 import { assistantText, errorText, wrapTask } from './host.message.js';
 
 /**
@@ -219,28 +220,35 @@ export function waitForGoal(ctx, agent, signal, options) {
     };
     const onAbort = () => finish(goalOutcome('cancelled', lastText, '', '', rounds()));
     /**
-     * 读一次目标状态。
-     * 读不到（agent 已不是活实例）时返回 `{ phase: null }` —— 表示「不知道」，继续等。
-     * 目标被清掉（`undefined`）时返回 `{ phase: 'cleared' }` —— 这是一种终态。
+     * 读一次目标状态，并合成为派单状态。
+     *
+     * 读不到（agent 已不是活实例）时返回 `{ status: null }` —— 表示「不知道」，继续等。
+     * 目标被清掉（`undefined`）时分类成 `cleared` —— 这是一种终态。
+     *
+     * 注意 `active + disarmed + agent idle` 会被分类成 `paused`：DSH 重启后
+     * round-driver 只 disarm、不改 durable phase，继续把 `active` 当 running 会让 A
+     * 永远看不到「已经停了」。
      */
     const read = () => {
       try {
-        const view = goals.get(agent);
-        if (view === undefined || view === null) return { phase: 'cleared', rounds: 0, reason: '' };
-        const reason = view.blockedReason === undefined || view.blockedReason === null
-          ? ''
-          : (view.blockedReason.message ?? view.blockedReason.code ?? '');
-        return { phase: view.phase, rounds: view.roundsStarted ?? 0, reason };
+        const live = liveAgent(ctx, agent);
+        const view = goals.get(live);
+        const state = classifyGoal(view, live);
+        return {
+          status: state.status,
+          rounds: view === undefined || view === null ? 0 : (view.roundsStarted ?? 0),
+          reason: state.reason,
+        };
       } catch {
-        return { phase: null, rounds: 0, reason: '' };
+        return { status: null, rounds: 0, reason: '' };
       }
     };
     const rounds = () => read().rounds;
-    /** 到了终态就收尾；`active` 不算终态。 */
+    /** 到了终态就收尾；`running` 不算终态。 */
     const settleIfTerminal = () => {
       const current = read();
-      if (current.phase === null || current.phase === 'active') return false;
-      finish(goalOutcome(current.phase, lastText, current.reason, '', current.rounds));
+      if (current.status === null || current.status === 'running') return false;
+      finish(goalOutcome(current.status, lastText, current.reason, '', current.rounds));
       return true;
     };
     off = ctx.on('session/event', (session, event) => {
@@ -277,12 +285,12 @@ export function waitForGoal(ctx, agent, signal, options) {
     if (settleIfTerminal()) return;
     timer = setTimeout(() => {
       const current = read();
-      if (current.phase === null || current.phase === 'active') {
+      if (current.status === null || current.status === 'running') {
         // 还在跑：带着目前的进度返回，让派单方看见进展并决定是否接着等。
         finish(goalOutcome('running', lastText, '', '', current.rounds));
         return;
       }
-      finish(goalOutcome(current.phase, lastText, current.reason, '', current.rounds));
+      finish(goalOutcome(current.status, lastText, current.reason, '', current.rounds));
     }, sliceMs);
     timer.unref?.();
   });

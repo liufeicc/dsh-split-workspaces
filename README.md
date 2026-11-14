@@ -283,6 +283,12 @@ Review is a separate call with `reviews` (an array):
 - The pending-review state is persisted (`~/.dsh/storages/pane_dispatch_reviews.json`), so the gate
   survives a Host restart. The conclusion itself stays in the target session's history, so A can
   still go back and review it; removing the arrow clears the record.
+- **The completed goal is the final source of truth for review, not just the ledger.** The
+  background watcher writes the review record as soon as the goal turns `complete`, instead of
+  waiting for A to collect the result. If the ledger is lost between delivery and persistence,
+  `reviews` backfills it from the completed goal; and before `goals.create`, a fresh dispatch
+  checks the target's current goal and refuses to overwrite a completed dispatch goal that has
+  not been reviewed.
 
 ### The "Mark reviewed" action on the goal bar
 
@@ -347,6 +353,13 @@ the goal disappear. It applies to **user-created goals** and **dispatch-created 
   recovered, read it in that session". Nothing is persisted for this — the goal is the source of
   truth, and a corrupted store file cannot break it. The cost: a goal that finished before the
   restart keeps its conclusion only in the session history.
+- **A restart leaves an active goal `active`, but disarmed — not `running`.** DSH only flips the
+  process-local `activation` to `disarmed`; the durable `phase` stays `active` and the
+  goal-round driver will not resume it on its own. The UI calls this state "paused" (that is
+  `phase.active.disarmed`). The plugin therefore classifies `phase + activation + agent.status`:
+  `active + disarmed + idle` is `paused` (stopped after a restart); only `active + armed` or an
+  agent that is actually running counts as `running`. Without this, A waits forever on a
+  `running` that will never finish.
 
 ### Pitfalls we hit while building this
 
@@ -363,6 +376,8 @@ None of these were architecture problems — they were boundary problems, and tw
 | Conclusion and terminal state split across two windows | the watcher had the text but could not hand it over | the watcher used to re-subscribe every 5 minutes; the text arrived in one window and the terminal state in the next. A single long-lived subscription removed it |
 | Orphaned results after a Host restart | the work finished, but resuming answered "you never dispatched that"; the end-of-turn nudge counted the same empty table and stayed silent | `pending` lives only in memory, so a restart zeroes it while the target's goal keeps running. Neither side recognises the dispatch any more. Fixed by not persisting it: reclaim on demand from the `[任务分派]` goal prefix — the goal is the source of truth |
 | A new arrow invisible to the owner until reload | the model could not name the new target until Ctrl+R | the scoped tool's `description` was computed as a string at registration time; DSH re-reads `definition.description` whenever it assembles the prompt, so making it a getter reflects binding changes on the next step |
+| A sees `running` forever after a restart | the target is already stopped and the bar says "paused", but `dispatch_task` keeps reporting `running` | only `goal.phase` was read; a restart only disarms `activation` and leaves `phase=active`. Classifying `phase + activation + agent.status` fixes it |
+| A new dispatch bypassed a pending review | the bar says "awaiting review", `reviews` says none, so A dispatched | the gate only read the review ledger; delivery had not been recorded and a restart cleared `pending`. The completed goal is now the source of truth: record at delivery, backfill from the goal, and check it before `createGoal` |
 
 The common thread: **the same fact was stored twice without saying which copy is authoritative.**
 After the fixes the rule is: the background watcher starts at dispatch time, always sees more,
@@ -659,10 +674,16 @@ the whole implementation.
     atomic temp-file + rename and a 1 MB guard; independent of the browser origin so a
     desktop restart on a new port still finds the saved layout;
   - `host.service.js` — `PaneDispatchService` (bindings, dispatch state, diagnostics);
+  - `host.goal-state.js` — target-state classification: `phase + activation + agent.status` →
+    running / complete / paused / blocked / cleared; shared by adoption, the watcher, and waiting;
+  - `host.goal-create.js` — pre-create checks: `complete` can be replaced directly; `blocked` /
+    `paused` / `active+disarmed+idle` are cleared first; `active+armed` or a running agent is busy;
+  - `host.reviews.js` — the review gate: release after a human review, record `reviews`, and
+    backfill from a completed goal;
   - `host.message.js` — pure helpers (task wrapping, target matching, assistant text);
   - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
   - `host.batch.js` — batch scheduling: preflight, concurrent waiting, `all`/`any`/`none`
-    completion, clearing blocked goals, honest partial failures;
+    completion, the pre-create review gate, honest partial failures;
   - `host.redirect.js` — turns an A correction into "stop the current round, resubmit it as a
     normal user message, restart the goal" (the same underlying stop as the UI button, but with
     a `hook` cancellation cause; no new goal);
@@ -675,9 +696,12 @@ the whole implementation.
 - `test/dispatch-contract.mjs` / `test/dispatch-batch-contract.mjs` — the Host-side contract
   tests for single-target delivery, batching, `wait: none`, the background watcher, the
   end-of-turn nudge, and the correction flow (stop the current round, resubmit as a normal user
-  message, restart a paused/disarmed goal).
+  message, restart a paused/disarmed goal). The review-gate regression covers a completed goal
+  whose ledger was lost before persistence: a new dispatch is blocked by the goal, and `reviews`
+  can still backfill the record from it.
 - `test/dispatch-restart-contract.mjs` — the cross-process contract: a Host restart must not
-  orphan dispatched work.
+  orphan dispatched work; `active + disarmed + idle` must be reported as `paused`, and concurrent
+  reclaim calls must share one in-flight adoption instead of one returning zero.
 - `cordis.patch.yml` — inserts the single Host row.
 - `locale/{en,zh}.json` — the display name and description on the plugin management page.
 - `test/harness.mjs` — the offline test harness: simulates the browser module loader

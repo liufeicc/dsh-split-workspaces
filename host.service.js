@@ -56,6 +56,15 @@ export class PaneDispatchService {
      */
     this.pending = new Map();
     /**
+     * 正在执行「纠正」的目标：`ownerId\u0000targetId`。
+     *
+     * 纠正的中间态是 `goals.disarm` → 停当前轮 → 重发 → `resume`。这期间目标会短暂
+     * 处于 `active + disarmed + idle`，与「Host 重启后停住」长得一模一样；后台监视
+     * 如果这时结算，就会把一次正在进行的纠正误判成停止。这里记一个短命的窗口，
+     * `watchDetached` 看到这个 key 时不把 disarmed 当终态。
+     */
+    this.redirecting = new Set();
+    /**
      * 已经交付、还没审核的单子：`「owner\u0000target」 → { target, status, excerpt, at }`。
      *
      * 为什么要单独存：结论一旦被取走，`pending` 里那条记录就删了；而「验收」是交付之后
@@ -75,12 +84,14 @@ export class PaneDispatchService {
      */
     this.concluded = new Set();
     /**
-     * 正在进行「重启认领」的发起方会话。
+     * 正在进行「重启认领」的发起方会话：`ownerId → Promise<number>`。
      *
      * 认领要读目标状态、还要挂后台监视，重入会挂出第二条监视。所以同一个发起方同时
-     * 只允许一次认领在跑；后到的那次直接跳过（它要的结果前一次会算出来）。
+     * 只允许一次认领在跑；**后到的那次等待同一个 Promise**，而不是像旧实现那样直接
+     * 返回 0 —— 否则工具调用会误以为「没有可接着等的派单」，紧接着的新派单还可能
+     * 跳过 complete goal 的审核闸。
      */
-    this.adopting = new Set();
+    this.adopting = new Map();
     /** 一段等多久。测试里会把它压到几十毫秒。 */
     this.sliceMs = DISPATCH_SLICE_MS;
     /*
@@ -95,16 +106,15 @@ export class PaneDispatchService {
       this.labels.set(owner.id, owner.label);
     }
     /*
-     * 待审核记录也要读回来，但只恢复「箭头还在」的那些：用户撤掉的边、删掉的会话
-     * 不该再拿一条审不了、也拦不住的记录占着。
+     * 待审核记录全部读回来，**不在启动时按绑定表裁剪**。
+     *
+     * 为什么：绑定表读盘失败（文件缺失、损坏、时序）时，旧实现会把「当前绑定表里
+     * 没有」误判成「箭头被删了」，然后立刻 persist 把审核账永久清空。审核账是跨重启
+     * 的事实，不能因为另一份文件读不到就丢掉。真正撤掉的箭头会在客户端下一次
+     * `set()` 时被清理；在那之前，多余记录也不会拦住任何目标（工具只按当前绑定表
+     * 解析目标）。
      */
-    let pruned = false;
     for (const row of loadReviews().entries) {
-      const targets = this.bindings.get(row.owner);
-      if (targets === undefined || !targets.some((item) => item.id === row.target)) {
-        pruned = true;
-        continue;
-      }
       this.reviews.set(row.owner + '\u0000' + row.target, {
         target: row.label,
         status: row.status,
@@ -112,7 +122,6 @@ export class PaneDispatchService {
         at: row.at,
       });
     }
-    if (pruned) this.persistReviews();
   }
 
   /**
@@ -415,6 +424,25 @@ export class PaneDispatchService {
   }
 
   /**
+   * 列出某个发起方全部待审核记录。
+   *
+   * 工具在没有 pending、但审核账还有记录时用它给出一句准确的话，而不是笼统地
+   * 「没有可接着等的派单」。返回的是浅拷贝，调用方改字段不会影响服务状态。
+   *
+   * @param ownerId - 发起方会话 id。
+   * @returns `[{ targetId, target, status, excerpt, at }]`。
+   */
+  reviewEntries(ownerId) {
+    const list = [];
+    for (const [key, entry] of this.reviews) {
+      const [owner, targetId] = key.split('\u0000');
+      if (owner !== ownerId) continue;
+      list.push({ targetId, ...entry });
+    }
+    return list;
+  }
+
+  /**
    * 取走待审核记录（审核通过或驳回都算审过）。
    *
    * @param ownerId - 发起方会话 id。
@@ -438,6 +466,7 @@ export class PaneDispatchService {
     this.labels.clear();
     this.concluded.clear();
     this.adopting.clear();
+    this.redirecting.clear();
     this.reviews.clear();
   }
 }

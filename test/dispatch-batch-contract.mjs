@@ -151,7 +151,9 @@ import {
    */
   const goals = fakeMultiGoals();
   let seq = 0;
-  const agentStatus = { status: 'idle' };
+  let redirectingSeen = null;
+  // 真实注册表里的 agent 一定带 session；liveAgent() 靠它换回活实例。
+  const agentStatus = { id: 's-b', session: { id: 's-b' }, status: 'idle' };
   const { tool, ctx, emit, promptCalls, agentCancelCalls, order } = boot({
     goals,
     agents: new Map([['s-b', agentStatus]]),
@@ -160,6 +162,7 @@ import {
      * 这个用例同时验证 A 自己的等待不会把插件的停止误读成「用户接管」。
      */
     onCancel: (request) => {
+      redirectingSeen = ctx.get('paneDispatch').redirecting.has('s-a\u0000s-b');
       seq += 1;
       emit(request.sessionId, turnEndEvent(seq, 'aborted', request.cause));
     },
@@ -187,6 +190,12 @@ import {
     agentCancelCalls[0]?.cause?.kind !== 'user',
     JSON.stringify(agentCancelCalls[0]));
   check('顺序是「先停止、再重新输入」', order.join(',') === 'cancel,prompt', order.join(','));
+  check('纠正窗口内标记了 redirecting（后台监视不会误判成停止）',
+    redirectingSeen === true,
+    String(redirectingSeen));
+  check('纠正结束后清掉 redirecting 标记',
+    ctx.get('paneDispatch').redirecting.has('s-a\u0000s-b') === false,
+    JSON.stringify([...ctx.get('paneDispatch').redirecting]));
   check('纠正以普通用户消息投递（mode: queue）',
     promptCalls.length === 1 && promptCalls[0].request.mode === 'queue', JSON.stringify(promptCalls));
   check('纠正消息说明上一轮是被停止的、不是新任务',
@@ -546,7 +555,8 @@ import {
     },
   };
 
-  const agents = new Map();
+  // 第一次派单时 agent 就已经在注册表里；之后重连会把它换成一个新实例。
+  const agents = new Map([['s-b', current]]);
   const { tool, ctx, emit } = boot({ agents, goals });
   const service = ctx.get('paneDispatch');
   service.asyncRecheckMs = 20;
@@ -1229,6 +1239,17 @@ const threeTargets = () => [
   goals.done('s-b', 'complete');
   first.emit('s-b', assistantEvent(1, '做完了，但主会话还没取'));
   await settle();
+  check('目标 complete 后、结果还没取之前就落了审核账',
+    service.reviewOf('s-a', 's-b') !== undefined,
+    JSON.stringify(service.reviewEntries('s-a')));
+
+  /*
+   * 模拟旧实现/进程被杀的那个窗口：目标已经 complete，但审核账在落盘前丢了。
+   * 新实现会在 settle 时立即记 review，所以这里主动清掉内存与磁盘，专门测
+   * `adoptOrphanGoals` 从 complete goal 补账的兜底路径。
+   */
+  service.reviews.clear();
+  service.persistReviews();
 
   // 重启：pending 归零，但 goal 还是 complete，审核记录也还没建。
   const second = reboot({ goals });
@@ -1264,6 +1285,110 @@ const threeTargets = () => [
     { agent: { id: 's-a' }, signal: new AbortController().signal },
   );
   check('人工审核后放行', next.status === 'dispatched', JSON.stringify(next));
+}
+
+{
+  /*
+   * 回归：目标已经 complete，但审核账在落盘前丢了（旧实现 / 进程被杀）。
+   *
+   * 这条同时守两个入口：
+   *   - 直接派新单：必须在 createGoal 之前看 goal，拦住并补出审核账；
+   *   - 直接 reviews：必须能从 complete goal 补账，而不是报「没有待审核的交付」。
+   * 旧实现两个入口都只认 reviews，于是界面显示「待审核」、API 却放行。
+   */
+  const goals = fakeMultiGoals();
+  const first = boot({ goals });
+  const service = first.ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: twoTargets() });
+
+  await first.tool.execute(
+    { task: '两单都跑完', targets: ['乙会话', '丙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  goals.done('s-b', 'complete');
+  goals.done('s-c', 'complete');
+  first.emit('s-b', assistantEvent(1, '乙的结论'));
+  first.emit('s-c', assistantEvent(2, '丙的结论'));
+  await settle();
+
+  // 模拟审核账在落盘前丢失。
+  service.reviews.clear();
+  service.persistReviews();
+
+  const second = reboot({ goals });
+  const restored = second.ctx.get('paneDispatch');
+  check('重启后审核账确实是空的（复现前提）',
+    restored.reviewOf('s-a', 's-b') === undefined,
+    JSON.stringify(restored.reviewEntries('s-a')));
+
+  let blocked = null;
+  try {
+    await second.tool.execute(
+      { task: '乙的新单', targets: ['乙会话'], wait: 'none' },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    blocked = error.message;
+  }
+  check('complete goal 但没有审核账时，新派单被拦住',
+    typeof blocked === 'string' && blocked.includes('还没审核'), blocked);
+  check('拦截时补出了乙的审核账',
+    restored.reviewOf('s-a', 's-b') !== undefined);
+
+  const reviewed = await second.tool.execute(
+    { reviews: [
+      { target: '乙会话', verdict: 'accepted', note: '乙的结论已复核' },
+      { target: '丙会话', verdict: 'accepted', note: '丙的结论已复核' },
+    ] },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('审核账丢失时 reviews 仍能从 complete goal 补账并成功',
+    reviewed.status === 'reviewed' && reviewed.results.length === 2, JSON.stringify(reviewed));
+  check('审核后两条待审核记录都清掉',
+    restored.reviewOf('s-a', 's-b') === undefined && restored.reviewOf('s-a', 's-c') === undefined);
+
+  const next = await second.tool.execute(
+    { task: '审核后的新单', targets: ['乙会话', '丙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  check('审核后两个目标都能重新派单', next.status === 'dispatched', JSON.stringify(next));
+}
+
+{
+  /*
+   * 没有 pending、但审核账还在时，无 task 查询不能只说「没有可接着等的派单」——
+   * 旧实现让模型误以为门禁已清。新文案必须点名待审核目标并指向 reviews。
+   */
+  const goals = fakeMultiGoals();
+  const first = boot({ goals });
+  const service = first.ctx.get('paneDispatch');
+  service.asyncRecheckMs = 20;
+  service.set({ owner: 's-a', ownerLabel: '甲', targets: [{ id: 's-b', label: '乙会话' }] });
+
+  await first.tool.execute(
+    { task: '跑完先不取', targets: ['乙会话'], wait: 'none' },
+    { agent: { id: 's-a' }, signal: new AbortController().signal },
+  );
+  goals.done('s-b', 'complete');
+  first.emit('s-b', assistantEvent(1, '做完了'));
+  await settle();
+  // 结果已经取走（pending 清空），只留下审核账。
+  service.forget('s-a\u0000s-b');
+
+  const second = reboot({ goals });
+  let message = null;
+  try {
+    await second.tool.execute(
+      { wait: 'none' },
+      { agent: { id: 's-a' }, signal: new AbortController().signal },
+    );
+  } catch (error) {
+    message = error.message;
+  }
+  check('没有 pending 但有待审核时，错误里点名目标并指向 reviews',
+    typeof message === 'string' && message.includes('还没审核') && message.includes('reviews'),
+    message);
 }
 
 report();

@@ -13,7 +13,8 @@
  */
 
 import { MAX_BATCH_TARGETS, MAX_TASK_CHARS, TOOL_NAME } from './host.constants.js';
-import { normalizeWait, runBatch, runReviews } from './host.batch.js';
+import { normalizeWait, runBatch } from './host.batch.js';
+import { runReviews } from './host.reviews.js';
 import { adoptOrphanGoals } from './host.watch.js';
 import { describeCandidates, matchBinding } from './host.message.js';
 
@@ -410,6 +411,26 @@ export function createDispatchTool(service, ownerId) {
          * 话，后者才走 explainNoTarget 那三条病因。
          */
         if (!hasTask) {
+          /*
+           * 没有 pending 不等于「什么都没发生」：审核账可能还在。旧实现只报「没有可接着
+           * 等的派单」，模型据此以为门禁已清；这里把待审核目标列出来，并指向 reviews。
+           */
+          const labelById = new Map(bindings.map((item) => [item.id, item.label]));
+          /*
+           * 只列当前绑定表里还解析得到的目标：审核账可能因为「启动时不裁剪」而留下
+           * 一条已经撤掉箭头的旧记录，提示模型去审一个 reviews 根本认不出的目标
+           * 只会多绕一圈。真正的清理仍交给客户端下一次 `set()`。
+           */
+          const awaiting = service.reviewEntries(ownerId)
+            .filter((item) => labelById.has(item.targetId));
+          if (awaiting.length > 0) {
+            const pending = awaiting.map((item) => '「' + labelById.get(item.targetId) + '」');
+            throw new Error(
+              '没有可接着等的派单；但这些目标上一单已经交付、还没审核：' + pending.join('、') + '。'
+              + '先用 dispatch_task 带 reviews 记录审核结论（accepted / rejected + 理由），再派新任务。'
+              + '结论留在目标会话的历史里。',
+            );
+          }
           throw new Error(
             '没有可接着等的派单：这个会话当前没有已派出、还没取结果的任务。'
             + '要派新任务就必须给出 task；省略 task 只用于「接着等上一次派出去的那件事」。',

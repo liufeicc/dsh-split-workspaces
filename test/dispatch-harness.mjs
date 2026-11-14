@@ -268,8 +268,10 @@ export function fakeGoals({ failCreate = false } = {}) {
  * 这两步真的发生了。
  *
  * @param options.failFor - 这些会话在创建目标时抛错，用来验证「部分失败」。
+ * @param options.strictCreate - 照真实 `goals.create` 的契约：已有非 complete 目标时
+ *   抛错，必须先 clear。默认关闭，避免影响那些不关心 create 前置条件的用例。
  */
-export function fakeMultiGoals({ failFor = new Set() } = {}) {
+export function fakeMultiGoals({ failFor = new Set(), strictCreate = false } = {}) {
   const views = new Map();
   const calls = { disarm: [], resume: [], pause: [], clear: [] };
   return {
@@ -278,6 +280,10 @@ export function fakeMultiGoals({ failFor = new Set() } = {}) {
     create(agent, request) {
       const id = agent.session.id;
       if (failFor.has(id)) throw new Error('an active goal already exists');
+      const existing = views.get(id);
+      if (strictCreate && existing !== undefined && existing.phase !== 'complete') {
+        throw new Error('an active goal already exists: phase ' + existing.phase);
+      }
       this.created.push({ id, objective: request.objective });
       views.set(id, {
         id: 'goal-' + id,

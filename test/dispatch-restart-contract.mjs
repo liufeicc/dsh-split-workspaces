@@ -16,11 +16,13 @@
  *
  * 运行：`node test/dispatch-restart-contract.mjs`
  */
+import { classifyGoal } from '../host.goal-state.js';
 import {
   assistantEvent,
   boot,
   check,
   fakeMultiGoals,
+  host,
   reboot,
   report,
   settle,
@@ -41,9 +43,12 @@ async function attempt(tool, args) {
   }
 }
 
-/** 布景：装插件、连一条箭头、派一单（`wait: none`，派完就走），返回重启前的一切。 */
-async function dispatchThenStop() {
-  const goals = fakeMultiGoals();
+/**
+ * 布景：装插件、连一条箭头、派一单（`wait: none`，派完就走），返回重启前的一切。
+ *
+ * @param goals - 可选的目标服务替身；不传时新建一个默认替身。
+ */
+async function dispatchThenStop(goals = fakeMultiGoals()) {
   const first = boot({ goals });
   const service = first.ctx.get('paneDispatch');
   service.asyncRecheckMs = 20;
@@ -189,6 +194,92 @@ async function dispatchThenStop() {
   check('重启后收尾提醒照常响，A 不会悄悄忘掉这一单',
     injected !== null && String(JSON.stringify(injected)).includes('没取结果'),
     JSON.stringify(injected));
+}
+
+{
+  /*
+   * 真机回归：DSH 重启只把 goal 的进程内 activation 置成 disarmed，durable phase
+   * 仍然是 active；round-driver 不会再推进它，agent 也已经 idle。旧实现只看 phase，
+   * 于是 A 一直看到 running，而界面目标栏显示「已暂停的目标」。
+   */
+  const { goals } = await dispatchThenStop();
+  // 模拟 Host 重启：phase 不变，仅 disarm 自动推进。
+  goals.disarm({ session: { id: 's-b' } });
+  const second = reboot({ goals });
+  const service = second.ctx.get('paneDispatch');
+  await host.adoptOrphanGoals(second.ctx, service, 's-a');
+  const entry = service.pending.get('s-a\u0000s-b');
+  check('停止态立即结算，不挂后台监视',
+    entry?.settled?.status === 'paused',
+    JSON.stringify([...service.pending.entries()]));
+  const peek = await attempt(second.tool, { wait: 'none' });
+  check('重启后 active + disarmed + idle 被判成 paused，而不是 running',
+    peek.value?.results?.[0]?.status === 'paused',
+    peek.error ?? JSON.stringify(peek.value?.results));
+  check('返回里说清这是 Host 重启后的停止态',
+    typeof peek.value?.results?.[0]?.reply === 'string'
+      && peek.value.results[0].reply.includes('Host 重启'),
+    JSON.stringify(peek.value?.results?.[0]?.reply));
+}
+
+{
+  /*
+   * 停止态的目标仍然是 active phase，`goals.create` 不能直接替换它。
+   * 新派单必须先把它当成「已暂停」清掉再建新的，并在结果里说明；
+   * 不能因为 phase 是 active 就报「没法替换」把 A 卡死。
+   */
+  // 用严格替身：已有非 complete 目标时 create 必须抛错，才能走到「先 clear」的分支。
+  const goals = fakeMultiGoals({ strictCreate: true });
+  await dispatchThenStop(goals);
+  goals.disarm({ session: { id: 's-b' } });
+  const second = reboot({ goals });
+  const next = await attempt(second.tool, {
+    task: '重启后的新单',
+    targets: ['乙会话'],
+    wait: 'none',
+  });
+  check('停止态的目标可以被新任务替换',
+    next.value?.status === 'dispatched',
+    next.error ?? JSON.stringify(next.value));
+  const note = next.value?.results?.[0]?.note ?? '';
+  check('替换时说明清掉了一个暂停的旧目标',
+    note.includes('旧目标') && note.includes('暂停'),
+    note);
+}
+
+{
+  /*
+   * 并发认领必须共享同一个 Promise，不能第二次直接返回 0。
+   * 旧实现返回 0 时，工具调用会以为「没有可接着等的派单」，紧接着的新派单还可能
+   * 跳过 complete goal 的审核闸。
+   */
+  const { goals } = await dispatchThenStop();
+  const second = reboot({ goals });
+  const service = second.ctx.get('paneDispatch');
+  const [firstAdopt, secondAdopt] = await Promise.all([
+    host.adoptOrphanGoals(second.ctx, service, 's-a'),
+    host.adoptOrphanGoals(second.ctx, service, 's-a'),
+  ]);
+  check('并发认领共享同一次，两个调用都拿到 1',
+    firstAdopt === 1 && secondAdopt === 1,
+    JSON.stringify([firstAdopt, secondAdopt]));
+  check('并发认领只建一条 pending',
+    service.pending.size === 1,
+    String(service.pending.size));
+}
+
+{
+  /*
+   * 纯分类器的边界：active + disarmed 只有在 agent 也空闲时才算停止。
+   * agent 还在跑（纠正的中间窗口）时必须继续算 running。
+   */
+  const disarmed = { phase: 'active', activation: 'disarmed', objective: '[任务分派] x' };
+  check('active + disarmed + idle → paused',
+    classifyGoal(disarmed, { status: 'idle' }).status === 'paused');
+  check('active + disarmed + agent running → 仍算 running',
+    classifyGoal(disarmed, { status: 'running' }).status === 'running');
+  check('activation 缺失时不猜停止（按 running）',
+    classifyGoal({ phase: 'active', objective: '[任务分派] x' }, { status: 'idle' }).status === 'running');
 }
 
 report();

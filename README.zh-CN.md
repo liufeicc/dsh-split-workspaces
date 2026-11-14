@@ -269,6 +269,10 @@ A 的模型多了一个 `dispatch_task` 工具：
   算「没交付」，不挡下一单。
 - 待审核状态会落盘（`~/.dsh/storages/pane_dispatch_reviews.json`）：Host 重启后这条账仍然有效，
   未审核照样拦。上一单的结论留在目标会话的历史里，重启后可以回去复核；撤掉箭头会清掉记录。
+- **审核的最终真相是目标上的 complete goal，而不只是那张审核账**。后台监视在目标进入
+  complete 时就落账，不再等结果被取走；即使审核账因为「交付后还没落盘就被重启」而丢失，
+  `reviews` 也会从 complete goal 补账。新派单在 `goals.create` 之前也会看一眼目标：
+  是本插件派的、且已经 complete，就拒绝覆盖并提示先审核，绝不会把待审核的 goal 悄悄换掉。
 
 ### 目标条上的「审核完成」
 
@@ -363,6 +367,12 @@ A 的模型多了一个 `dispatch_task` 工具：
   盯，已经做完的如实说「结论没能自动恢复，去那个会话里看」。
   这也意味着**不另存一份 `pending`**：重启后以 goal 为真相现场反查，落盘文件坏了也不影响。
   代价是重启前已做完、结论只剩在会话历史里的那种，结论文字恢复不了，只能给指路。
+- **重启后不能把「goal 还 active」当成「还在跑」**。DSH 重启只把进程内的 `activation`
+  置成 `disarmed`，durable `phase` 仍然是 `active`；目标轮驱动不会自己恢复推进，会话也
+  已经 idle。界面上的「已暂停的目标」就是 `active + disarmed`。所以状态必须由
+  `phase + activation + agent.status` 合成：`active + disarmed + idle` 立即判成
+  `paused`（说明 Host 重启后已停止），只有 `active + armed` 或 agent 真在跑才算
+  `running`。否则 A 会看到永远不会结束的 `running`，而目标其实早停了。
 
 ### 任务分派踩过的坑
 
@@ -379,6 +389,8 @@ A 的模型多了一个 `dispatch_task` 工具：
 | 结论与终态被切在两个窗口 | 后台攒到了结论却交不出去 | 后台监视一度按「5 分钟一段」反复退订重订：结论在某段说完、终态在下一段才看见。改成单订阅长听后消失 |
 | Host 重启后结果成了孤儿 | 活干完了，A 回来收却报「从没派过」；收尾提醒同样数的是空表，所以也不响 | `pending` 只在内存里，重启清零，而目标会话的 goal 还在跑。两边脱节后谁也不认识这单。修法是不落盘、改为按 goal 的 `[任务分派]` 前缀现场认回来 —— goal 才是真相 |
 | 新增箭头后主会话不认识新目标 | 必须 Ctrl+R 刷新页面，模型才说得出新目标 | 作用域工具的 `description` 在注册那一刻被算成了字符串；DSH 每次组装提示词都会重新读 `definition.description`，改成 getter 后绑定表一变就自动反映到下一次 step |
+| 重启后 A 一直看到 `running` | 目标早停了、界面显示「已暂停」，`dispatch_task` 却永远说 `running` | 只读 `goal.phase`；重启只把 `activation` 置成 `disarmed`，`phase` 仍是 `active`。改成 `phase + activation + agent.status` 合成后才判成 `paused` |
+| 审核账丢失后仍能派新单 | 界面显示「待审核」、`reviews` 却说没有，A 据此派了新任务 | 审核闸只认 `reviews`；交付时没落账、重启后 `pending` 也没了。改为 complete goal 作为最终真相：交付即落账、`reviews` 从 goal 补账、`createGoal` 前先看 goal |
 
 共同规律：**同一个事实存了两份，却没写清谁是权威**。修完后的原则是 —— 后台监视以派出
 时刻为起点，视野永远更长，它是权威；阻塞等待只是「这一次调用看到的那一眼」。重启认领
@@ -591,10 +603,15 @@ A 的模型多了一个 `dispatch_task` 工具：
   - `host.constants.js` —— 服务键、远端方法清单、超时与长度上限；
   - `host.store.js` —— 绑定表的落盘与读回（唯一的目标形状构造点）；
   - `host.service.js` —— `PaneDispatchService`（绑定表、派单状态、诊断计数）；
+  - `host.goal-state.js` —— 目标状态合成：`phase + activation + agent.status` → running /
+    complete / paused / blocked / cleared；重启认领、后台监视、阻塞等待三处共用；
+  - `host.goal-create.js` —— 建目标前的检查：complete 可直接替换，blocked / paused /
+    active+disarmed+idle 先清掉再建；`active+armed` 或 agent 真在跑则按「忙」拒绝；
+  - `host.reviews.js` —— 审核闸：人工审核后的释放、`reviews` 落账、complete goal 补账；
   - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取助手文本）；
   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路，含取消联动）；
   - `host.batch.js` —— 一批目标的调度与收尾：预检、并发等待、`all`/`any`/`none` 三种收尾、
-    清掉受阻旧目标、部分失败的如实记录；
+    建目标前的审核闸、部分失败的如实记录；
   - `host.redirect.js` —— 把 A 的「纠正」变成「停止当前轮 + 作为新消息重新提交 +
     重新启动目标」（与界面停止同一个底层动作，原因记为 `hook`；不新建目标）；
   - `host.watch.js` —— 派出去之后的「盯」与「认」：`wait: none` 用的后台监视（单订阅长听），
@@ -654,12 +671,16 @@ A 的模型多了一个 `dispatch_task` 工具：
   时有未结清派单会注入一次提醒（同回合去重、取完后不再提醒）。还有一组守回归的：
   目标受阻后仍能再派（先清掉旧目标）、卡住原因取的是 `message` 而不是 `code`、
   「结果还没取」不会被误报成「还在跑」、会话重连后仍能读到目标状态。
+  审核闸再加一组：目标 complete 但审核账在落盘前丢了时，新派单会被 goal 拦住并补出
+  审核账、`reviews` 也能从 complete goal 补账成功；没有 pending 但有待审核时，无 task
+  查询会点名目标并指向 `reviews`，而不是只说「没有可接着等的派单」。
 - `test/dispatch-restart-contract.mjs` —— 跨进程的契约测试
   （`node test/dispatch-restart-contract.mjs`）：在同一个 `DSH_HOME` 下装两次插件来模拟
   Host 重启，断言绑定表读得回来、内存记录确实清零，然后
   「还在跑的目标能被认回成 `running` 并接着拿结论」「重启前就做完的能被认回来说清结论未恢复」
-  「会话重建时就把孤儿认回来，收尾提醒照常响」；另有两条反例 ——
-  用户自己用 `/goal` 设的目标不会被误认成派单、箭头删了就不该再认回来。
+  「会话重建时就把孤儿认回来，收尾提醒照常响」「`active + disarmed + idle` 被判成
+  `paused` 而不是 `running`」「并发认领共享同一次 Promise、只建一条 pending」；
+  另有两条反例 —— 用户自己用 `/goal` 设的目标不会被误认成派单、箭头删了就不该再认回来。
 - `test/graph-contract.mjs` —— 委派图的离线契约测试（`node test/graph-contract.mjs`）：
   纯模型的三层（四条校验 / 分层布局 / 图 → 绑定）、`paneDispatch` 命名空间的挂载与
   codec 形状、绑定同步的差量（没变就不发、删光要发空集合、失败要如实报告），以及

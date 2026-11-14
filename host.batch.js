@@ -51,7 +51,10 @@
  */
 
 import { STATUS_INTERRUPTED, WAIT_ALL, WAIT_ANY, WAIT_NONE } from './host.constants.js';
-import { describeCandidates, errorText, matchBinding, wrapTask } from './host.message.js';
+import { createGoalFor, replacedNote } from './host.goal-create.js';
+import { classifyGoal, liveAgent } from './host.goal-state.js';
+import { errorText, wrapTask } from './host.message.js';
+import { releaseHumanReviewed, reviewBlockedText } from './host.reviews.js';
 import { redirectBatch } from './host.redirect.js';
 import {
   deliverAndWait,
@@ -60,7 +63,7 @@ import {
   runningText,
   waitForGoal,
 } from './host.wait.js';
-import { watchDetached } from './host.watch.js';
+import { isOurGoal, watchDetached } from './host.watch.js';
 
 /**
  * 这个状态是不是「已经有结论了」。
@@ -203,77 +206,6 @@ function shapeResult(target, outcome, replaced) {
       .filter((text) => text !== '')
       .join(' '),
   };
-}
-
-/**
- * 把一个「受阻」视图里的人话取出来。
- *
- * 真实形状是 `{ code, message }`（code 是稳定分类码，message 是给人看的那句话）。
- * **不能用 `explanation`** —— 那个字段不存在，取出来永远是 undefined，于是只能退回去
- * 显示 `round-limit` 这类码，而不是真正的原因。
- *
- * @param view - 目标视图。
- * @returns 原因文本；没有就返回空串。
- */
-function blockReasonText(view) {
-  const reason = view === undefined || view === null ? undefined : view.blockedReason;
-  if (reason === undefined || reason === null) return '';
-  if (typeof reason.message === 'string' && reason.message !== '') return reason.message;
-  return typeof reason.code === 'string' ? reason.code : '';
-}
-
-/**
- * 建一个新目标；如果对方有一个**已经停住但不可直接替换**的旧目标，先清掉它。
- *
- * `goals.create` 的契约是「已 complete 的目标可以被替换；其余阶段必须先 clear 或
- * resume」。所以对方一旦 `blocked` 或 `paused`，直接 create 必然失败 —— 这正是
- * 「B 受阻之后 A 再也派不进去」的根因。
- *
- * 只清 `blocked` / `paused` 两种**已经停了**的阶段：
- *   - `active` 不清：对方真的在干活，那属于「忙」，应该拒绝；
- *   - `complete` 不用清：create 自己就能替换。
- * 清除会留下 durable tombstone 与历史，不是把记录抹掉。
- *
- * @param support - `goalSupport()` 的返回值。
- * @param agent - 目标的活 agent。
- * @param objective - 写进新目标的目标描述。
- * @returns `{ view, replaced }`；`replaced` 非空表示清掉过一个旧目标。
- */
-function createGoalFor(support, agent, objective) {
-  try {
-    return { view: support.goals.create(agent, { objective }), replaced: null };
-  } catch (reason) {
-    let current;
-    try {
-      current = support.goals.get(agent);
-    } catch {
-      current = undefined;
-    }
-    if (current === undefined || current === null) throw reason;
-    if (current.phase !== 'blocked' && current.phase !== 'paused') throw reason;
-    try {
-      support.goals.clear(agent, { id: current.id, revision: current.revision });
-    } catch {
-      // 清不掉（比如 revision 又变了）：保留原始错误，让调用方看到真实原因。
-      throw reason;
-    }
-    return {
-      view: support.goals.create(agent, { objective }),
-      replaced: { phase: current.phase, reason: blockReasonText(current) },
-    };
-  }
-}
-
-/**
- * 结果里那句「派单前清掉过旧目标」的说明。
- * @param replaced - `createGoalFor()` 返回的 `replaced`。
- * @returns 说明文本；没清过就返回空串。
- */
-function replacedNote(replaced) {
-  if (replaced === undefined || replaced === null) return '';
-  const what = replaced.phase === 'paused' ? '暂停' : '受阻';
-  const why = replaced.reason === '' ? '' : '（原因：' + replaced.reason + '）';
-  return '派单前已清除对方一个' + what + '的旧目标' + why + '，本次是新的目标。';
 }
 
 /**
@@ -439,40 +371,6 @@ function idleNote(ctx, service, ownerId, batch) {
 }
 
 /**
- * 人已经点过目标条上的「审核完成」：goal 被清掉了，但插件的待审核记录还在。
- *
- * 以 goal 为真相 —— 目标上已经没有 complete 的 goal（或换成了新 goal），就说明审核
- * 这一步已经被人做过，把记录清掉、放行新派单。读不到目标状态时保留审核闸：宁严勿松。
- *
- * @param ctx - 宿主上下文。
- * @param service - 绑定表。
- * @param ownerId - 发起方会话 id。
- * @param bindings - 这一次要派的目标。
- */
-async function releaseHumanReviewed(ctx, service, ownerId, bindings) {
-  const support = goalSupport(ctx);
-  if (support === null) return;
-  for (const binding of bindings) {
-    if (service.reviewOf(ownerId, binding.id) === undefined) continue;
-    let agent;
-    try {
-      agent = await resolveTargetAgent(support, binding);
-    } catch {
-      continue;
-    }
-    let view;
-    try {
-      view = support.goals.get(agent);
-    } catch {
-      continue;
-    }
-    if (view === undefined || view === null || view.phase !== 'complete') {
-      service.takeReview(ownerId, binding.id);
-    }
-  }
-}
-
-/**
  * 一次多目标派单的完整流程。
  *
  * @param options.ctx - 宿主上下文。
@@ -591,6 +489,45 @@ export async function runBatch(options) {
       agent = await resolveTargetAgent(support, item.binding);
     } catch (reason) {
       failures.push({ binding: item.binding, reply: errorText(reason) });
+      continue;
+    }
+    /*
+     * 最后一道审核闸。
+     *
+     * 分流阶段只查了 `service.reviews`；但重启后审核账可能没落盘，而目标上的 goal
+     * 仍是 complete。`goals.create` 会把 complete 的旧目标直接替换掉 —— 这就是
+     * 「界面显示待审核、A 却派了新任务」的那条绕过路径。这里在真正 create 之前再看
+     * 一眼 goal：是本插件派的、且已经 complete，就补记审核账并拒绝覆盖。
+     */
+    const existingReview = service.reviewOf(ownerId, item.binding.id);
+    if (existingReview !== undefined) {
+      failures.push({ binding: item.binding, reply: reviewBlockedText(item.binding) });
+      continue;
+    }
+    /*
+     * 用注册表里的活 agent 读 goal：resolveAgent 在真实实现里本来就返回活实例，
+     * 但测试替身/重连场景可能给出一个等价的新对象；`liveAgent()` 会换回活实例，
+     * 避免把「读不到」误判成「没有待审核」。
+     */
+    const observedAgent = liveAgent(ctx, agent);
+    let existingView;
+    try {
+      existingView = support.goals.get(observedAgent);
+    } catch (reason) {
+      /*
+       * 读不到目标状态时 fail-closed：不能确认上一单是否已审核，就不覆盖。
+       * 目标服务不可用的时候，create 本身也会失败；这里给一句更准确的话。
+       */
+      failures.push({
+        binding: item.binding,
+        reply: '无法读取目标「' + item.binding.label + '」当前的目标状态（' + errorText(reason)
+          + '），不能确认上一单是否已审核；这次先不派。请稍后重试。',
+      });
+      continue;
+    }
+    if (isOurGoal(existingView) && classifyGoal(existingView, observedAgent).status === 'complete') {
+      service.markReviewNeeded(ownerId, item.binding, { status: 'complete', reply: '' });
+      failures.push({ binding: item.binding, reply: reviewBlockedText(item.binding) });
       continue;
     }
     let created;
@@ -843,97 +780,6 @@ export async function runBatch(options) {
     if (hint !== '') note = note === '' ? hint : note + '\n\n' + hint;
   }
   return { status, results, stillRunning, note };
-}
-
-/**
- * 记录一次审核（`dispatch_task` 的 `reviews` 参数）。
- *
- * 审核按目标进行：
- *   - 只有**真的交付过**（deliverable: true）且还没审核的目标才能审；
- *   - 通过或驳回都会清掉待审核状态 —— 驳回之后就能带着缺口重派；
- *   - 驳回必须写清缺什么，否则重派时还是同一句「再做一遍」。
- *
- * 先整批校验、再整批落账：任何一项不合法都不改动已审状态，避免「批里错一个、
- * 前面几个已经被清掉」的半截状态。
- *
- * @param options.service - 绑定表（读写待审核记录）。
- * @param options.ownerId - 发起方会话 id。
- * @param options.bindings - 这个会话可派的目标。
- * @param options.reviews - 模型给的数组 `[{ target, verdict, note? }]`。
- * @returns `{ status: 'reviewed', results, stillRunning: 0, note }`。
- */
-export async function runReviews(options) {
-  const { ctx, service, ownerId, bindings, reviews } = options;
-  const plan = [];
-  const seen = new Set();
-  for (const raw of reviews) {
-    const targetText = typeof raw?.target === 'string' ? raw.target.trim() : '';
-    if (targetText === '') throw new Error('reviews 里每一项都要给 target（序号、标题或会话 id）。');
-    const binding = matchBinding(bindings, targetText);
-    if (binding === null) {
-      throw new Error(
-        '没认出要审核哪个目标：' + targetText + '。当前可派的是：\n' + describeCandidates(bindings),
-      );
-    }
-    if (seen.has(binding.id)) throw new Error('同一个目标一次只能审一次：「' + binding.label + '」。');
-    seen.add(binding.id);
-    const verdict = raw?.verdict;
-    if (verdict !== 'accepted' && verdict !== 'rejected') {
-      throw new Error('reviews 里的 verdict 只能是 accepted 或 rejected。');
-    }
-    const note = typeof raw?.note === 'string' ? raw.note.trim() : '';
-    if (verdict === 'rejected' && note === '') {
-      throw new Error('驳回必须写清缺什么（note），否则重派时对方还是不知道要补哪一条。');
-    }
-    if (service.reviewOf(ownerId, binding.id) === undefined) {
-      throw new Error(
-        '「' + binding.label + '」没有待审核的交付：只有上一单真的交付了（deliverable: true）才需要审核；'
-        + 'failed / blocked / interrupted 不需要。',
-      );
-    }
-    plan.push({ binding, verdict, note });
-  }
-  if (plan.length === 0) throw new Error('reviews 是空的：至少给一项 { target, verdict }。');
-
-  const support = goalSupport(ctx);
-  const results = [];
-  for (const item of plan) {
-    service.takeReview(ownerId, item.binding.id);
-    /*
-     * 审核完就把那个已完成的 goal 清掉：GoalBar 上的「待审核」随之消失，目标也不再
-     * 占着「complete 只能被 create 替换」的位置。清不掉（目标已清、会话读不到）不回滚
-     * 审核记录 —— 记录已经落账，用户还可以在目标条上点「审核完成」收尾。
-     */
-    if (support !== null) {
-      try {
-        const agent = await resolveTargetAgent(support, item.binding);
-        const view = support.goals.get(agent);
-        if (view !== undefined && view !== null && view.phase === 'complete') {
-          support.goals.clear(agent, { id: view.id, revision: view.revision });
-        }
-      } catch {
-        /* 留给目标条上的「审核完成」按钮。 */
-      }
-    }
-    results.push({
-      target: item.binding.label,
-      status: item.verdict,
-      deliverable: false,
-      reply: '',
-      progress: '',
-      interruptedBy: '',
-      note: item.verdict === 'accepted'
-        ? '审核通过。现在可以给这个目标派新任务。'
-        : '已记录驳回。用 dispatch_task 带 task 把具体缺口发回去'
-          + (item.note === '' ? '。' : '：' + item.note),
-    });
-  }
-  return {
-    status: 'reviewed',
-    results,
-    stillRunning: 0,
-    note: '审核已记录。通过的目标可以派新任务；驳回的目标请带着 note 里的具体缺口重派。',
-  };
 }
 
 /** `wait` 参数的取值归一（模型给别的值时退回默认的 `all`）。 */

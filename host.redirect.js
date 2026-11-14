@@ -171,6 +171,13 @@ export async function redirectBatch(options) {
   const results = [];
   let redirected = 0;
   for (const binding of bindings) {
+    /*
+     * 标一个「纠正进行中」的窗口：这期间目标会短暂 active + disarmed + idle，
+     * 后台监视不能把它误判成 Host 重启后的停止态。放在 disarm 之前，确保
+     * 停止事件到达时标记已经就位。
+     */
+    const key = ownerId + '\u0000' + binding.id;
+    service.redirecting?.add(key);
     try {
       const agent = await resolveTargetAgent(support, binding);
       if (typeof agent.cancel !== 'function') {
@@ -293,6 +300,9 @@ export async function redirectBatch(options) {
         interruptedBy: '',
         note: '纠正没有送出去。',
       });
+    } finally {
+      // 纠正结束（成功或失败）后撤销窗口；之后 disarmed 就真的是停止态了。
+      service.redirecting?.delete(key);
     }
   }
   if (redirected === 0) {

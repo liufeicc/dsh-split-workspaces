@@ -12,7 +12,13 @@
  * @module @local/dsh-split-workspaces/host-service
  */
 
-import { DISPATCH_SLICE_MS } from './host.constants.js';
+import {
+  DISPATCH_SLICE_MS,
+  REPORT_HISTORY_CHARS,
+  REPORT_HISTORY_MESSAGES,
+  REPORT_MAX_CHARS,
+  REPORT_TIMEOUT_MS,
+} from './host.constants.js';
 import { loadReviews, loadStore, makeTarget, saveReviews, saveStore } from './host.store.js';
 import { clearLayoutFile, loadLayoutFile, saveLayoutFile } from './host.layout.js';
 
@@ -94,6 +100,16 @@ export class PaneDispatchService {
     this.adopting = new Map();
     /** 一段等多久。测试里会把它压到几十毫秒。 */
     this.sliceMs = DISPATCH_SLICE_MS;
+    /*
+     * 只读汇报的默认参数。
+     *
+     * 放在服务上而不是写死在 host.report.js：测试要把超时压到几十毫秒、把历史上限
+     * 压到几条消息，才能在不 sleep 一分钟的情况下验证超时与截断。
+     */
+    this.reportTimeoutMs = REPORT_TIMEOUT_MS;
+    this.reportHistoryMessages = REPORT_HISTORY_MESSAGES;
+    this.reportHistoryChars = REPORT_HISTORY_CHARS;
+    this.reportMaxChars = REPORT_MAX_CHARS;
     /*
      * 启动时把上次的绑定表读回来。
      *

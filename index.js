@@ -9,7 +9,9 @@
  *   1. `paneDispatch` 服务 —— 客户端在界面上勾选了「A 可以派给谁」之后，把这个
  *      绑定关系同步过来，存在内存里；
  *   2. `dispatch_task` 工具 —— A 的模型调用它时，Host 负责把任务投进目标会话、
- *      等目标那一轮跑完、把它的回复原样交回去。
+ *      等目标那一轮跑完、把它的回复原样交回去；
+ *   3. `report_task` 工具 —— 只读的按需汇报：读目标会话的模型可见历史，
+ *      按 A 的要求生成总结，不改变任何派单状态。
  *
  * ## 一次可以派给多个目标
  *
@@ -61,7 +63,8 @@
  *   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路）；
  *   - `host.batch.js` —— 一批目标的调度与收尾（预检、并发等待、all/any）；
  *   - `host.watch.js` —— 派出去之后的盯与认（后台监视、重启后认回孤儿单子）；
- *   - `host.tool.js` —— 面向模型的 `dispatch_task` 工具定义。
+ *   - `host.report.js` —— 只读汇报的旁注请求（历史裁剪、提示词、并行与超时）；
+ *   - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` 工具定义。
  *
  * 下面仍把原有的公共符号原样转出去，`test/dispatch-contract.mjs` 等既有用例
  * 继续 `import('../index.js')` 就能拿到同一套东西。
@@ -73,7 +76,7 @@ import { REMOTE_MARKERS, REMOTE_METHODS, SERVICE_KEY, TOOL_NAME } from './host.c
 import { adoptOrphanGoals } from './host.watch.js';
 import { errorText, noticeMessage } from './host.message.js';
 import { PaneDispatchService } from './host.service.js';
-import { createDispatchTool } from './host.tool.js';
+import { createDispatchTool, createReportTool } from './host.tool.js';
 
 /** 本行的 Loader row id 与插件名（必须与 cordis.patch.yml 里那一行一致）。 */
 export const name = 'split-workspaces';
@@ -159,7 +162,30 @@ export function apply(ctx) {
         : agents.get(agentId);
       if (agent === undefined || agent === null || agent.ctx === undefined) return;
       try {
-        scoped.set(agentId, agent.ctx.tools.register(createDispatchTool(service, agentId)));
+        const disposers = [];
+        try {
+          disposers.push(agent.ctx.tools.register(createDispatchTool(service, agentId)));
+          disposers.push(agent.ctx.tools.register(createReportTool(service, agentId)));
+        } catch (reason) {
+          // 两个工具要么都注册，要么都不留：只留半个作用域会让 A 看到不完整的工具面。
+          for (const dispose of disposers) {
+            try {
+              dispose();
+            } catch {
+              /* 回滚失败不改变「这次注册失败」的结论 */
+            }
+          }
+          throw reason;
+        }
+        scoped.set(agentId, () => {
+          for (const dispose of disposers) {
+            try {
+              dispose();
+            } catch {
+              /* 卸载失败不影响另一只工具的清理 */
+            }
+          }
+        });
       } catch (reason) {
         ctx.logger?.warn?.('split-workspaces: 注册作用域委派工具失败: ' + errorText(reason));
       }
@@ -267,7 +293,13 @@ export function apply(ctx) {
  * 公共符号转出：保持拆分前的导出面完全不变
  * ------------------------------------------------------------------ */
 
-export { DISPATCH_SLICE_MS, DISPATCH_TIMEOUT_MS, SERVICE_KEY, TOOL_NAME } from './host.constants.js';
+export {
+  DISPATCH_SLICE_MS,
+  DISPATCH_TIMEOUT_MS,
+  REPORT_TOOL_NAME,
+  SERVICE_KEY,
+  TOOL_NAME,
+} from './host.constants.js';
 export { PaneDispatchService } from './host.service.js';
 export { assistantText, describeCandidates, matchBinding, wrapTask } from './host.message.js';
 export {
@@ -280,9 +312,12 @@ export {
 } from './host.wait.js';
 export {
   createDispatchTool,
+  createReportTool,
   dispatchDescription,
   explainNoTarget,
+  reportDescription,
 } from './host.tool.js';
+export { runReport, runReports } from './host.report.js';
 export {
   batchStatus,
   isSuccessStatus,

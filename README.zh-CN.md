@@ -132,10 +132,12 @@
   因此两处只会有一套选择器与一套失败处理。
 
 - **设计模式 + 任务分派**：面板顶部多一个 `设计`，把每个**会话**画成卡片、用箭头连成
-  一棵有向树 —— 箭头方向就是授权方向，删掉箭头等于撤回授权。连了箭头的会话会拿到一份
-  **作用域版** `dispatch_task` 工具（描述里直接列出可派目标），可以把任务交给对方会话并
-  拿回结论；一次可派给多个目标、并行推进，支持「等全部 / 等第一个 / 派完就走」三种收尾，
-  派完就走的还会在回合结束前被提醒回来收结果；每次结果还会附上其余空闲目标，提示继续分配；
+  一棵有向树 —— 箭头方向就是授权方向，删掉箭头等于撤回授权。连了箭头的会话会拿到
+  **作用域版** `dispatch_task` 与 `report_task` 工具（描述里直接列出可派目标）：
+  `dispatch_task` 把任务交给对方会话并拿回结论，一次可派给多个目标、并行推进，支持
+  「等全部 / 等第一个 / 派完就走」三种收尾，派完就走的还会在回合结束前被提醒回来收结果；
+  `report_task` 则按 A 的要求，让目标基于自己的模型可见历史做一次**只读汇报**，
+  不改目标、不创建 goal、不产生交付结论。每次结果还会附上其余空闲目标，提示继续分配；
   交付后必须先审核，才能给同一个目标派新任务。详见下面的专节。
 
 ## 设计模式：把委派关系画成箭头
@@ -212,7 +214,7 @@ A 的模型多了一个 `dispatch_task` 工具：
 |---|---|
 | `task` | 任务正文。对方看不到 A 的历史，背景与**可检验的验收标准**都要写清。续等时省略；目标正在跑时给 `task` 表示**纠正**（先停止当前轮，再把纠正作为新消息重新提交，并重新启动目标；不新建目标） |
 | `targets` | 派给哪些目标（数组）。每项可用序号、完整标题、标题片段或会话 id。可派目标多于一个时必须指明；不给 `task` 时省略它表示接着等所有还在跑的目标 |
-| `wait` | `all`（默认，等全部）/ `any`（第一个有交付结论就返回）/ `none`（不等） |
+| `wait` | `all`（默认，等全部）/ `any`（第一个目标进入终态就返回，可能是完成/失败/暂停，其余留到下次）/ `none`（不等） |
 | `reviews` | 审核上一单的交付结论（数组，每项 `{ target, verdict: accepted \| rejected, note? }`）。与 `task` 互斥，必须单独调用；驳回必须写 `note`。见下面「交付之后」一节 |
 
 返回的是**一批**结果：
@@ -246,6 +248,35 @@ A 的模型多了一个 `dispatch_task` 工具：
 
 老部署没有目标服务时，回落到「包成一条用户消息投进去 + 等那一轮结束」：能派、能等，
 但没有 `none`（后台监视要读目标状态），调用会直接说明这一点。
+
+### 按需汇报：`report_task`
+
+`dispatch_task` 的 `progress` 是廉价的被动过程稿；当 A 怀疑方向偏了，或者准备纠正/验收时，
+可以调用 `report_task`，让目标会话的**只读汇报助手**回答具体问题：
+
+| 参数 | 说明 |
+|---|---|
+| `targets` | 要汇报的目标，最多 8 个；每个目标一次独立模型请求，逐目标并行 |
+| `ask` | 汇报要求：要它回答什么、引用什么证据、怎么区分事实/自述/推断/未知 |
+
+它读取目标 `session.deriveMessages()` 里的模型可见历史，追加当前 goal objective 和 `ask`，
+发一次独立请求。**只读**：不打断目标、不创建 goal、不改 `pending` / `reviews`、不给目标
+注入消息；也不依赖任何外部旁注插件或命令。
+
+返回 `{ status, results, note }`，每个结果包含：
+
+```text
+{ target, status, report, goalPhase, asOf, truncated, note }
+```
+
+单个目标最多等 60 秒；超时或失败只影响它自己，其他目标照常返回。
+报告会明确区分「有证据的事实 / 目标的自述 / 推断 / 未知」。
+
+限制：
+
+- 只读**模型可见历史**：历史窗口外、没有落进历史的工具输出看不到；
+- 汇报是另一个模型的总结，不是真相；关键结论仍要 A 自己看证据；
+- 它不改变派单状态，不能代替 `dispatch_task` 取结果，也不能代替 `reviews` 审核。
 
 ### 交付之后：不审核，不能再派
 
@@ -598,8 +629,9 @@ A 的模型多了一个 `dispatch_task` 工具：
   每行带描述；目录为空 / 不存在 / 有坏文件各有各的说法。
 - `client.styles.js` —— 样式表与 class 名；颜色只用主题 token（`--dsw-*`）。
 - `client.dicts.js` —— 中英文案。
-- `index.js` —— **Host 半边的入口**：装配 `paneDispatch` 服务与 `dispatch_task` 工具、
-  维护生命周期，并把公共符号原样转出。实现按职责放在同目录的 `host.*.js`：
+- `index.js` —— **Host 半边的入口**：装配 `paneDispatch` 服务与 `dispatch_task` /
+  `report_task` 工具、维护生命周期，并把公共符号原样转出。实现按职责放在同目录的
+  `host.*.js`：
   - `host.constants.js` —— 服务键、远端方法清单、超时与长度上限；
   - `host.store.js` —— 绑定表的落盘与读回（唯一的目标形状构造点）；
   - `host.service.js` —— `PaneDispatchService`（绑定表、派单状态、诊断计数）；
@@ -608,6 +640,8 @@ A 的模型多了一个 `dispatch_task` 工具：
   - `host.goal-create.js` —— 建目标前的检查：complete 可直接替换，blocked / paused /
     active+disarmed+idle 先清掉再建；`active+armed` 或 agent 真在跑则按「忙」拒绝；
   - `host.reviews.js` —— 审核闸：人工审核后的释放、`reviews` 落账、complete goal 补账；
+  - `host.report.js` —— `report_task` 的只读旁注请求：历史裁剪、汇报提示词、
+    单目标超时与并行；
   - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取助手文本）；
   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路，含取消联动）；
   - `host.batch.js` —— 一批目标的调度与收尾：预检、并发等待、`all`/`any`/`none` 三种收尾、
@@ -616,7 +650,8 @@ A 的模型多了一个 `dispatch_task` 工具：
     重新启动目标」（与界面停止同一个底层动作，原因记为 `hook`；不新建目标）；
   - `host.watch.js` —— 派出去之后的「盯」与「认」：`wait: none` 用的后台监视（单订阅长听），
     以及 Host 重启后凭 goal 前缀把孤儿单子认回来（`adoptOrphanGoals`）；
-  - `host.tool.js` —— 面向模型的 `dispatch_task` 工具描述与执行（参数解析、结果整形）。
+  - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` 工具描述与执行
+    （参数解析、结果整形）。
   「打开目录」那条路仍然不需要 Host 支持 ——
   它调用的是已经装好的 Session 远端命名空间。
 - `client.dispatch.js` —— 把设计模式下画出来的箭头换算成绑定，并**只把变了的那几个
@@ -661,7 +696,7 @@ A 的模型多了一个 `dispatch_task` 工具：
   另外用断言钉住任务包装与工具描述里那几句「要证据、要复核」的措辞。
 - `test/dispatch-batch-contract.mjs` —— 批处理与异步的契约测试
   （`node test/dispatch-batch-contract.mjs`）：一次派两个目标时两个都真的建了目标、`wait: all` 在一个目标完成
-  时不会提前返回、`wait: any` 第一个有结论就返回且把其余留成 `running`（`pending` 不被
+  时不会提前返回、`wait: any` 第一个目标进入终态就返回且把其余留成 `running`（`pending` 不被
   清掉，续等能接着等）、有一个目标在忙时**整批一个都不派**、部分目标建目标失败时其余
   照常跑完且整批是 `partial`、给正在跑的目标带 `task` 会先停当前轮再重新提交纠正
   （不新建目标）、停止后目标被暂停/被 disarm 会重新启动、投递失败会把自动推进恢复、
@@ -681,6 +716,10 @@ A 的模型多了一个 `dispatch_task` 工具：
   「会话重建时就把孤儿认回来，收尾提醒照常响」「`active + disarmed + idle` 被判成
   `paused` 而不是 `running`」「并发认领共享同一次 Promise、只建一条 pending」；
   另有两条反例 —— 用户自己用 `/goal` 设的目标不会被误认成派单、箭头删了就不该再认回来。
+- `test/report-contract.mjs` —— `report_task` 的离线契约测试
+  （`node test/report-contract.mjs`）：最多 8 个目标、8 个目标真的并行、单目标失败/超时
+  不影响其他目标、请求里带 ask 与 goal objective、只读（不碰 pending/reviews/goal）、
+  历史截断标记、没有 LLM 服务时逐目标报错，以及实现文件不引用外部旁注插件。
 - `test/graph-contract.mjs` —— 委派图的离线契约测试（`node test/graph-contract.mjs`）：
   纯模型的三层（四条校验 / 分层布局 / 图 → 绑定）、`paneDispatch` 命名空间的挂载与
   codec 形状、绑定同步的差量（没变就不发、删光要发空集合、失败要如实报告），以及
@@ -756,6 +795,7 @@ node test/graph-contract.mjs
 node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs
 node test/dispatch-restart-contract.mjs
+node test/report-contract.mjs
 ```
 
 改到「光标归属」那块时，另外跑一遍真浏览器探针（需要 `google-chrome`，约十秒）：

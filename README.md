@@ -187,10 +187,13 @@ that currently holds focus is marked by a brand-coloured title bar.
   when the skill plugin's client half is not mounted the button is **not rendered at all**.
 - **Design mode + task dispatch**: a second panel mode that draws each **session** as a card
   and connects them with arrows into a directed tree — the graph *is* the authorization. Sessions
-  with outgoing arrows get an agent-scoped `dispatch_task` tool and can hand work to another
-  session, one target or several in parallel, with `wait: all | any | none`; each result also
-  lists the remaining idle targets as a reminder to keep distributing, and a delivered task must
-  be reviewed before that target can take a new one. See the dedicated section below.
+  with outgoing arrows get agent-scoped `dispatch_task` and `report_task` tools:
+  `dispatch_task` hands work to another session, one target or several in parallel, with
+  `wait: all | any | none`; `report_task` asks a target for a **read-only report** based on its
+  own model-visible history, without changing the target, creating a goal, or producing a
+  delivery conclusion. Each result also lists the remaining idle targets as a reminder to keep
+  distributing, and a delivered task must be reviewed before that target can take a new one.
+  See the dedicated section below.
 - The `Add workspace` dropdown lists "workspaces that are not tiled yet" and also supports
   **creating** a workspace from the folder picker (`uiWorkspace.pickDirectory()`, or through
   the preload bridge under Desktop). The same "pick a directory → register a workspace"
@@ -237,7 +240,7 @@ the global one) whose description lists the available targets.
 |---|---|
 | `task` | Task body. The target cannot see A's history, so background **and verifiable acceptance criteria** belong here. Omit it when waiting for a previous dispatch. When the target is already running, a `task` means a **correction**: stop its current round, resend the correction as a fresh user message, and restart the target (no new goal) |
 | `targets` | Array of targets. Each item may be an index, full title, title fragment, or session id. Required when more than one target is available; omitted with no `task`, it means "keep waiting on everything still running" |
-| `wait` | `all` (default) / `any` (return on the first deliverable) / `none` (do not wait) |
+| `wait` | `all` (default) / `any` (return when the first target reaches a terminal state — complete, failed, or paused; the rest stay running) / `none` (do not wait) |
 | `reviews` | Review the previous delivery: array of `{ target, verdict: accepted \| rejected, note? }`. Mutually exclusive with `task` — review and dispatch are separate calls; `rejected` requires a `note`. See "After delivery" below |
 
 The call returns a batch: `{ status, results, stillRunning, note }`, where `results` holds one
@@ -258,6 +261,31 @@ correction as a normal user message and restarts the goal; it returns `redirecte
 a background watcher that records the conclusion. Because a dispatch must not be forgotten, the
 owner is nudged once per turn at `agent/turn-stopping` — injected into the next step, so the same
 turn continues one more step and collects the result instead of requiring user input.
+
+### On-demand report: `report_task`
+
+`progress` is a cheap passive draft. When A suspects the direction is wrong, or is about to
+correct / review, it can call `report_task` and ask the target session's **read-only reporter**
+a specific question:
+
+| Parameter | Meaning |
+|---|---|
+| `targets` | Targets to report on, at most 8; each target gets its own model request, all in parallel |
+| `ask` | What to answer, which evidence to quote, and how to separate facts / self-report / inference / unknown |
+
+The reporter reads the target's model-visible history (`session.deriveMessages()`), adds the
+current goal objective and `ask`, and makes one independent model request. It is **read-only**:
+it does not interrupt the target, create a goal, touch `pending` / `reviews`, or inject anything
+into the target; it does not depend on any external side-query plugin or command.
+
+It returns `{ status, results, note }`, with one
+`{ target, status, report, goalPhase, asOf, truncated, note }` per target. A single target times
+out after 60 seconds; a timeout or failure only affects that target.
+
+Limits: it only sees the **model-visible history** (tool output outside the window or never
+committed to history is invisible), the report is another model's summary rather than ground
+truth, and it does not change dispatch state — it cannot replace `dispatch_task` for collecting
+results or `reviews` for reviewing.
 
 ### After delivery: review before the next dispatch
 
@@ -665,9 +693,9 @@ the whole implementation.
   (`canOpenWorkspacePath` / `openWorkspacePath`), and adding a row of Host code to this
   plugin would only duplicate that implementation while also making the user restart once for
   it to take effect.
-- `index.js` — the **Host entry**: mounts the `paneDispatch` service and the `dispatch_task`
-  tool, owns their lifecycle, and re-exports the public symbols. The implementation lives in
-  sibling `host.*.js` modules:
+- `index.js` — the **Host entry**: mounts the `paneDispatch` service and the `dispatch_task` /
+  `report_task` tools, owns their lifecycle, and re-exports the public symbols. The implementation
+  lives in sibling `host.*.js` modules:
   - `host.constants.js` — service key, remote method list, timeouts and size limits;
   - `host.store.js` — binding-table persistence (the only constructor of the target shape);
   - `host.layout.js` — layout persistence at `$DSH_HOME/storages/pane_layout.json`, with
@@ -680,6 +708,8 @@ the whole implementation.
     `paused` / `active+disarmed+idle` are cleared first; `active+armed` or a running agent is busy;
   - `host.reviews.js` — the review gate: release after a human review, record `reviews`, and
     backfill from a completed goal;
+  - `host.report.js` — the read-only `report_task` side request: history selection, report prompt,
+    per-target timeout, and parallel fan-out;
   - `host.message.js` — pure helpers (task wrapping, target matching, assistant text);
   - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
   - `host.batch.js` — batch scheduling: preflight, concurrent waiting, `all`/`any`/`none`
@@ -690,7 +720,7 @@ the whole implementation.
   - `host.watch.js` — what happens after dispatch: the background watcher behind `wait: none`
     (one long-lived subscription) and `adoptOrphanGoals`, which reclaims dispatched-but-lost
     work after a Host restart by matching the goal objective prefix;
-  - `host.tool.js` — the model-facing `dispatch_task` description and execution.
+  - `host.tool.js` — the model-facing `dispatch_task` / `report_task` descriptions and execution.
 - `REVIEW-2026-11-01.md` / `REVIEW-2026-11-03.md` — the two code-review reports.
 - `test/dispatch-harness.mjs` — shared fixtures for the dispatch tests.
 - `test/dispatch-contract.mjs` / `test/dispatch-batch-contract.mjs` — the Host-side contract
@@ -702,6 +732,11 @@ the whole implementation.
 - `test/dispatch-restart-contract.mjs` — the cross-process contract: a Host restart must not
   orphan dispatched work; `active + disarmed + idle` must be reported as `paused`, and concurrent
   reclaim calls must share one in-flight adoption instead of one returning zero.
+- `test/report-contract.mjs` — the `report_task` contract: at most 8 targets, 8 targets actually
+  run in parallel, one target's failure/timeout leaves the others intact, the request carries the
+  `ask` and goal objective, the tool is read-only, truncated history is flagged, a missing LLM
+  service fails per target, and the implementation does not reference an external side-query
+  plugin.
 - `cordis.patch.yml` — inserts the single Host row.
 - `locale/{en,zh}.json` — the display name and description on the plugin management page.
 - `test/harness.mjs` — the offline test harness: simulates the browser module loader
@@ -847,6 +882,7 @@ node test/graph-contract.mjs
 node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs
 node test/dispatch-restart-contract.mjs
+node test/report-contract.mjs
 ```
 
 When you touch the "caret ownership" part, additionally run the real-browser probe (requires

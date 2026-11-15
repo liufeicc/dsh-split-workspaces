@@ -33,6 +33,37 @@ export const REMOTE_MARKERS = Object.freeze({
 /** 模型面向的工具名。 */
 export const TOOL_NAME = 'dispatch_task';
 
+/** 只读汇报工具名。 */
+export const REPORT_TOOL_NAME = 'report_task';
+
+/**
+ * 一次最多向几个目标要汇报。
+ *
+ * 每个目标都是一次独立的模型请求；8 个已经是一次工具调用能接受的上限。再多就分批，
+ * 否则一次调用的 token、延迟和上下文都会同时膨胀。
+ */
+export const MAX_REPORT_TARGETS = 8;
+
+/** 汇报要求正文的长度上限（字符）。 */
+export const MAX_REPORT_ASK_CHARS = 4000;
+
+/**
+ * 单个目标汇报请求的超时。
+ *
+ * 汇报是「读历史 + 生成一段总结」，通常几秒到几十秒；60 秒还没回来就先把这一个目标
+ * 记成 timeout，其它目标不受影响。
+ */
+export const REPORT_TIMEOUT_MS = 60 * 1000;
+
+/** 单份汇报返回给 A 的最大字符数，防止一份总结撑爆 A 的上下文。 */
+export const REPORT_MAX_CHARS = 4000;
+
+/** 喂给汇报助手的历史条数上限。 */
+export const REPORT_HISTORY_MESSAGES = 40;
+
+/** 喂给汇报助手的历史字符上限（大会话兜底）。 */
+export const REPORT_HISTORY_CHARS = 120000;
+
 /**
  * 一次工具调用最多等多久：5 分钟一段。
  *

@@ -12,8 +12,20 @@
  * @module @local/dsh-split-workspaces/host.tool
  */
 
-import { MAX_BATCH_TARGETS, MAX_TASK_CHARS, TOOL_NAME } from './host.constants.js';
+import {
+  MAX_BATCH_TARGETS,
+  MAX_REPORT_ASK_CHARS,
+  MAX_REPORT_TARGETS,
+  MAX_TASK_CHARS,
+  REPORT_HISTORY_CHARS,
+  REPORT_HISTORY_MESSAGES,
+  REPORT_MAX_CHARS,
+  REPORT_TIMEOUT_MS,
+  REPORT_TOOL_NAME,
+  TOOL_NAME,
+} from './host.constants.js';
 import { normalizeWait, runBatch } from './host.batch.js';
+import { runReports } from './host.report.js';
 import { runReviews } from './host.reviews.js';
 import { adoptOrphanGoals } from './host.watch.js';
 import { describeCandidates, matchBinding } from './host.message.js';
@@ -62,16 +74,17 @@ export function explainNoTarget(service, ownerId, bindings) {
  *
  * @param bindings - 这个会话可派的目标。
  * @param rawTargets - 模型给的字符串数组。
+ * @param verb - 错误文案里的动作（默认「派给」，汇报时传「汇报」）。
  * @returns 去重后的绑定数组（保持模型给的顺序）。
  */
-function pickTargets(bindings, rawTargets) {
+function pickTargets(bindings, rawTargets, verb = '派给') {
   const out = [];
   const seen = new Set();
   for (const raw of rawTargets) {
     const binding = matchBinding(bindings, raw);
     if (binding === null) {
       throw new Error(
-        '没认出要派给哪个目标：' + String(raw) + '。当前可派的是：\n' + describeCandidates(bindings),
+        '没认出要' + verb + '哪个目标：' + String(raw) + '。当前可派的是：\n' + describeCandidates(bindings),
       );
     }
     if (seen.has(binding.id)) continue;
@@ -185,6 +198,8 @@ export function dispatchDescription(service, ownerId) {
     '## 过程稿与纠正',
     '目标还在跑时，results 里的 progress 是**过程稿**，deliverable 为 false：它可能被后面推翻，',
     '不能当成交付结论写进你的输出，也不能据此宣布完成。',
+    '如果过程稿看不出方向，可以调用 report_task（只读汇报）：让目标按你的问题引用历史里的证据；',
+    '它不会改变派单状态，也不产生交付结论。',
     '过程稿可以用来判断方向。方向不对时，用 dispatch_task 带 task、targets 指向同一个目标发纠正：',
     '纠正会先停止目标的当前轮，再把纠正作为一条新消息重新提交，并重新启动目标（若它因此暂停）；',
     '不新建目标；返回 status: redirected。',
@@ -455,6 +470,159 @@ export function createDispatchTool(service, ownerId) {
         task,
         wait: normalizeWait(args?.wait),
         signal: exec.signal,
+      });
+    },
+  };
+}
+
+/**
+ * `report_task` 的工具描述。
+ *
+ * 它和 `dispatch_task` 的描述分开写：汇报是**只读**的，不能派活、不能审核、不能改变
+ * 派单状态。描述里必须把「一次最多 8 个」「汇报是总结不是真相」「history 窗口有限」
+ * 这三件事说清楚，否则 A 会拿它当结果接口，或者以为它能看到全部文件。
+ *
+ * @param service - 绑定表。
+ * @param ownerId - 发起方会话 id。
+ * @returns 工具描述。
+ */
+export function reportDescription(service, ownerId) {
+  const bindings = service.bindings.get(ownerId) ?? [];
+  const base = [
+    '## 这个工具做什么',
+    '向一个或多个目标会话的**只读汇报助手**提问：它读取目标真正送给模型的历史，',
+    '按你的汇报要求生成一份总结，返回给你。它不会打断目标、不会修改目标、不会创建 goal、',
+    '不会给目标注入消息，也不会产生交付结论。',
+    '',
+    '## 什么时候用',
+    '- `progress` 看不出方向，怀疑偏题、卡住或遗漏证据；',
+    '- 准备纠正、验收或向用户汇报之前，先让目标自己的历史回答你的具体问题；',
+    '- 不要用它代替 `dispatch_task` 的结果获取；它不改变派单状态，也不代替审核。',
+    '',
+    '## ask 怎么写',
+    '- 写清楚你要它回答什么、引用什么证据；',
+    '- 要求它区分「有证据的事实 / 目标的自述 / 推断 / 未知」；',
+    '- 一次问 3~5 个具体的点，别写空泛的「汇报一下」。',
+    '',
+    '## 限制',
+    '- 一次最多 ' + MAX_REPORT_TARGETS + ' 个目标；每个目标一次独立的模型调用，逐目标并行，'
+      + '单个超时 ' + Math.round(REPORT_TIMEOUT_MS / 1000) + ' 秒。',
+    '- 只读目标的**模型可见历史**：历史窗口外、没有落进历史的工具输出看不到；',
+    '- 汇报是另一个模型的总结，不是真相。关键结论要自己复核。',
+  ];
+  if (bindings.length === 0) {
+    base.push('', '当前没有可汇报的目标。');
+    return base.join('\n');
+  }
+  base.push('', '## 当前可汇报目标', '用 targets 里的序号或标题指定：', describeCandidates(bindings));
+  return base.join('\n');
+}
+
+/**
+ * 构造面向模型的 `report_task` 工具。
+ *
+ * @param service - 绑定表。
+ * @param ownerId - 发起方会话 id。
+ * @returns 可以直接交给 `ctx.tools.register()` 的工具定义。
+ */
+export function createReportTool(service, ownerId) {
+  return {
+    name: REPORT_TOOL_NAME,
+    get description() {
+      return reportDescription(service, ownerId);
+    },
+    parameters: {
+      type: 'object',
+      properties: {
+        targets: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: MAX_REPORT_TARGETS,
+          description: '要汇报哪些目标，每项可以是序号、完整标题、标题的一部分或会话 id。'
+            + '一次最多 ' + MAX_REPORT_TARGETS + ' 个；多个目标会并行汇报。',
+        },
+        ask: {
+          type: 'string',
+          maxLength: MAX_REPORT_ASK_CHARS,
+          description: '汇报要求。写清楚要回答什么、引用什么证据；'
+            + '要求区分「有证据的事实 / 目标的自述 / 推断 / 未知」。',
+        },
+      },
+      required: ['targets', 'ask'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string' },
+          results: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                target: { type: 'string' },
+                status: { type: 'string' },
+                report: { type: 'string' },
+                goalPhase: { type: 'string' },
+                asOf: { type: 'string' },
+                truncated: { type: 'boolean' },
+                note: { type: 'string' },
+              },
+              required: ['target', 'status', 'report', 'goalPhase', 'asOf', 'truncated', 'note'],
+              additionalProperties: false,
+            },
+          },
+          note: { type: 'string' },
+        },
+        required: ['status', 'results', 'note'],
+        additionalProperties: false,
+      },
+      render(_args, value) {
+        const lines = ['汇报状态：' + value.status];
+        for (const item of value.results) {
+          lines.push('', '—— ' + item.target + '：' + item.status + '（goal: ' + item.goalPhase + '）');
+          if (item.report !== '') lines.push(item.report);
+          else lines.push('（没有返回内容）');
+          if (item.note !== '') lines.push(item.note);
+        }
+        if (value.note !== '') lines.push('', value.note);
+        return [{ type: 'text', text: lines.join('\n') }];
+      },
+    },
+    async execute(args, exec) {
+      const callerId = exec?.agent?.id;
+      if (typeof callerId !== 'string' || callerId === '') {
+        throw new Error('这个工具只能在会话里由模型调用。');
+      }
+      const bindings = service.bindings.get(callerId) ?? [];
+      if (bindings.length === 0) {
+        throw new Error(explainNoTarget(service, callerId, bindings));
+      }
+      const rawTargets = Array.isArray(args?.targets) ? args.targets : [];
+      if (rawTargets.length === 0) {
+        throw new Error('请用 targets 指明要汇报哪个目标：\n' + describeCandidates(bindings));
+      }
+      const ask = typeof args?.ask === 'string' ? args.ask.trim() : '';
+      if (ask === '') {
+        throw new Error('请用 ask 写清汇报要求：要它回答什么、引用什么证据、怎么区分事实与推断。');
+      }
+      if (ask.length > MAX_REPORT_ASK_CHARS) {
+        throw new Error('汇报要求超过 ' + MAX_REPORT_ASK_CHARS + ' 字符，请精简。');
+      }
+      const requested = pickTargets(bindings, rawTargets, '汇报');
+      if (requested.length > MAX_REPORT_TARGETS) {
+        throw new Error('一次最多汇报 ' + MAX_REPORT_TARGETS + ' 个目标，请分几批。');
+      }
+      return runReports({
+        ctx: service.ctx,
+        bindings: requested,
+        ask,
+        signal: exec.signal,
+        timeoutMs: service.reportTimeoutMs ?? REPORT_TIMEOUT_MS,
+        historyMessages: service.reportHistoryMessages ?? REPORT_HISTORY_MESSAGES,
+        historyChars: service.reportHistoryChars ?? REPORT_HISTORY_CHARS,
+        maxChars: service.reportMaxChars ?? REPORT_MAX_CHARS,
       });
     },
   };

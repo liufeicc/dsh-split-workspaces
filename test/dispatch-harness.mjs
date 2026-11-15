@@ -64,6 +64,8 @@ function createHostContext({
   promptThrowsAt = null,
   onCancel = null,
   goals = null,
+  sessions = new Map(),
+  llm = null,
 } = {}) {
   const listeners = new Set();
   const otherListeners = new Map();
@@ -76,6 +78,7 @@ function createHostContext({
 
   services.set('agents', { get: (id) => agents.get(id) });
   if (goals !== null) services.set('goals', goals);
+  if (llm !== null) services.set('llm', llm);
   services.set('sessionController', {
     /**
      * 唤醒目标的入口（真实实现会按预设与子代理归属策略恢复冷会话）。
@@ -83,10 +86,15 @@ function createHostContext({
      */
     async resolveAgent(sessionId) {
       resolveCalls.push(sessionId);
+      /*
+       * 汇报测试要往 session 上挂 `deriveMessages()` / `requestHeader()`；
+       * 以传入的 sessions 表为准，没传时仍是一个只有 id 的最小替身。
+       */
+      const session = { id: sessionId, ...(sessions.get(sessionId) ?? {}) };
       return {
         agent: {
           id: sessionId,
-          session: { id: sessionId },
+          session,
           status: agents.get(sessionId)?.status ?? 'idle',
           cancel(cause, cancelOptions) {
             agentCancelCalls.push({ sessionId, cause, options: cancelOptions });

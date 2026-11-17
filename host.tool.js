@@ -462,6 +462,11 @@ export function createDispatchTool(service, ownerId) {
         throw new Error('一次最多派给 ' + MAX_BATCH_TARGETS + ' 个目标，请分几批派。');
       }
 
+      /*
+       * 真正开始投递之前记一条视觉事件。续等（没有 task）、审核、预检失败都已经在
+       * 上面返回了，所以这里就是「这一单真的要派出去」的位置。
+       */
+      if (hasTask) service.noteDispatch(ownerId, requested.map((item) => item.id));
       return runBatch({
         ctx: service.ctx,
         service,

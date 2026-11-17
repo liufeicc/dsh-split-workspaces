@@ -1,0 +1,469 @@
+/* ══════════════════════════════════════════════════════════════════
+   nodes.css —— 节点内部：日志、终端、进度、任务卡、输入区、页脚
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ───────────────────────── 正文容器 ───────────────────────── */
+.node-body {
+  position: relative;
+  z-index: 2;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 11px 14px 8px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 12px), transparent 100%);
+}
+
+.node-body > * { flex: none; }
+
+/* 时间线 */
+.timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 7.5px;
+  line-height: 1.5;
+  letter-spacing: .08em;
+  color: #607a92;
+  white-space: nowrap;
+}
+
+.timeline .tl-date { color: var(--cyan); opacity: .8; }
+
+.timeline i {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(77, 215, 255, .16), transparent);
+}
+
+.timeline b {
+  color: #8aa3ba;
+  font-weight: 400;
+  letter-spacing: .12em;
+}
+
+/* 引导句 */
+.lede {
+  margin: 0;
+  font-size: 12.2px;
+  line-height: 1.72;
+  color: var(--text-2);
+}
+
+/* 终端 */
+.terminal {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #1a3049;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #050a11, #04080e);
+  box-shadow:
+    inset 0 0 24px rgba(40, 110, 160, .05),
+    0 0 0 1px rgba(77, 215, 255, .03);
+}
+
+.terminal::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(77, 215, 255, .35), transparent 60%);
+}
+
+.terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid #142638;
+  background: rgba(10, 20, 33, .55);
+}
+
+.term-dots {
+  display: flex;
+  gap: 3px;
+  flex: none;
+}
+
+.term-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #233b52;
+}
+
+.term-dots i:first-child { background: rgba(255, 77, 109, .55); }
+.term-dots i:nth-child(2) { background: rgba(255, 180, 84, .5); }
+.term-dots i:last-child { background: rgba(61, 220, 151, .5); }
+
+.term-tag {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 7.3px;
+  letter-spacing: .14em;
+  color: #5f89a3;
+  text-transform: uppercase;
+}
+
+.terminal .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+
+.terminal .icon-btn .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.terminal pre {
+  margin: 0;
+  padding: 8px 10px 9px;
+  overflow: hidden;
+}
+
+.terminal code {
+  display: block;
+  font-family: var(--mono);
+  font-size: 8.8px;
+  line-height: 1.66;
+  letter-spacing: .005em;
+  color: #9fdcff;
+  white-space: pre;
+}
+
+/* 批注 */
+.note {
+  display: flex;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 1px solid #173049;
+  border-left: 2px solid rgba(77, 215, 255, .5);
+  background: linear-gradient(90deg, rgba(77, 215, 255, .05), rgba(77, 215, 255, .012));
+}
+
+.note-tag {
+  flex: none;
+  padding-top: 1px;
+  font-family: var(--mono);
+  font-size: 6.5px;
+  line-height: 1.6;
+  letter-spacing: .12em;
+  color: var(--cyan);
+  opacity: .8;
+}
+
+.note p {
+  margin: 0;
+  font-size: 11.6px;
+  line-height: 1.72;
+  color: #a7bed2;
+}
+
+.note strong,
+.note b { color: #e6f4ff; }
+
+code {
+  font-family: var(--mono);
+  font-size: 9px;
+  padding: 0 3px;
+  color: #9fdcff;
+  background: rgba(77, 215, 255, .06);
+  border: 1px solid rgba(77, 215, 255, .12);
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+/* 数据条 */
+.data-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  overflow: hidden;
+  border: 1px solid #172d44;
+  border-radius: 3px;
+}
+
+.data-strip.is-three { grid-template-columns: repeat(3, 1fr); }
+
+.data-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-right: 1px solid #142638;
+  background: rgba(11, 20, 33, .5);
+}
+
+.data-cell:last-child { border-right: 0; }
+
+.data-cell span {
+  font-family: var(--mono);
+  font-size: 6.8px;
+  line-height: 1.4;
+  letter-spacing: .12em;
+  color: #5c7890;
+}
+
+.data-cell b {
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.4;
+  font-weight: 400;
+  letter-spacing: .03em;
+  color: #9cb7cb;
+}
+
+.data-cell b.ok { color: var(--green); }
+.data-cell b.warn { color: var(--amber); }
+.data-cell b.bad { color: var(--red); }
+
+/* 实时遥测 */
+.telemetry {
+  padding: 6px 8px 7px;
+  border: 1px solid #172d44;
+  border-radius: 3px;
+  background: rgba(9, 16, 27, .45);
+}
+
+.telemetry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 4px;
+  font-family: var(--mono);
+  font-size: 6.8px;
+  line-height: 1.4;
+  letter-spacing: .14em;
+  color: #5c7890;
+}
+
+.telemetry-head em {
+  font-style: normal;
+  color: #4d667c;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.telemetry-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.telemetry-grid span {
+  font-family: var(--mono);
+  font-size: 6px;
+  line-height: 1.4;
+  letter-spacing: .1em;
+  color: #526a80;
+}
+
+.telemetry-grid b {
+  font-family: var(--mono);
+  font-size: 9.2px;
+  line-height: 1.4;
+  font-weight: 400;
+  color: #a9d8ee;
+  white-space: nowrap;
+}
+
+.telemetry-grid .bar {
+  height: 2px;
+  overflow: hidden;
+  background: #142638;
+}
+
+.telemetry-grid .bar u {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(77, 215, 255, .7), rgba(77, 215, 255, .12));
+  text-decoration: none;
+}
+
+/* 流结束装饰 */
+.stream-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 1px;
+  font-family: var(--mono);
+  font-size: 6.5px;
+  line-height: 1.6;
+  letter-spacing: .16em;
+  color: #3f576d;
+  white-space: nowrap;
+}
+
+.stream-end i {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(77, 215, 255, .14), transparent);
+}
+
+/* 运行记录 */
+.runlog {
+  padding: 4px 0;
+  border-top: 1px solid #16293d;
+  border-bottom: 1px solid #16293d;
+}
+
+.runlog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 3px;
+  font-family: var(--mono);
+  font-size: 6.8px;
+  line-height: 1.4;
+  letter-spacing: .14em;
+  color: #5c7890;
+}
+
+.runlog-head em {
+  font-style: normal;
+  color: #4d667c;
+}
+
+.runlog-row {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 1px 2px;
+  font-family: var(--mono);
+  font-size: 8.3px;
+  line-height: 1.7;
+  color: #6f8aa0;
+}
+
+.runlog-row > span {
+  flex: none;
+  width: 32px;
+  color: #516b81;
+}
+
+.runlog-row b {
+  flex: 0 0 40px;
+  font-family: var(--sans);
+  font-size: 8.8px;
+  line-height: 1.7;
+  font-weight: 500;
+  color: #a9c6da;
+}
+
+.runlog-row em {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+  text-align: right;
+  color: #6f8aa0;
+}
+
+/* 消息时间 */
+.msg-time {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 5px;
+  margin-top: -2px;
+  font-family: var(--mono);
+  font-size: 7px;
+  line-height: 1.4;
+  color: #5c7890;
+}
+
+.msg-time .ticks {
+  color: var(--green);
+  letter-spacing: -.1em;
+  font-size: 8px;
+}
+
+/* ───────────────────────── 日志 / 数据组件响应式 ───────────────────────── */
+@media (max-width: 1560px) {
+  .node-body { padding: 9px 11px 7px; gap: 8px; }
+  .terminal code { font-size: 8.3px; }
+  .note p { font-size: 10.8px; }
+}
+
+@media (max-width: 1320px) {
+  .node-body { padding: 8px 9px 6px; }
+  .data-strip { grid-template-columns: repeat(3, 1fr); }
+  .data-cell:last-child { display: none; }
+  .runlog-row b { flex-basis: 34px; }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   动效层 —— 数据条流动、终端光标、时间线光流
+   ══════════════════════════════════════════════════════════════════ */
+
+.progress-row .bar u,
+.telemetry-grid .bar u {
+  background-size: 200% 100%;
+  transform-origin: left center;
+  animation:
+    bar-grow 1.25s cubic-bezier(.2, .8, .2, 1) both,
+    bar-flow 2.8s linear infinite 1.25s;
+}
+
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes bar-flow {
+  from { background-position: 0% 0; }
+  to { background-position: 200% 0; }
+}
+
+.terminal code::after {
+  content: "▌";
+  margin-left: 2px;
+  color: var(--cyan);
+  text-shadow: 0 0 7px rgba(77, 215, 255, .7);
+  animation: caret-blink 1.1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  0%, 45% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.timeline i {
+  background: linear-gradient(90deg,
+      rgba(77, 215, 255, .14),
+      rgba(77, 215, 255, .55),
+      transparent 80%);
+  background-size: 220% 100%;
+  animation: line-flow 4.2s linear infinite;
+}
+
+@keyframes line-flow {
+  to { background-position: -220% 0; }
+}
+
+.data-cell {
+  transition: background .2s ease;
+}
+
+.data-cell:hover {
+  background: rgba(77, 215, 255, .055);
+}

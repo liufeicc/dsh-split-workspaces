@@ -27,6 +27,82 @@ window.__ModuleLoader__.load({
     /** 新建或均分时分隔条回到的位置。 */
     const SPLIT_EVEN_RATIO = 0.5;
 
+    /**
+     * 每个窗格「对话内容区」的背景色板。
+     *
+     * 这里只存**色相**，不直接当底色用：样式块会把色相掺进一层半透明的径向 /
+     * 线性渐变（见 `client.styles.js` 的 `.dshSplitWs_paneBody`），会话根再保留
+     * 一部分深色遮罩，因此每个窗格拿到的是一块「带色温的玻璃」，而不是亮色块：
+     *   - 正文 `#dceaf7` 与次要文字 `#9fb6c9` 的对比度仍远高于 WCAG AA；
+     *   - 八个色相在深色底上彼此可辨，又不会抢走消息内容的注意力。
+     *
+     * 色板里刻意没有橙色：活动窗格的标题栏用橙色高亮，内容区再出现一片橙会让人
+     * 误以为两格都是当前窗格。
+     */
+    const PANE_TINTS = [
+      { id: 'cyan', value: '#5ee7ff' },
+      { id: 'azure', value: '#4d93f8' },
+      { id: 'violet', value: '#a78bfa' },
+      { id: 'magenta', value: '#ff7ad9' },
+      { id: 'green', value: '#4ed17e' },
+      { id: 'teal', value: '#2dd4bf' },
+      { id: 'amber', value: '#f7ad31' },
+      { id: 'slate', value: '#8fa8bd' },
+    ];
+
+    /**
+     * 32 位 FNV-1a：只用来把「会话」稳定地映射到色板下标。
+     *
+     * 不需要抗碰撞 —— 真的要撞色时，`assignPaneTints` 还会在同一屏内往后找空位；
+     * 这里只需要「同一段文本每次都得到同一个数」。
+     *
+     * @param text - 会话 id / 工作区 id 拼出来的种子。
+     */
+    function tintHash(text) {
+      let hash = 0x811c9dc5;
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+      }
+      return hash >>> 0;
+    }
+
+    /**
+     * 给每个窗格分一个内容区背景色。
+     *
+     * 三条约定：
+     *   1. **颜色跟会话走**：同一段对话换到哪个窗格、刷新页面、拖动交换窗格，颜色
+     *      都不变 —— 种子优先取 `sessionId`，还没选会话的空窗格退回 `workspaceId`，
+     *      两者都没有时退回窗格 key；
+     *   2. **同一屏不重复**：首选下标被别的窗格占了，就顺着色板往后找第一个空位；
+     *      只有窗格数超过色板大小时才允许复用（这时重复无法避免）；
+     *   3. **冲突消解不看布局顺序**：先按 `pane.key` 排序再分配。`key` 属于窗格本身，
+     *      拖动交换的是布局树里的位置，不会改 key —— 所以交换两个窗格之后，同一段
+     *      对话的颜色不会突然变成另一个。
+     *
+     * @param panes - 窗格记录数组（`{ key, workspaceId, sessionId }`）。
+     * @returns 每个 `pane.key` 对应的色板项；没有窗格时是空 Map。
+     */
+    function assignPaneTints(panes) {
+      const tints = new Map();
+      const ordered = [...panes].sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0));
+      const used = new Set();
+      for (const pane of ordered) {
+        const seed = pane.sessionId === null || pane.sessionId === undefined
+          ? 'workspace:' + String(pane.workspaceId)
+          : 'session:' + String(pane.sessionId);
+        let index = tintHash(seed) % PANE_TINTS.length;
+        let probe = 0;
+        while (used.has(index) && probe < PANE_TINTS.length) {
+          index = (index + 1) % PANE_TINTS.length;
+          probe += 1;
+        }
+        used.add(index);
+        tints.set(pane.key, PANE_TINTS[index]);
+      }
+      return tints;
+    }
+
     /** 四个分屏方向，菜单按这个顺序排列。 */
     const SPLIT_DIRECTIONS = ['left', 'right', 'up', 'down'];
 
@@ -803,6 +879,8 @@ window.__ModuleLoader__.load({
       SPLIT_MIN_RATIO,
       SPLIT_MAX_RATIO,
       SPLIT_EVEN_RATIO,
+      PANE_TINTS,
+      assignPaneTints,
       SPLIT_DIRECTIONS,
       SPLIT_PLACEMENTS,
       splitPlacement,

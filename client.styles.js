@@ -15,9 +15,30 @@ window.__ModuleLoader__.load({
   id: '@local/dsh-split-workspaces/client.styles.js',
   factory() {
     const CSS = [
+      /*
+       * 所有会话正文（主界面与平铺面板）自带「站酷快乐体」。
+       *
+       * 字体由 Host 半边的 /split-workspaces-fonts 前缀路由提供（入口 `index.js` 的
+       * `registerFontRoutes`）—— 客户端代码块路由只服务 client.*.js，字体文件不是
+       * 代码块，所以单独挂一条。字体加载失败时下面的 font-family 会自然退回系统
+       * 黑体，不影响任何文字出现。
+       *
+       * 两个 @font-face 用 unicode-range 分工：中文与全角标点走简体中文子集，
+       * 拉丁字母、数字与半角标点走 5KB 的拉丁子集。这样英文/代码里的数字不会被
+       * 中文字体里那套更「圆」的拉丁字形拖慢辨识。
+       */
+      "@font-face{font-family:'SplitWorkspaceKuaile';font-style:normal;font-weight:400;font-display:swap;src:url('/split-workspaces-fonts/zcool-kuaile-chinese-simplified.woff2?v=1') format('woff2');unicode-range:U+2E80-2EFF,U+3000-303F,U+3400-4DBF,U+4E00-9FFF,U+F900-FAFF,U+FE30-FE4F,U+FF00-FFEF,U+20000-2FA1F;}",
+      "@font-face{font-family:'SplitWorkspaceKuaile';font-style:normal;font-weight:400;font-display:swap;src:url('/split-workspaces-fonts/zcool-kuaile-latin.woff2?v=1') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}",
+      /*
+       * 工作站点的字体只用在平铺面板的标题、按钮、菜单上（见下面的 .dshSplitWs_root
+       * 与 .dshSplitWs_popoverList）。**会话正文保持系统原字体**：正文里已经有一层
+       * 独立于面板的字体规则，强行覆盖会把代码块里的中英文混排弄乱，因此不在
+       * [data-conversation-content] 上做任何字体设置。
+       */
       // 本面板的强调色变量：优先用主题的蓝色强调 token，取不到时退回同色系的静态蓝，
       // 绝不退回 --dsw-alias-brand-primary（它在深色主题里是近白的中性填充色，会白底白字）。
-      '.dshSplitWs_root{--dshSplitWs-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-static-deepseek-500));box-sizing:border-box;display:flex;flex-direction:column;height:100%;min-width:0;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}',
+      // 平铺面板的标题、按钮、菜单也用这套字体；会话正文由上面那条全局规则统一负责。
+      '.dshSplitWs_root{--dshSplitWs-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-static-deepseek-500));--dsw-font-family:"SplitWorkspaceKuaile","ZCOOL KuaiLe","Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;box-sizing:border-box;display:flex;flex-direction:column;height:100%;min-width:0;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}',
       '.dshSplitWs_head{flex:none;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:14px 20px 10px;border-bottom:.5px solid var(--dsw-alias-border-l1)}',
       '[data-platform=darwin] .dshSplitWs_head{padding-top:calc(14px + var(--dsh-frame-top-clearance,0px))}',
       '.dshSplitWs_headMain{min-width:0}',
@@ -137,7 +158,8 @@ window.__ModuleLoader__.load({
        * top/left；这里只留「不超出视口」的兜底尺寸。原来的 absolute + 窗格
        * `overflow:hidden` 会在窄窗格里把菜单裁掉。
        */
-      '.dshSplitWs_popoverList{position:fixed;top:0;left:0;z-index:1000;min-width:min(240px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));max-height:min(340px,calc(100vh - 16px));overflow-y:auto;padding:4px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 12px 32px rgba(0,0,0,.28)}',
+      // 菜单 portal 在 document.body 下，不在 .dshSplitWs_root 的继承链里，字体要单独声明。
+      '.dshSplitWs_popoverList{--dsw-font-family:"SplitWorkspaceKuaile","ZCOOL KuaiLe","Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;position:fixed;top:0;left:0;z-index:1000;min-width:min(240px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));max-height:min(340px,calc(100vh - 16px));overflow-y:auto;padding:4px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 12px 32px rgba(0,0,0,.28);font-family:var(--dsw-font-family)}',
       '.dshSplitWs_menuItem{display:flex;align-items:center;gap:8px;width:100%;padding:7px 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;line-height:18px;text-align:left;cursor:pointer}',
       // 菜单项 hover：底色不能再用 bg-layer-2（那正是面板自己的底色，压上去等于没反应），
       // 改成拿 currentColor 调淡 —— 深色主题下是白字提亮、浅色主题下是黑字压暗，两种主题都看得见。
@@ -595,18 +617,142 @@ window.__ModuleLoader__.load({
 }
 
 /* ── 内容区 ── */
-.dshSplitWs_paneBody{background:rgba(5,9,16,.18);color-scheme:dark}
-.dshSplitWs_paneViewContent{
-  background:transparent;scrollbar-width:thin;scrollbar-color:rgba(94,231,255,.24) transparent;
+/*
+ * 内容区背景：每个窗格按自己的 --dshSplitWs-pane-tint 做一层「半透明彩色玻璃」。
+ *
+ * 不是把整块底色染成一个实心色，而是：
+ *   1. 左上角一团柔光（径向渐变，最高 20% 色相），向右下淡出；
+ *   2. 顶部一条很薄的色雾（线性渐变，8% → 透明），把标题栏与内容区接起来；
+ *   3. 最底层仍是原来的深色 #05080e。
+ * 色相只出现在这三层半透明渐变里，所以靠近底部的正文区几乎回到原深色，
+ * 待久了不会觉得在看一块彩色纸。
+ *
+ * 会话根与气泡的背景 token 也改成半透明深色（rgba），让渐变透上来：
+ *   - bg-base 只留 48% 深色遮罩，是「玻璃」的厚度；
+ *   - 气泡 / 输入框 / 代码块保持接近原色的深色，只掺 6%~8% 色相，
+ *     避免整段对话连同气泡一起变成色块（这是第一版最难看的地方）。
+ *
+ * 文字 token 基本不动：正文 #dceaf7、次要 #9fb6c9 在每一层上对比度都 > 7:1；
+ * 只有三级文字（时间戳、状态、路径）从 #6f8aa0 提亮到 #839db2 —— 原色在
+ * 左上角最亮的 20% 光晕上只有约 3.9:1，提亮后最差也有 4.6:1。
+ */
+.dshSplitWs_paneBody{
+  color-scheme:dark;
+  background:
+    radial-gradient(125% 78% at 0% 0%,
+      color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 20%,transparent) 0%,
+      color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 7%,transparent) 36%,
+      transparent 68%),
+    linear-gradient(180deg,
+      color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 8%,transparent) 0%,
+      transparent 44%),
+    #05080e;
+  --dsw-alias-bg-base:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 5%,rgba(5,8,14,.44));
+  --dsw-alias-bg-layer-1:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 8%,rgba(10,18,32,.68));
+  --dsw-alias-bg-layer-2:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 10%,rgba(14,25,41,.8));
+  --dsw-specific-bubble:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 5%,rgba(14,25,41,.9));
+  --dsw-specific-input-major:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 6%,rgba(11,20,35,.9));
+  --dsw-alias-markdown-code-block:rgba(5,8,14,.72);
+  --dsw-alias-markdown-code-block-banner:rgba(10,18,32,.78);
+  --dsw-alias-markdown-inline-code:rgba(14,25,41,.8);
+  --dsw-alias-label-tertiary:#839db2;
+  --dsw-alias-label-caption:#839db2;
 }
-.dshSplitWs_paneViewContent *{scrollbar-width:thin;scrollbar-color:rgba(94,231,255,.24) transparent}
+.dshSplitWs_paneViewContent{
+  background:transparent;scrollbar-width:thin;
+  scrollbar-color:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 26%,transparent) transparent;
+}
+.dshSplitWs_paneViewContent *{
+  scrollbar-width:thin;
+  scrollbar-color:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 26%,transparent) transparent;
+}
 .dshSplitWs_paneBody ::-webkit-scrollbar{width:8px;height:8px}
-.dshSplitWs_paneBody ::-webkit-scrollbar-thumb{background:rgba(94,231,255,.22);border-radius:8px}
+.dshSplitWs_paneBody ::-webkit-scrollbar-thumb{
+  border-radius:8px;
+  background:color-mix(in srgb,var(--dshSplitWs-pane-tint,#5ee7ff) 24%,transparent);
+}
 .dshSplitWs_paneBody ::-webkit-scrollbar-track{background:transparent}
 .dshSplitWs_paneError{
   background:rgba(255,77,109,.05);border-bottom:1px solid rgba(255,77,109,.22);color:#ff8ba0;
 }
 .dshSplitWs_paneEmpty{color:#7c98b3}
+
+/* ── 正文逐行浮现（主界面与平铺面板的助手正文） ── */
+/*
+ * 让助手正文按「段落 / 列表项 / 标题 / 引用 / 代码块 / 表格」逐块淡入上浮，
+ * 每块 2 秒。相比原来整条消息一起出现，视觉上就是一行接一行浮现：
+ *   - Markdown 的每个 <p>、<li>、<h*> 是独立块，各自有自己的动画；
+ *   - 同一段落内部的自动换行仍是一个块（浏览器排版结果，CSS 无法拆成视觉行）；
+ *   - 用户消息（user）、工具调用（tool-call）、思考过程（reasoning）不命中；
+ *   - 行内节点（strong/em/code/span）不单独动画，避免逐字抖动。
+ *
+ * 流式输出时新段落是新建节点，播放一次；已有段落由 React 复用，不会每来
+ * 一个 token 重播。用 both 让每块在动画开始前保持透明。
+ *
+ * 第一条选择器覆盖主界面会话（以及平铺面板里的会话，它们同样带
+ * [data-conversation-content]）；第二条保留给没有这个属性的旧会话根。
+ */
+@keyframes dshSplitWsTextRise{
+  from{opacity:0;transform:translateY(6px)}
+  to{opacity:1;transform:translateY(0)}
+}
+[data-conversation-content] [data-chat-flow-key][data-chat-flow-kind="assistant-step"]:not([data-chat-group-part="reasoning"]) :is(p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,table),
+.dshSplitWs_paneBody [data-chat-flow-key][data-chat-flow-kind="assistant-step"]:not([data-chat-group-part="reasoning"]) :is(p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,table){
+  animation:dshSplitWsTextRise 2s cubic-bezier(.2,.8,.2,1) both;
+}
+@media (prefers-reduced-motion:reduce){
+  [data-conversation-content] [data-chat-flow-key][data-chat-flow-kind="assistant-step"]:not([data-chat-group-part="reasoning"]) :is(p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,table),
+  .dshSplitWs_paneBody [data-chat-flow-key][data-chat-flow-kind="assistant-step"]:not([data-chat-group-part="reasoning"]) :is(p,li,h1,h2,h3,h4,h5,h6,blockquote,pre,table){animation:none !important}
+}
+
+/* ── 派单流星 ── */
+/*
+ * 光点是一个 1px 定位容器：offset-path 由 client.fx.js 随机生成，容器沿路径
+ * 移动并自动转向。头部 7px 白心；外面一圈 76px 金色柔光；后面两条（粗光带 +
+ * 白色亮芯）形成流星尾巴。没有轨迹线。
+ */
+.dshSplitWs_fxComet{
+  position:fixed;left:0;top:0;width:1px;height:1px;
+  offset-rotate:auto;pointer-events:none;z-index:2147483000;
+  will-change:offset-distance;mix-blend-mode:screen;
+}
+.dshSplitWs_fxGlow{
+  position:absolute;left:0;top:0;width:120px;height:120px;margin:-60px 0 0 -60px;border-radius:50%;
+  background:radial-gradient(circle,rgba(255,245,205,.5) 0%,rgba(255,210,122,.25) 40%,rgba(255,190,60,0) 75%);
+  filter:blur(8px);pointer-events:none;
+}
+.dshSplitWs_fxHead{
+  position:absolute;left:0;top:0;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;border-radius:50%;
+  background:radial-gradient(circle,#fff 0 30%,#fff3c4 48%,#ffd27a 70%,rgba(255,170,40,0) 100%);
+  box-shadow:0 0 8px #fff,0 0 22px #ffd27a,0 0 46px rgba(255,190,60,.95);
+}
+.dshSplitWs_fxTail{
+  position:absolute;left:-96px;top:-2px;width:96px;height:4px;border-radius:999px;
+  background:linear-gradient(90deg,rgba(255,190,60,0) 0%,rgba(255,210,122,.18) 38%,rgba(255,235,190,.75) 84%,rgba(255,255,255,.95) 100%);
+  filter:blur(1px);
+}
+.dshSplitWs_fxTailCore{
+  position:absolute;left:-72px;top:-.75px;width:72px;height:1.5px;border-radius:999px;
+  background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,250,220,.9) 100%);
+  filter:blur(.3px);
+}
+/*
+ * 窗格边框高亮：一个和窗格等大的独立描边框，盖在 body 上。
+ * 不走窗格自己的 box-shadow，避免被选中态/overflow 吃掉；颜色由 JS 按源/目标设置。
+ */
+.dshSplitWs_fxFlash{
+  position:fixed;box-sizing:border-box;border:3px solid transparent;border-radius:10px;
+  pointer-events:none;z-index:2147483000;mix-blend-mode:screen;
+  will-change:opacity,box-shadow;
+}
+/*
+ * 命中白光：盖住整个窗格的半透明白色层，出现很快、消失较慢。
+ * 放在边框高亮下面，边框仍然看得见。
+ */
+.dshSplitWs_fxHit{
+  position:fixed;box-sizing:border-box;background:#fff;border-radius:10px;
+  pointer-events:none;z-index:2147482999;will-change:opacity;
+}
 
 /* ── 分隔条：发光竖线 + 呼吸菱形 ── */
 .dshSplitWs_splitter::before{

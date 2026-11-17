@@ -66,6 +66,7 @@ function createHostContext({
   goals = null,
   sessions = new Map(),
   llm = null,
+  webServer = null,
 } = {}) {
   const listeners = new Set();
   const otherListeners = new Map();
@@ -79,6 +80,7 @@ function createHostContext({
   services.set('agents', { get: (id) => agents.get(id) });
   if (goals !== null) services.set('goals', goals);
   if (llm !== null) services.set('llm', llm);
+  if (webServer !== null) services.set('webServer', webServer);
   services.set('sessionController', {
     /**
      * 唤醒目标的入口（真实实现会按预设与子代理归属策略恢复冷会话）。
@@ -127,6 +129,12 @@ function createHostContext({
       return () => {
         if (typeof disposer === 'function') disposer();
       };
+    },
+    // 可选依赖：真实 Cordis 在依赖可用时回调，并把同一个上下文交给回调。
+    // 替身只在服务表里已经有这些服务时同步回调，够字体路由的用例使用。
+    inject: (names, callback) => {
+      if (!names.every((name) => services.has(name))) return;
+      callback({ ...ctx, effect: ctx.effect, webServer: services.get('webServer') });
     },
     on: (event, handler) => {
       if (event === 'session/event') {

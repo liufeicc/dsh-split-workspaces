@@ -75,6 +75,7 @@ window.__ModuleLoader__.load({
     const REMOTE_DESCRIPTORS = [
       descriptorFor('list', 'PaneDispatchListRequest'),
       descriptorFor('set', 'PaneDispatchSetRequest'),
+      descriptorFor('pullVisual', 'PaneDispatchVisualRequest'),
       descriptorFor('readLayout', 'PaneLayoutReadRequest'),
       descriptorFor('writeLayout', 'PaneLayoutWriteRequest'),
       descriptorFor('clearLayout', 'PaneLayoutClearRequest'),
@@ -183,6 +184,37 @@ window.__ModuleLoader__.load({
       if (result === undefined || result === null) return { ok: false, reason: 'notMounted' };
       if (result.ok) return { ok: true };
       return { ok: false, reason: result.error === undefined || result.error === null ? 'set failed' : result.error.message };
+    }
+
+    /**
+     * 取一次派单视觉事件。
+     *
+     * 只给平铺面板播放光点用，失败一律静默返回空增量：老 Host 没有这个方法、
+     * 网络抖动、面板关闭时都不该影响绑定同步或界面。
+     *
+     * @param getService - 惰性解析远端命名空间的函数。
+     * @param since - 上次拿到的水位（`latest`）；首次传 null。
+     * @returns `{ ok, events, latest }`。
+     */
+    async function pullDispatchVisual(getService, since) {
+      const from = Number.isFinite(Number(since)) ? Number(since) : 0;
+      let service;
+      try {
+        service = await waitForService(getService, 3, 80);
+      } catch {
+        service = undefined;
+      }
+      if (service === undefined || service === null) return { ok: false, events: [], latest: from };
+      try {
+        const result = await service.pullVisual({ since: from });
+        if (result === undefined || result === null || !result.ok) return { ok: false, events: [], latest: from };
+        const value = result.value === undefined || result.value === null ? {} : result.value;
+        const events = Array.isArray(value.events) ? value.events : [];
+        const latest = Number.isFinite(Number(value.latest)) ? Number(value.latest) : from;
+        return { ok: true, events, latest };
+      } catch {
+        return { ok: false, events: [], latest: from };
+      }
     }
 
     /**
@@ -448,6 +480,7 @@ window.__ModuleLoader__.load({
       readBindings,
       writeBindings,
       waitForService,
+      pullDispatchVisual,
       createDispatchSync,
     };
   },

@@ -72,6 +72,9 @@
  * @module @local/dsh-split-workspaces/host
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { REMOTE_MARKERS, REMOTE_METHODS, SERVICE_KEY, TOOL_NAME } from './host.constants.js';
 import { adoptOrphanGoals } from './host.watch.js';
 import { errorText, noticeMessage } from './host.message.js';
@@ -80,6 +83,85 @@ import { createDispatchTool, createReportTool } from './host.tool.js';
 
 /** 本行的 Loader row id 与插件名（必须与 cordis.patch.yml 里那一行一致）。 */
 export const name = 'split-workspaces';
+
+/** 插件目录下的字体目录（入口与字体文件一起发布，路径相对入口）。 */
+const FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fonts');
+
+/**
+ * 自带的字体通过一条独立前缀路由提供。
+ *
+ * 客户端代码块那条路由只服务 `client.*.js`，字体（.woff2）不是代码块，
+ * 所以这里单独挂一条。路径前缀和字体文件名都写死，不做任何路径拼接校验 ——
+ * 白名单之外的文件一律 404，因此不存在目录穿越。
+ */
+const FONT_ROUTE = '/split-workspaces-fonts';
+
+/** 字体文件名 → Content-Type。 */
+const FONT_FILES = new Map([
+  ['zcool-kuaile-chinese-simplified.woff2', 'font/woff2'],
+  ['zcool-kuaile-latin.woff2', 'font/woff2'],
+]);
+
+/**
+ * 把字体路由挂到 Web 服务上。
+ *
+ * `webServer` 用**可选注入**：CLI / 无 Web 的部署里没有这个服务，插件应当照常
+ * 加载（字体加载失败时客户端自动退回系统字体），不能让整个面板跟着起不来。
+ *
+ * @param ctx - 本行的宿主上下文。
+ */
+function registerFontRoutes(ctx) {
+  /*
+   * 测试替身与极简宿主可能没有 `inject`。字体是纯装饰，缺了它就少一层视觉效果，
+   * 不该因此让整个插件加载失败 —— 所以这里放行，而不是硬性要求。
+   */
+  if (typeof ctx.inject !== 'function') return;
+  ctx.inject(['webServer'], (webCtx) => {
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'prefix',
+      path: FONT_ROUTE,
+      handler: (req, res) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('method not allowed');
+          return;
+        }
+        const url = new URL(req.url ?? '/', 'http://dsh.invalid');
+        let name;
+        try {
+          name = decodeURIComponent(url.pathname.slice(FONT_ROUTE.length + 1));
+        } catch {
+          // 畸形百分号编码不值得区分；直接当作「没有这个字体」。
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('font not found');
+          return;
+        }
+        const type = FONT_FILES.get(name);
+        if (type === undefined) {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('font not found');
+          return;
+        }
+        let body;
+        try {
+          body = readFileSync(join(FONT_DIR, name));
+        } catch {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+          res.end('font not found');
+          return;
+        }
+        res.writeHead(200, {
+          'content-type': type,
+          'content-length': String(body.length),
+          // 字体很少变；URL 里带 ?v=1，换字体时改版本号即可穿透缓存。
+          'cache-control': 'public, max-age=86400',
+          'x-content-type-options': 'nosniff',
+        });
+        res.end(req.method === 'HEAD' ? undefined : body);
+      },
+    }), 'split-workspaces: font route');
+  });
+}
 
 /**
  * 激活前必须就绪的服务。
@@ -99,6 +181,7 @@ export const inject = ['tools'];
  * @param ctx - 本行的宿主上下文。
  */
 export function apply(ctx) {
+  registerFontRoutes(ctx);
   const service = new PaneDispatchService(ctx);
   Object.defineProperty(service, 'typertRemote', {
     configurable: true,

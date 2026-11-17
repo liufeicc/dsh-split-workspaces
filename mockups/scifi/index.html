@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>多工作区平铺 · 科幻概念稿</title>
+<link rel="stylesheet" href="scifi.css">
+<link rel="stylesheet" href="node-shell.css">
+<link rel="stylesheet" href="nodes.css">
+<link rel="stylesheet" href="cards.css">
+<link rel="stylesheet" href="composer.css">
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════════════
+     图标 sprite：细线 HUD 风格
+     ══════════════════════════════════════════════════════════════ -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-grid" viewBox="0 0 24 24">
+    <rect x="3.5" y="3.5" width="7" height="7" rx="1"/>
+    <rect x="13.5" y="3.5" width="7" height="7" rx="1"/>
+    <rect x="3.5" y="13.5" width="7" height="7" rx="1"/>
+    <rect x="13.5" y="13.5" width="7" height="7" rx="1"/>
+  </symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24">
+    <path d="M3.5 7.2c0-1 .8-1.9 1.9-1.9h3.1l1.9 2.1h8.2c1 0 1.9.9 1.9 1.9v7.5c0 1-.9 1.9-1.9 1.9H5.4c-1.1 0-1.9-.9-1.9-1.9z"/>
+  </symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24">
+    <path d="M4 8.2h13.2m0 0-3.1-3.1m3.1 3.1-3.1 3.1"/>
+    <path d="M20 15.8H6.8m0 0 3.1-3.1m-3.1 3.1 3.1 3.1"/>
+  </symbol>
+  <symbol id="i-split" viewBox="0 0 24 24">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="1.6"/>
+    <path d="M12 4.5v15"/>
+  </symbol>
+  <symbol id="i-close" viewBox="0 0 24 24">
+    <path d="m6.5 6.5 11 11m0-11-11 11"/>
+  </symbol>
+  <symbol id="i-save" viewBox="0 0 24 24">
+    <path d="M5 4.5h10.6L19 7.9v11.6H5z"/>
+    <path d="M8.2 4.5v5.1h6.6V4.5M8.2 19.5v-5.9h7.6v5.9"/>
+  </symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24">
+    <path d="M4.5 6.5h15M9 3.8h6M6.5 6.5l.8 13.2h9.4l.8-13.2"/>
+    <path d="M10 10v6.2M14 10v6.2"/>
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24">
+    <path d="M12 5v14M5 12h14"/>
+  </symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24">
+    <path d="m7 9.5 5 5 5-5"/>
+  </symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8.2"/>
+    <path d="M12 7.3V12l3.2 2"/>
+  </symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24">
+    <rect x="8.5" y="8.5" width="11" height="11" rx="1.2"/>
+    <path d="M15.5 8.5v-3a1 1 0 0 0-1-1h-10a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>
+  </symbol>
+  <symbol id="i-send" viewBox="0 0 24 24">
+    <path d="M12 19.5V5M5.8 11.2 12 5l6.2 6.2"/>
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 24 24">
+    <path d="m5 12.4 4.6 4.6L19 6.6"/>
+  </symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="1.8"/>
+    <path d="m6.8 9.2 3 2.8-3 2.8M12.5 15h4.5"/>
+  </symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24">
+    <circle cx="6" cy="12" r="1.1" fill="currentColor" stroke="none"/>
+    <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/>
+    <circle cx="18" cy="12" r="1.1" fill="currentColor" stroke="none"/>
+  </symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24">
+    <path d="M13.5 3.5 5.8 13.2h5.1l-.4 7.3 7.7-9.7h-5.1z"/>
+  </symbol>
+  <symbol id="i-signal" viewBox="0 0 24 24">
+    <path d="M5 18.5v-4M9.7 18.5v-7.4M14.4 18.5v-10M19 18.5V5.5"/>
+  </symbol>
+  <symbol id="i-command" viewBox="0 0 24 24">
+    <path d="M8.5 8.5h7v7h-7z"/>
+    <path d="M8.5 8.5V6.2a2.2 2.2 0 1 0-2.3 2.3zM15.5 8.5V6.2a2.2 2.2 0 1 1 2.3 2.3zM8.5 15.5v2.3a2.2 2.2 0 1 1-2.3-2.3zM15.5 15.5v2.3a2.2 2.2 0 1 0 2.3-2.3z"/>
+  </symbol>
+</svg>
+
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="bg-aurora" aria-hidden="true"></div>
+<div class="bg-scan" aria-hidden="true"></div>
+<div class="bg-vignette" aria-hidden="true"></div>
+<div class="cursor-glow" id="cursor-glow" aria-hidden="true"></div>
+<canvas class="fx-canvas" id="fx-canvas" aria-hidden="true"></canvas>
+
+<div class="app">
+
+  <!-- ════════════════════════════════════════════════════════════
+       顶栏 · HUD
+       ════════════════════════════════════════════════════════════ -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">
+        <svg class="icon"><use href="#i-grid"/></svg>
+      </span>
+      <span class="brand-copy">
+        <span class="brand-kicker">WORKSPACE GRID&nbsp;&nbsp;/&nbsp;&nbsp;04 NODES</span>
+        <span class="brand-title">多工作区平铺</span>
+      </span>
+    </div>
+
+    <div class="topbar-actions">
+      <div class="seg" role="group" aria-label="面板模式">
+        <button class="hud-btn is-on" type="button">平铺模式</button>
+        <button class="hud-btn" type="button">任务分派</button>
+      </div>
+      <button class="hud-btn hud-add" type="button">
+        <svg class="icon"><use href="#i-plus"/></svg>添加工作区
+      </button>
+      <span class="topbar-rule" aria-hidden="true"></span>
+      <button class="icon-btn" type="button" title="保存布局">
+        <svg class="icon"><use href="#i-save"/></svg>
+      </button>
+      <button class="icon-btn" type="button" title="清除保存记录">
+        <svg class="icon"><use href="#i-trash"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 状态条 -->
+  <div class="sysbar">
+    <span class="sys-live"><i class="pulse"></i>GRID ONLINE</span>
+    <span class="sys-hint">四个工作区并行运行&nbsp;&nbsp;·&nbsp;&nbsp;拖动标题栏交换位置&nbsp;&nbsp;·&nbsp;&nbsp;拖动分隔条调整栅格比例</span>
+    <span class="sys-meta">
+      NODES <b>04</b><em></em>SYNC <b>100%</b><em></em>UPTIME <b>02:14</b>
+      <svg class="icon sys-icon"><use href="#i-signal"/></svg>
+    </span>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════
+       四节点栅格
+       ════════════════════════════════════════════════════════════ -->
+  <main class="board">
+
+    <!-- ───────────────────────── NODE 01 ───────────────────────── -->
+    <section class="node is-active node-a">
+      <span class="node-corner tl" aria-hidden="true"></span>
+      <span class="node-corner tr" aria-hidden="true"></span>
+      <span class="node-port" aria-hidden="true"></span>
+
+      <header class="node-head">
+        <div class="node-top">
+          <span class="node-id"><i></i>NODE 01</span>
+          <span class="node-state running"><i></i>RUNNING</span>
+          <div class="node-actions">
+            <button class="icon-btn" type="button" title="打开目录"><svg class="icon"><use href="#i-folder"/></svg></button>
+            <button class="icon-btn" type="button" title="替换工作区"><svg class="icon"><use href="#i-swap"/></svg></button>
+            <button class="icon-btn" type="button" title="分屏"><svg class="icon"><use href="#i-split"/></svg></button>
+            <button class="icon-btn" type="button" title="关闭窗格"><svg class="icon"><use href="#i-close"/></svg></button>
+          </div>
+        </div>
+
+        <h2 class="node-title">接收主会话任务并高质量执行</h2>
+
+        <div class="node-meta">
+          <span class="node-path">/home/liufei/data/claude-workspace/dsh</span>
+          <button class="node-mode" type="button">标准模式<svg class="icon"><use href="#i-chevron"/></svg></button>
+        </div>
+
+        <nav class="node-tabs">
+          <span class="tab is-on">对话</span>
+          <span class="tab">Git</span>
+          <span class="tab">子代理</span>
+          <span class="tab-tools">
+            <button class="icon-btn" type="button" title="历史记录"><svg class="icon"><use href="#i-clock"/></svg></button>
+          </span>
+        </nav>
+      </header>
+
+      <div class="node-body">
+        <div class="timeline">
+          <span class="tl-date">11.13</span>
+          <span class="tl-time">01:02</span>
+          <i></i>
+          <span>SESSION 01</span>
+          <b>04 REPLAYS</b>
+        </div>
+
+        <p class="lede">已完成 4 组战斗数据回放，1 组待处理。以下为校验记录。</p>
+
+        <div class="terminal">
+          <div class="terminal-head">
+            <span class="term-dots"><i></i><i></i><i></i></span>
+            <span class="term-tag">bash — battle / verify</span>
+            <button class="icon-btn" type="button" title="复制"><svg class="icon"><use href="#i-copy"/></svg></button>
+          </div>
+<pre><code>python3 tools/verify_battle_data.py --battles 1,2,3,4
+godoT --headless --path game --scene Scenes/Battle.tscn \
+  -- battle-data-test
+godoT --headless --path game --scene Scenes/Battle.tscn \
+  -- battle-savecraft --battle=2
+python3 tools/capture_battle_trace.py --save /tmp/p4_slot0.srm \
+  --out /tmp/p2a_b2_oracle.csv --frames 40000 --combat 38
+python3 tools/compare_battle_vint.py \
+  --oracle /tmp/p2a_b2_oracle.csv \
+  --replica-log /tmp/p2a_b2_replica.log --combat 38
+godoT --headless --path game --scene Scenes/Battle.tscn \
+  -- battle-replay --from-slot=1 --battle-seed=1039</code></pre>
+        </div>
+
+        <div class="note">
+          <span class="note-tag">REVIEW</span>
+          <p>建议主会话重点复核：① <code>battle_ai.json</code> 与 <code>verify_battle_data.py</code> 的数据口径；② 64 条回合顺序修复（影响所有 &gt;16 单位战斗）；③ 战斗 2 首轮 seed 一致性 + 战斗 3 残差是否接受为后续单。</p>
+        </div>
+
+        <div class="data-strip">
+          <div class="data-cell"><span>BATTLE 01</span><b class="ok">EXACT</b></div>
+          <div class="data-cell"><span>BATTLE 02</span><b class="ok">SEED 1039</b></div>
+          <div class="data-cell"><span>BATTLE 03</span><b class="warn">56 PX</b></div>
+          <div class="data-cell"><span>BATTLE 04</span><b class="ok">EXACT</b></div>
+        </div>
+
+        <div class="telemetry">
+          <div class="telemetry-head"><span>LIVE TELEMETRY</span><em>STREAM 01</em></div>
+          <div class="telemetry-grid">
+            <div><span>THROUGHPUT</span><b>198 t/s</b><i class="bar"><u style="width:82%"></u></i></div>
+            <div><span>CONTEXT</span><b>48%</b><i class="bar"><u style="width:48%"></u></i></div>
+            <div><span>LATENCY</span><b>12 ms</b><i class="bar"><u style="width:22%"></u></i></div>
+          </div>
+        </div>
+
+        <div class="runlog">
+          <div class="runlog-head"><span>REPLAY LOG</span><em>4 ENTRIES</em></div>
+          <div class="runlog-row"><span>01:02</span><b>战斗 1</b><em>40,000 帧 · exact</em></div>
+          <div class="runlog-row"><span>01:07</span><b>战斗 2</b><em>seed 1039 · exact</em></div>
+          <div class="runlog-row"><span>01:11</span><b>战斗 3</b><em>右缘 56px · residual</em></div>
+          <div class="runlog-row"><span>01:14</span><b>战斗 4</b><em>40,000 帧 · exact</em></div>
+        </div>
+
+        <div class="msg-time">01:15<span class="ticks">✓✓</span></div>
+
+        <div class="task">
+          <div class="task-head">
+            <span class="task-summary">任务 <b>1</b> 已完成 · <b>1</b> 进行中 · <b>4</b> 待处理</span>
+            <span class="task-caret">▾</span>
+          </div>
+          <div class="task-row">
+            <span class="tag warn">待审核</span>
+            <span class="task-title">[任务分派] 这条任务由会话…</span>
+            <svg class="icon task-check"><use href="#i-check"/></svg>
+          </div>
+        </div>
+
+        <div class="stream-end"><i></i><span>END OF REPLAY STREAM · 04 NODES</span><i></i></div>
+      </div>
+
+      <div class="composer">
+        <div class="command-line">
+          <span class="prompt">›</span>
+          <span class="placeholder">发消息或创建任务，<em>/</em> 调用指令，<em>@</em> 文件或对话</span>
+        </div>
+        <div class="composer-tools">
+          <button class="tool-btn" type="button" title="附件"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <button class="tool-btn" type="button" title="上下文"><svg class="icon"><use href="#i-command"/></svg></button>
+          <button class="tool-btn" type="button" title="终端"><svg class="icon"><use href="#i-terminal"/></svg></button>
+          <span class="composer-spacer"></span>
+          <span class="model-name">和仁平台 · deepseek-flash</span>
+          <button class="send-btn" type="button" title="发送"><svg class="icon"><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+
+      <footer class="node-foot">
+        <span class="foot-stat"><b>198</b> tok/s</span>
+        <span class="foot-stat">CACHE <b>99%</b></span>
+        <span class="foot-stat"><b>48%</b> ctx</span>
+        <span class="signal"><i></i><i></i><i></i><i></i></span>
+      </footer>
+    </section>
+
+    <div class="splitter" aria-hidden="true"><i></i></div>
+
+    <!-- ───────────────────────── NODE 02 ───────────────────────── -->
+    <section class="node node-b">
+      <span class="node-corner tl" aria-hidden="true"></span>
+      <span class="node-corner tr" aria-hidden="true"></span>
+      <span class="node-port" aria-hidden="true"></span>
+
+      <header class="node-head">
+        <div class="node-top">
+          <span class="node-id"><i></i>NODE 02</span>
+          <span class="node-state paused"><i></i>PAUSED</span>
+          <div class="node-actions">
+            <button class="icon-btn" type="button" title="打开目录"><svg class="icon"><use href="#i-folder"/></svg></button>
+            <button class="icon-btn" type="button" title="替换工作区"><svg class="icon"><use href="#i-swap"/></svg></button>
+            <button class="icon-btn" type="button" title="分屏"><svg class="icon"><use href="#i-split"/></svg></button>
+            <button class="icon-btn" type="button" title="关闭窗格"><svg class="icon"><use href="#i-close"/></svg></button>
+          </div>
+        </div>
+
+        <h2 class="node-title">修复 Intro 音效与首帧地图</h2>
+
+        <div class="node-meta">
+          <span class="node-path">/home/liufei/data/claude-workspace/dsh</span>
+          <button class="node-mode" type="button">标准模式<svg class="icon"><use href="#i-chevron"/></svg></button>
+        </div>
+
+        <nav class="node-tabs">
+          <span class="tab is-on">对话</span>
+          <span class="tab">Git</span>
+          <span class="tab">子代理</span>
+          <span class="tab-tools">
+            <button class="icon-btn" type="button" title="历史记录"><svg class="icon"><use href="#i-clock"/></svg></button>
+          </span>
+        </nav>
+      </header>
+
+      <div class="node-body">
+        <div class="alert">
+          <span class="alert-code">ERR / 403</span>
+          <div class="alert-copy">
+            <b>PROCESS FAILED</b>
+            <span>server_error: PI_AI_ERROR<br>Access denied</span>
+          </div>
+          <span class="alert-pulse"></span>
+        </div>
+
+        <div class="progress">
+          <div class="progress-head"><span>SESSION PROGRESS</span><em>PAUSED AT 09:07</em></div>
+          <div class="progress-row"><span class="p-state ok">✓</span><b>音效总线</b><em>3 / 4 通道已对齐</em><i class="bar"><u style="width:75%"></u></i></div>
+          <div class="progress-row"><span class="p-state bad">!</span><b>首帧地图</b><em>视差层缺基准</em><i class="bar"><u style="width:38%"></u></i></div>
+          <div class="progress-row"><span class="p-state warn">×</span><b>权限校验</b><em>等待上游放行</em><i class="bar"><u style="width:12%"></u></i></div>
+        </div>
+
+        <div class="data-strip is-three">
+          <div class="data-cell"><span>AUDIO CHANNELS</span><b class="ok">3 / 4</b></div>
+          <div class="data-cell"><span>UPSTREAM</span><b class="bad">DENIED</b></div>
+          <div class="data-cell"><span>FILES WRITTEN</span><b class="ok">0</b></div>
+        </div>
+
+        <div class="msg-user">
+          <p>你好</p>
+          <span class="msg-time-inline">09:00</span>
+        </div>
+
+        <div class="msg-ai">
+          <span class="msg-mark">AI</span>
+          <p>所有分派的任务都完成了，你先看看再继续你的工作。</p>
+        </div>
+
+        <div class="alert is-soft">
+          <span class="alert-code">HOLD</span>
+          <div class="alert-copy">
+            <b>UPSTREAM GUARD</b>
+            <span>本轮被权限边界拦下，未写入任何文件。</span>
+          </div>
+        </div>
+
+        <div class="note">
+          <span class="note-tag">NOTE</span>
+          <p>音效资源已按通道拆分到 <code>assets/audio/intro/</code>，首帧地图的基准图在 <code>docs/artifacts/intro-frame/</code>。首帧地图仍缺一层视差基准，等权限放行后继续。</p>
+        </div>
+
+        <div class="runlog">
+          <div class="runlog-head"><span>OPERATION LOG</span><em>3 ENTRIES</em></div>
+          <div class="runlog-row"><span>09:02</span><b>读取</b><em>assets/audio/intro/*.ogg</em></div>
+          <div class="runlog-row"><span>09:04</span><b>比对</b><em>docs/artifacts/intro-frame</em></div>
+          <div class="runlog-row"><span>09:07</span><b>暂停</b><em>未写入任何文件</em></div>
+        </div>
+
+        <div class="telemetry">
+          <div class="telemetry-head"><span>SESSION TELEMETRY</span><em>IDLE 00:00</em></div>
+          <div class="telemetry-grid">
+            <div><span>THROUGHPUT</span><b>72 t/s</b><i class="bar"><u style="width:34%"></u></i></div>
+            <div><span>CONTEXT</span><b>0%</b><i class="bar"><u style="width:2%"></u></i></div>
+            <div><span>RETRIES</span><b>01</b><i class="bar"><u style="width:12%"></u></i></div>
+          </div>
+        </div>
+
+        <div class="task">
+          <div class="task-head">
+            <span class="task-summary">目标 <b>1</b> 已暂停 · <b>2</b> 待处理</span>
+            <span class="task-caret">▾</span>
+          </div>
+          <div class="task-row">
+            <span class="tag muted">已暂停</span>
+            <span class="task-title">[任务分派] 这条任务由会话…</span>
+            <svg class="icon task-check"><use href="#i-check"/></svg>
+          </div>
+        </div>
+
+        <div class="stream-end"><i></i><span>STREAM HELD · AWAITING ACCESS</span><i></i></div>
+      </div>
+
+      <div class="composer">
+        <div class="command-line">
+          <span class="prompt">›</span>
+          <span class="placeholder">发消息或创建任务，<em>/</em> 调用指令，<em>@</em> 文件或对话</span>
+        </div>
+        <div class="composer-tools">
+          <button class="tool-btn" type="button" title="附件"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <button class="tool-btn" type="button" title="上下文"><svg class="icon"><use href="#i-command"/></svg></button>
+          <button class="tool-btn" type="button" title="终端"><svg class="icon"><use href="#i-terminal"/></svg></button>
+          <span class="composer-spacer"></span>
+          <span class="model-name">和仁平台 · deepseek-flash</span>
+          <button class="send-btn" type="button" title="发送"><svg class="icon"><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+
+      <footer class="node-foot">
+        <span class="foot-stat"><b>72</b> tok/s</span>
+        <span class="foot-stat">CACHE <b>97%</b></span>
+        <span class="foot-stat"><b>0%</b> ctx</span>
+        <span class="signal"><i></i><i></i><i></i><i></i></span>
+      </footer>
+    </section>
+
+    <div class="splitter" aria-hidden="true"><i></i></div>
+
+    <!-- ───────────────────────── NODE 03 ───────────────────────── -->
+    <section class="node node-c">
+      <span class="node-corner tl" aria-hidden="true"></span>
+      <span class="node-corner tr" aria-hidden="true"></span>
+      <span class="node-port" aria-hidden="true"></span>
+
+      <header class="node-head">
+        <div class="node-top">
+          <span class="node-id"><i></i>NODE 03</span>
+          <span class="node-state review"><i></i>REVIEW</span>
+          <div class="node-actions">
+            <button class="icon-btn" type="button" title="打开目录"><svg class="icon"><use href="#i-folder"/></svg></button>
+            <button class="icon-btn" type="button" title="替换工作区"><svg class="icon"><use href="#i-swap"/></svg></button>
+            <button class="icon-btn" type="button" title="分屏"><svg class="icon"><use href="#i-split"/></svg></button>
+            <button class="icon-btn" type="button" title="关闭窗格"><svg class="icon"><use href="#i-close"/></svg></button>
+          </div>
+        </div>
+
+        <h2 class="node-title">接收主会话任务并汇报结果</h2>
+
+        <div class="node-meta">
+          <span class="node-path">/home/liufei/data/claude-workspace/dsh</span>
+          <button class="node-mode" type="button">标准模式<svg class="icon"><use href="#i-chevron"/></svg></button>
+        </div>
+
+        <nav class="node-tabs">
+          <span class="tab is-on">对话</span>
+          <span class="tab">Git</span>
+          <span class="tab">子代理</span>
+          <span class="tab-tools">
+            <button class="icon-btn" type="button" title="历史记录"><svg class="icon"><use href="#i-clock"/></svg></button>
+          </span>
+        </nav>
+      </header>
+
+      <div class="node-body">
+        <div class="section">
+          <span class="section-eyebrow">KNOWN RESIDUALS</span>
+          <h3 class="section-title">已知残差<em>如实记录，未硬凑</em></h3>
+        </div>
+
+        <ul class="bullet-list">
+          <li>右缘 <b>56px</b>（画布 232,288）内容完全对不上（逐列 exact 0）：原该处为灰墙、复刻为砖墙 / 树；疑似 H32 右缘消除 / 窗口宽度或第二层 / 视差层差异；定位计划见 docs02 §8.18；</li>
+          <li>精灵像素帧选择（NPC 红帽 bbox 两端完全相同，位置已对齐，剩帧图案差）；</li>
+          <li>亮度 <b>+7.8%</b>（已排除白场遮罩，影响较小）。</li>
+        </ul>
+
+        <div class="section">
+          <span class="section-eyebrow">NEXT ACTIONS</span>
+          <h3 class="section-title">建议你复核 / 下一步</h3>
+        </div>
+
+        <ol class="num-list">
+          <li><span>docs02 §8.14 的槽位陷阱：<code>run_tests</code> 会覆盖 <code>user://sf2_slot0.srm</code>，dump 前必须先 <code>map-savecraft</code> 并确认 <code>[debug-load]</code> … 地图 3；</span></li>
+          <li><span>下一步优先级：右缘 56px 根因（相机 ±8±16 扫描 / H32 右消除 / 视差层），然后推进 map19（城堡）与 map66（大地图）的逐图对拍；</span></li>
+          <li><span>期间其他会话并发改过 <code>run_tests.sh</code>、<code>BattleScene.cs</code> 等，我未提交它们。</span></li>
+        </ol>
+
+        <div class="data-strip is-three">
+          <div class="data-cell"><span>COLUMN DIFF</span><b class="bad">0 exact</b></div>
+          <div class="data-cell"><span>RIGHT EDGE</span><b class="warn">56 px</b></div>
+          <div class="data-cell"><span>BRIGHTNESS</span><b class="warn">+7.8%</b></div>
+        </div>
+
+        <div class="terminal">
+          <div class="terminal-head">
+            <span class="term-dots"><i></i><i></i><i></i></span>
+            <span class="term-tag">bash — audit</span>
+            <button class="icon-btn" type="button" title="复制"><svg class="icon"><use href="#i-copy"/></svg></button>
+          </div>
+<pre><code>sed -n '/## 4.39/,/## 5/p' \
+  docs/22-原版/像素基准与差异清单.md
+git show --stat 008072e   # 仅 docs22 一个文件</code></pre>
+        </div>
+
+        <div class="note">
+          <span class="note-tag">AUDIT</span>
+          <p>边框已 exact，差异集中在文字字形边缘；<code>run_tests.sh</code>、<code>BattleScene.cs</code> 的并发改动未提交，留待主会话确认。</p>
+        </div>
+
+        <div class="msg-time">02:04</div>
+
+        <div class="task">
+          <div class="task-head">
+            <span class="task-summary">任务 <b>2</b> 已完成 · <b>1</b> 待审核</span>
+            <span class="task-caret">▾</span>
+          </div>
+          <div class="task-row">
+            <span class="tag warn">待审核</span>
+            <span class="task-title">[任务分派] 这条任务由会话…</span>
+            <svg class="icon task-check"><use href="#i-check"/></svg>
+          </div>
+        </div>
+
+        <div class="stream-end"><i></i><span>END OF AUDIT STREAM</span><i></i></div>
+      </div>
+
+      <div class="composer">
+        <div class="command-line">
+          <span class="prompt">›</span>
+          <span class="placeholder">发消息或创建任务，<em>/</em> 调用指令，<em>@</em> 文件或对话</span>
+        </div>
+        <div class="composer-tools">
+          <button class="tool-btn" type="button" title="附件"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <button class="tool-btn" type="button" title="上下文"><svg class="icon"><use href="#i-command"/></svg></button>
+          <button class="tool-btn" type="button" title="终端"><svg class="icon"><use href="#i-terminal"/></svg></button>
+          <span class="composer-spacer"></span>
+          <span class="model-name">和仁平台 · deepseek-flash</span>
+          <button class="send-btn" type="button" title="发送"><svg class="icon"><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+
+      <footer class="node-foot">
+        <span class="foot-stat"><b>203</b> tok/s</span>
+        <span class="foot-stat">CACHE <b>99%</b></span>
+        <span class="foot-stat"><b>37%</b> ctx</span>
+        <span class="signal"><i></i><i></i><i></i><i></i></span>
+      </footer>
+    </section>
+
+    <div class="splitter" aria-hidden="true"><i></i></div>
+
+    <!-- ───────────────────────── NODE 04 ───────────────────────── -->
+    <section class="node node-d">
+      <span class="node-corner tl" aria-hidden="true"></span>
+      <span class="node-corner tr" aria-hidden="true"></span>
+      <span class="node-port" aria-hidden="true"></span>
+
+      <header class="node-head">
+        <div class="node-top">
+          <span class="node-id"><i></i>NODE 04</span>
+          <span class="node-state blocked"><i></i>BLOCKED</span>
+          <div class="node-actions">
+            <button class="icon-btn" type="button" title="打开目录"><svg class="icon"><use href="#i-folder"/></svg></button>
+            <button class="icon-btn" type="button" title="替换工作区"><svg class="icon"><use href="#i-swap"/></svg></button>
+            <button class="icon-btn" type="button" title="分屏"><svg class="icon"><use href="#i-split"/></svg></button>
+            <button class="icon-btn" type="button" title="关闭窗格"><svg class="icon"><use href="#i-close"/></svg></button>
+          </div>
+        </div>
+
+        <h2 class="node-title">new_shini<span class="dim">…</span></h2>
+
+        <div class="node-meta">
+          <span class="node-path">/home/liufei/</span>
+          <button class="node-mode" type="button">标准模式<svg class="icon"><use href="#i-chevron"/></svg></button>
+        </div>
+
+        <nav class="node-tabs">
+          <span class="tab is-on">对话</span>
+          <span class="tab">Git</span>
+          <span class="tab">子代理</span>
+          <span class="tab-tools">
+            <button class="icon-btn" type="button" title="历史记录"><svg class="icon"><use href="#i-clock"/></svg></button>
+          </span>
+        </nav>
+      </header>
+
+      <div class="node-body">
+        <div class="entry">
+          <span class="entry-no">01</span>
+          <div class="entry-body">
+            <p>在新会话接手 R3，按 docs22 §4.39 的四步执行：</p>
+            <ul class="bullet-list is-tight">
+              <li>采无打字进行中的对话帧（intro1 F=832 / intro4 F=17999）+ 同帧 dump；</li>
+              <li>窗区（H32 画布 x=48..280, y=152..216）分三层统计：边框环带 / 蓝底 / 文字墨迹 bbox 与逐字偏移；</li>
+              <li>若只差常量 1px → 改 DialogueBox 文字原点 / 行距并复验；若差异在字形边缘 → 按「不可约字形量化差」记录证据，不硬凑；</li>
+              <li>回归非对话帧与 run_tests 相关项。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="entry">
+          <span class="entry-no">02</span>
+          <div class="entry-body">
+            <p>若你认可「边框已 exact、残差属文字」，也可以把 R3 拆成「字体渲染批次」再评估，不必继续按素材方向投入。</p>
+          </div>
+        </div>
+
+        <div class="alert is-hard">
+          <span class="alert-code">BLOCK</span>
+          <div class="alert-copy">
+            <b>WAITING ON UPSTREAM</b>
+            <span>R3 的边框已 exact，剩余差异集中在文字字形边缘；等待主会话确认口径后再动 DialogueBox。</span>
+          </div>
+        </div>
+
+        <div class="terminal">
+          <div class="terminal-head">
+            <span class="term-dots"><i></i><i></i><i></i></span>
+            <span class="term-tag">bash — audit</span>
+            <button class="icon-btn" type="button" title="复制"><svg class="icon"><use href="#i-copy"/></svg></button>
+          </div>
+<pre><code>sed -n '/## 4.39/,/## 5/p' \
+  docs/22-原版/像素基准与差异清单.md
+git show --stat 008072e   # 仅 docs22 一个文件</code></pre>
+        </div>
+
+        <div class="data-strip is-three">
+          <div class="data-cell"><span>FRAME</span><b>17999</b></div>
+          <div class="data-cell"><span>MASK IoU</span><b class="ok">0.982</b></div>
+          <div class="data-cell"><span>WRITES</span><b class="ok">0</b></div>
+        </div>
+
+        <div class="runlog">
+          <div class="runlog-head"><span>HANDOVER LOG</span><em>3 ENTRIES</em></div>
+          <div class="runlog-row"><span>09:12</span><b>读取</b><em>docs22 §4.39 · 已确认</em></div>
+          <div class="runlog-row"><span>09:15</span><b>比对</b><em>intro1 F=832 · 待复核</em></div>
+          <div class="runlog-row"><span>09:18</span><b>记录</b><em>字形掩码 IoU 0.982</em></div>
+        </div>
+
+        <div class="note">
+          <span class="note-tag">HANDOVER</span>
+          <p>边框已 exact，剩余差异集中在文字字形边缘；等主会话确认口径后再动 DialogueBox，本窗格暂不写入。</p>
+        </div>
+
+        <div class="task">
+          <div class="task-head">
+            <span class="task-summary">目标 <b>1</b> 受阻 · <b>0</b> 进行中</span>
+            <span class="task-caret">▾</span>
+          </div>
+          <div class="task-row">
+            <span class="tag danger">受阻</span>
+            <span class="task-title">[任务分派] 这条任务由会话…</span>
+            <svg class="icon task-check"><use href="#i-check"/></svg>
+          </div>
+        </div>
+
+        <div class="stream-end"><i></i><span>STREAM BLOCKED · HANDOVER READY</span><i></i></div>
+      </div>
+
+      <div class="composer">
+        <div class="command-line">
+          <span class="prompt">›</span>
+          <span class="placeholder">发消息或创建任务，<em>/</em> 调用指令，<em>@</em> 文件或对话</span>
+        </div>
+        <div class="composer-tools">
+          <button class="tool-btn" type="button" title="附件"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <button class="tool-btn" type="button" title="上下文"><svg class="icon"><use href="#i-command"/></svg></button>
+          <button class="tool-btn" type="button" title="终端"><svg class="icon"><use href="#i-terminal"/></svg></button>
+          <span class="composer-spacer"></span>
+          <span class="model-name">和仁平台 · deepseek-flash</span>
+          <button class="send-btn" type="button" title="发送"><svg class="icon"><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+
+      <footer class="node-foot">
+        <span class="foot-stat"><b>81</b> tok/s</span>
+        <span class="foot-stat">CACHE <b>99%</b></span>
+        <span class="foot-stat"><b>44%</b> ctx</span>
+        <span class="signal"><i></i><i></i><i></i><i></i></span>
+      </footer>
+    </section>
+
+  </main>
+</div>
+
+<script src="motion.js" defer></script>
+</body>
+</html>

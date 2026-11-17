@@ -239,8 +239,15 @@ window.__ModuleLoader__.load({
         return reference;
       }
 
-      /** 一个窗格：标题栏 + 共享的 Conversation Factory。 */
-      function PaneFrame({ pane, grow, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
+      /**
+       * 一个窗格：标题栏 + 共享的 Conversation Factory。
+       *
+       * `tint` 是这个窗格内容区的背景色（`{ id, value }`，由棋盘层按会话分配）。
+       * 它只写成窗格根节点上的 CSS 变量，**不直接画在任何东西上**：标题栏保持原样，
+       * 只有 `.dshSplitWs_paneBody` 用它和深色底混出内容区底色。这样「换背景色」
+       * 和「换标题栏样式」是两件互不牵连的事，将来改任何一边都不会互相打脸。
+       */
+      function PaneFrame({ pane, grow, tint, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
@@ -1034,11 +1041,20 @@ window.__ModuleLoader__.load({
            */
           'data-dragging': dragging === true ? 'true' : 'false',
           'data-drop': dropTarget === true ? 'true' : 'false',
+          /* 配色 id 只用于调试与离线断言；真正染色的是下面那个 CSS 变量。 */
+          'data-tint': tint === undefined ? undefined : tint.id,
           /*
            * 分屏里占的比例。整块棋盘上只有一个窗格时没有分屏，这个值不传，
            * 窗格靠自己的 `flex:1 1 0` 撑满。
+           *
+           * 配色变量与比例写在同一个 style 对象里。变量挂在这一层而不是 `.paneBody`
+           * 元素上：内容区里的会话视图是共享组件，让变量在窗格根节点上继承进去，
+           * 比要求共享组件配合传参干净得多。
            */
-          style: grow === undefined ? undefined : { flexGrow: grow },
+          style: grow === undefined && tint === undefined ? undefined : {
+            ...(grow === undefined ? {} : { flexGrow: grow }),
+            ...(tint === undefined ? {} : { '--dshSplitWs-pane-tint': tint.value }),
+          },
           /*
            * 三个焦点相关的处理，分工是明确的：
            *   - `pointerdown`：按下就点亮（高亮要跟手，不能等到松开）；

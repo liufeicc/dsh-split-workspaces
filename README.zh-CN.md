@@ -429,6 +429,29 @@ A 的模型多了一个 `dispatch_task` 工具：
 
 ## 行为细节
 
+### 派单光效
+
+`dispatch_task` 真正开始投递时，平铺面板会播放一段青金色光效：
+
+- 主窗格边框先亮一下；
+- 一颗小而亮的流星（7px 白心 + 120px 金色柔光 + 96px 双层尾迹）从源窗格中心
+  **直线**飞向目标窗格内的随机落点（四周留 20% 边距）；**不画轨迹线**；
+- 多个目标**串行发射**：上一颗到达后，下一颗才出现；单程约 2.4 秒；
+- 源/目标窗格边框高亮更强（3px 描边 + 56px 外发光）；高亮框是独立的覆盖层，
+  不依赖窗格自身的边框/阴影，所以不会被选中态或裁剪吃掉；
+- 光点到达目标时，目标窗格**同时**发生三件事：边框亮、**整体抖动一下**、
+  **盖一层半透明白光**并在约 1.2 秒内慢慢消失，像被一颗小炮弹击中；
+- 目标窗格没铺开：光点从主窗格飞向棋盘最近的边缘；
+- 主窗格没铺开：光点从棋盘边缘飞入目标窗格；
+- 主/目标都没有对应窗格：不播放；
+- 整个平铺面板没显示（切到别的面板或页面）：完全不播放；
+- 系统开启「减少动态效果」时跳过光点，只保留边框脉冲。
+
+事件由 Host 的 `paneDispatch.pullVisual` 提供：只在内存里保留最近 64 条，不落盘、
+不进模型。客户端每 300ms 取一次增量；首次挂载只记水位，不会重播历史派单。
+它只影响视觉，不改变投递、等待和审核。
+
+
 - 第一次打开棋盘会播种：当前会话所在的工作区排第一，再补一个别的，于是打开就是两个
   窗格并排，而不是一块空白。
 - 窗格如何决定显示哪个会话：
@@ -584,6 +607,41 @@ A 的模型多了一个 `dispatch_task` 工具：
 - 动效只有边框流光、活动标题栏、分隔条菱形呼吸、顶栏左右扫光；没有下滑扫描光栅。
 - 模式/会话这类 portal 菜单仍跟随页面主题，不在这套 token 覆盖的作用域里。
 
+## 每个会话的内容区配色
+
+平铺面板会给每个窗格的内容区换一种深色底，用来一眼分清哪一格是哪段对话：
+
+- **颜色跟会话走**：按会话 id 稳定映射；刷新、恢复布局、拖动交换窗格之后，同一段
+  对话还是同一种颜色。还没选会话的空窗格按工作区 id 分色。
+- **同一屏不重复**：首选色被别的窗格占了，就顺着色板往后找空位；八个窗格以内不会
+  有重复，超过八个才开始复用（这时重复无法避免）。
+- **只染内容区**：标题栏、视图标签、窗格边框保持原来的科幻主题外观，配色只是
+  `.dshSplitWs_paneBody` 上的背景变量。想改回无色，删掉那条规则里的 tint 覆盖即可。
+- **半透明渐变**：不是整块染成实心色，而是「左上角柔光 → 向下淡出」的两层半透明
+  渐变（最高 20% 色相）；会话根保留 44% 的深色遮罩，气泡与输入框接近原来的深色，
+  只带一点色相。这样像一块带色温的玻璃，而不是一块彩色纸。
+- **文字可读**：色相只出现在背景渐变里，并同时提亮三级文字（`#6f8aa0` → `#839db2`）。
+  每种颜色的最亮处上，正文 ≥ 10.6:1、次要文字 ≥ 6.2:1、三级文字 ≥ 4.6:1，都过
+  WCAG AA。逐色断言在 `test/tint-contract.mjs`，改色板或混合比例时它会拦住把文字
+  压暗的改动。
+
+## 字体与消息浮现
+
+- **平铺面板的标题、按钮、菜单**使用自带的**站酷快乐体**；**会话正文保持系统原字体**
+  （主界面和平铺面板的对话都是），侧边栏、设置也不变。字体文件在 `fonts/`
+  （SIL OFL 1.1，许可原文在 `fonts/OFL.txt`），由 Host 半边的
+  `/split-workspaces-fonts` 前缀路由提供。如果系统没有安装站酷快乐体、或字体路由
+  不可用，会依次回退到 `Noto Sans CJK SC` / `Noto Sans SC` / `PingFang SC` /
+  `Microsoft YaHei` / 系统默认字体，不会出现方块字。
+- 中文与全角标点用 710KB 的简体中文子集，拉丁字母 / 数字 / 半角标点用 5KB 的拉丁
+  子集，通过 `unicode-range` 分工。代码块继续使用等宽字体，不受影响。
+- **正文逐行浮现**：主界面和平铺面板的**助手正文**（`assistant-step` 且不是思考
+  过程）按 Markdown 块（段落、列表项、标题、引用、代码块、表格）逐块淡入并上浮
+  6px，每块 2 秒。同一段落内部的自动换行仍作为一块（浏览器排版结果，CSS 无法
+  拆成视觉行）。用户消息、工具调用行、思考过程保持静态出现；流式输出追加 token
+  时已有段落不会重播，新段落才浮现。
+- 系统开启「减少动态效果」时，浮现动画自动关闭。
+
 ## 文件
 
 源码按职责拆成几个文件（都远小于 800 行）。DSH 的浏览器模块系统支持**包内代码块**：
@@ -596,6 +654,8 @@ A 的模型多了一个 `dispatch_task` 工具：
   给窗格的「打开目录」按钮，以及 `requestSessionDelete(sessionId, displayTitle)` ——
   惰性解析 `dsh-session-delete` 的 `sessionDeleteUi` 服务，把「删除这一行」转交给它的确认弹窗，
   并在删成功后用 `paneStore.forgetSession` 松开所有钉着这个会话的窗格。
+- `client.fx.js` —— 派单光效：主/目标窗格闪烁、贝塞尔光点与拖尾、多目标依次发射；
+  窗格没铺开时用棋盘边缘取点，整块面板不在屏幕上时直接不播。
 - `client.view.js` —— 棋盘层：`Splitter`（分隔条）、
   `SplitPanel`（按布局树渲染窗格与分隔条、面板顶部动作、棋盘根节点上的「在屏幕上」标记）、
   `installPaneKeys`（文档级的 `Alt+方向键` 处理，聚焦交给窗格块的 `focusPaneInput`）。
@@ -628,6 +688,7 @@ A 的模型多了一个 `dispatch_task` 工具：
 - `client.skill.js` —— 按工作区共享的 SKILL 开关：形状同上，但开关项来自技能目录扫描，
   每行带描述；目录为空 / 不存在 / 有坏文件各有各的说法。
 - `client.styles.js` —— 样式表与 class 名；颜色只用主题 token（`--dsw-*`）。
+  平铺面板的半透明渐变、所有会话的站酷快乐体与消息浮现动画也在这里（末尾的科幻覆盖段）。
 - `client.dicts.js` —— 中英文案。
 - `index.js` —— **Host 半边的入口**：装配 `paneDispatch` 服务与 `dispatch_task` /
   `report_task` 工具、维护生命周期，并把公共符号原样转出。实现按职责放在同目录的
@@ -670,6 +731,16 @@ A 的模型多了一个 `dispatch_task` 工具：
   **替换工作区**（存储只改那一格、布局树与别的窗格是同一个对象；菜单候选与两条「没得选」
   的措辞；`新建工作区…` 与选择器打不开两条路）的离线契约测试
   （`node test/layout-contract.mjs`）。
+- `fonts/` —— 站酷快乐体的简体中文子集（710KB）与拉丁子集（5KB）；由 Host 的
+  `/split-workspaces-fonts` 前缀路由提供，不进浏览器代码块。
+- `test/font-contract.mjs` —— 字体路由与消息浮现的离线契约测试
+  （`node test/font-contract.mjs`）：路由只服务白名单里的两个字体文件、GET/HEAD/
+  未知文件名/路径穿越/错误方法各自的回答，以及客户端两个 `@font-face` 的 URL、
+  字体作用域、代码块等宽字体和浮现动画选择器。
+- `test/tint-contract.mjs` —— 每个窗格内容区配色的离线契约测试
+  （`node test/tint-contract.mjs`）：颜色跟会话走（刷新、恢复布局、拖动交换后不变）、
+  同一屏内不重复、八个色相的正文/次要/三级文字都过 WCAG AA、只染内容区不碰标题栏，
+  以及渲染出的窗格根节点真的带上 `--dshSplitWs-pane-tint`。
 - `test/views-contract.mjs` —— 窗格会话视图标签栏的离线契约测试
   （`node test/views-contract.mjs`）：零视图 / 只有 Chat 时对原行为零影响、
   标签栏出现与切换、空白会话隐藏、视图消失后的回退、轨迹固定不出现在窗格。
@@ -720,6 +791,9 @@ A 的模型多了一个 `dispatch_task` 工具：
   （`node test/report-contract.mjs`）：最多 8 个目标、8 个目标真的并行、单目标失败/超时
   不影响其他目标、请求里带 ask 与 goal objective、只读（不碰 pending/reviews/goal）、
   历史截断标记、没有 LLM 服务时逐目标报错，以及实现文件不引用外部旁注插件。
+- `test/fx-contract.mjs` —— 派单光效的离线契约测试（`node test/fx-contract.mjs`）：
+  Host 视觉事件队列的增量、水位、容量与「只在新派单时记录」，以及贝塞尔路径、
+  窗格边缘取点、棋盘边缘取点和客户端轮询接线。
 - `test/graph-contract.mjs` —— 委派图的离线契约测试（`node test/graph-contract.mjs`）：
   纯模型的三层（四条校验 / 分层布局 / 图 → 绑定）、`paneDispatch` 命名空间的挂载与
   codec 形状、绑定同步的差量（没变就不发、删光要发空集合、失败要如实报告），以及
@@ -782,6 +856,8 @@ touch client.js
 ```bash
 node test/layout-contract.mjs
 node test/views-contract.mjs
+node test/tint-contract.mjs
+node test/font-contract.mjs
 node test/save-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs
@@ -791,6 +867,7 @@ node test/mcp-contract.mjs
 node test/delete-contract.mjs
 node test/menu-contract.mjs
 node test/skill-contract.mjs
+node test/fx-contract.mjs
 node test/graph-contract.mjs
 node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs

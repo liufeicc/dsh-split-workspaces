@@ -413,6 +413,35 @@ and is authoritative; a blocking wait is only "what this one call happened to se
 
 ## Behaviour details
 
+### Dispatch FX
+
+When `dispatch_task` actually starts delivering, the tile board plays a teal-and-gold
+effect:
+
+- the source pane's border pulses;
+- a small, bright meteor (7 px white core, 120 px gold glow, 96 px two-layer tail) flies
+  **in a straight line** from the source pane center to a **random point inside** each
+  target pane (20 % inset); no trail line is drawn;
+- multiple targets launch **serially**: the next one starts only after the previous one
+  lands; about 2.4 s per flight;
+- the source and target pane borders flash strongly for 1.2 s (3 px stroke + 56 px glow).
+  The flash is a separate overlay box, so the pane's own styling cannot hide it;
+- on impact the target pane does three things **at the same time**: its border flashes,
+  the whole pane shakes, and it is covered by a **translucent white flash** that fades out
+  over about 1.2 s, like a small shell hitting the pane;
+- if the target pane is not tiled, the point flies to the nearest board edge;
+- if the source pane is not tiled, the point enters from the board edge;
+- if neither endpoint is tiled, nothing plays;
+- if the whole tile board is not on screen, nothing plays;
+- under `prefers-reduced-motion: reduce` the point is skipped and only the border pulses
+  remain.
+
+The Host exposes `paneDispatch.pullVisual`: the queue lives in memory only (last 64
+events), is never persisted and never reaches the model. The client polls it every 300 ms;
+the first poll only records the watermark, so historical dispatches are not replayed. It is
+visual only — delivery, waiting and reviews are unchanged.
+
+
 - Opening the board for the first time seeds it: the workspace containing the current session
   comes first, and another one is added, so it opens as two panes side by side rather than an
   empty area.
@@ -626,6 +655,43 @@ and is authoritative; a blocking wait is only "what this one call happened to se
    — the cost is not small and the gain is only a few dozen milliseconds, so it is left
    undone for now.
 
+## Per-pane content tint
+
+Each pane's conversation area gets a translucent, tinted gradient so the panes are easy to
+tell apart at a glance:
+
+- **The colour follows the session**: it is derived from the session id, so a refresh, a
+  restored layout, or dragging panes around never changes which colour belongs to which
+  conversation. Empty panes use the workspace id.
+- **No repeats on one screen**: if a pane's preferred colour is taken, it walks the palette
+  to the next free slot; with more than eight panes colours are reused.
+- **Content area only**: the title bar, view tabs and borders keep the regular sci-fi look.
+  The gradient is painted on `.dshSplitWs_paneBody`; the conversation root keeps a 44% dark
+  veil so the colour reads as tinted glass rather than a flat block.
+- **Text stays legible**: the tint only appears in background gradients, and tertiary text is
+  lifted from `#6f8aa0` to `#839db2`. At each colour's brightest point the contrast is at
+  least 10.6:1 for body text, 6.2:1 for secondary text and 4.6:1 for tertiary text (WCAG AA).
+  `test/tint-contract.mjs` checks every colour.
+
+## Font and message reveal
+
+- The tile panel's **header, buttons and menus** use **ZCOOL KuaiLe**; **conversation
+  bodies keep the system font** (both the main view and the tile panel), as do the sidebar
+  and settings. The files live in `fonts/` (SIL OFL 1.1, license text in `fonts/OFL.txt`)
+  and are served by the Host half at `/split-workspaces-fonts`. If the font is unavailable
+  — no system install and no font route — it falls back through `Noto Sans CJK SC` /
+  `Noto Sans SC` / `PingFang SC` / `Microsoft YaHei` / the system default.
+- Chinese and full-width punctuation use a 710 KB simplified-Chinese subset; Latin letters,
+  digits and half-width punctuation use a 5 KB Latin subset, split by `unicode-range`.
+  Code blocks keep the monospace font.
+- **Line-by-line body reveal**: in every conversation (main view and tile panel), only the
+  assistant body (`assistant-step`, excluding the reasoning process) is animated. Each
+  Markdown block — paragraph, list item, heading, quote, code block, table — fades in and
+  rises 6 px over 2 s. Soft wraps inside one paragraph remain one block (a CSS animation
+  cannot split browser-laid-out lines). User messages, tool-call rows and reasoning steps
+  stay static; streaming reuses existing blocks, so only new blocks reveal.
+- The animation is disabled under `prefers-reduced-motion: reduce`.
+
 ## Files
 
 The source is split into several files by responsibility (all far under 800 lines). DSH's
@@ -643,6 +709,9 @@ the whole implementation.
   `sessionDeleteUi` service, hands "delete this row" to that plugin's confirmation dialog,
   and on success releases every pane pinned to that session with
   `paneStore.forgetSession`.
+- `client.fx.js` — dispatch FX: source/target pane pulses, a bezier light point with a
+  trail, staggered multi-target launches; falls back to the board edge when a pane is not
+  tiled, and refuses to play when the whole board is off screen.
 - `client.view.js` — board layer: `Splitter` (the splitter bar),
   `SplitPanel` (renders panes and splitters from the layout tree, the panel's
   top actions, and the "on screen" marker on the board root node), `installPaneKeys` (the
@@ -685,16 +754,12 @@ the whole implementation.
   share a snapshot (optimistic update with rollback; the remote namespace belongs to another
   package, so it can only be resolved lazily).
 - `client.styles.js` — the stylesheet and class names; colours only use theme tokens
-  (`--dsw-*`).
+  (`--dsw-*`). The tile panel's translucent gradient, the ZCOOL KuaiLe font for every
+  conversation and the message-reveal animation also live here (appended sci-fi section).
 - `client.dicts.js` — Chinese and English strings.
-- `index.js` — the empty Host half: it only makes the Loader publish this row's `dsh.client`
-  declaration to the browser roster. The "Open directory" button on a pane **does not need
-  Host support** — it calls the already-installed Session remote namespace
-  (`canOpenWorkspacePath` / `openWorkspacePath`), and adding a row of Host code to this
-  plugin would only duplicate that implementation while also making the user restart once for
-  it to take effect.
 - `index.js` — the **Host entry**: mounts the `paneDispatch` service and the `dispatch_task` /
-  `report_task` tools, owns their lifecycle, and re-exports the public symbols. The implementation
+  `report_task` tools, owns their lifecycle, serves the bundled fonts at
+  `/split-workspaces-fonts`, and re-exports the public symbols. The implementation
   lives in sibling `host.*.js` modules:
   - `host.constants.js` — service key, remote method list, timeouts and size limits;
   - `host.store.js` — binding-table persistence (the only constructor of the target shape);
@@ -760,6 +825,17 @@ the whole implementation.
   only that pane, the layout tree and the other panes are the same objects; the menu
   candidates and the two "nothing to pick" sentences; both the `New workspace…` path and a
   picker that will not open) (`node test/layout-contract.mjs`).
+- `fonts/` — the ZCOOL KuaiLe simplified-Chinese subset (710 KB) and Latin subset (5 KB),
+  served by the Host's `/split-workspaces-fonts` prefix route (not a browser code block).
+- `test/font-contract.mjs` — the font route and message-reveal contract
+  (`node test/font-contract.mjs`): the route serves only the two whitelisted files, and its
+  GET / HEAD / unknown-name / path-traversal / wrong-method answers; plus the client's two
+  `@font-face` URLs, font scope, monospace code blocks and the reveal-animation selector.
+- `test/tint-contract.mjs` — the per-pane content tint contract
+  (`node test/tint-contract.mjs`): colours follow sessions across reorders and restores, no
+  two panes repeat on one screen, every palette colour passes WCAG AA for body / secondary /
+  tertiary text, only the content area is tinted, and the rendered pane root actually carries
+  `--dshSplitWs-pane-tint`.
 - `test/views-contract.mjs` — offline contract tests for the per-pane view strip
   (`node test/views-contract.mjs`): zero views / Chat-only leaves the old behaviour untouched,
   the strip appears and switches, blank sessions hide it, a vanished view falls back to Chat,
@@ -787,6 +863,9 @@ the whole implementation.
   invalid root rejection, clear, and repeated clear.
 - `test/preset-contract.mjs` — offline contract tests for the mode selector
   (`node test/preset-contract.mjs`).
+- `test/fx-contract.mjs` — the dispatch-FX contract (`node test/fx-contract.mjs`): the
+  Host visual-event queue's delta, watermark and capacity, "record only real dispatches",
+  plus the bezier path, pane edge points, board edge points and client polling wiring.
 - `test/graph-contract.mjs` — offline contract tests for the delegation graph
   (`node test/graph-contract.mjs`): the pure model's three layers, the `paneDispatch` namespace
   and codec shape, the binding-sync diff, and the really rendered mode switch / cards / arrows.
@@ -868,6 +947,8 @@ seconds):
 ```bash
 node test/layout-contract.mjs
 node test/views-contract.mjs
+node test/tint-contract.mjs
+node test/font-contract.mjs
 node test/save-contract.mjs
 node test/host-layout-contract.mjs
 node test/drag-contract.mjs
@@ -878,6 +959,7 @@ node test/mcp-contract.mjs
 node test/delete-contract.mjs
 node test/menu-contract.mjs
 node test/skill-contract.mjs
+node test/fx-contract.mjs
 node test/graph-contract.mjs
 node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs

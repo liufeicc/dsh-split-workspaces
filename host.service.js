@@ -45,6 +45,15 @@ export class PaneDispatchService {
      * 这两件事用户要做的事完全不一样，所以错误信息里必须能分开。
      */
     this.stats = { list: 0, set: 0 };
+    /**
+     * 派单视觉事件队列（只给浏览器播放光效用，不落盘、不进模型）。
+     *
+     * 每次「真的开始派一单」时追加一条 `{ seq, type: 'dispatch', source, targets, at }`；
+     * 客户端每 300ms 用 `pullVisual({ since })` 取增量。它必须活在 Host 上：主会话可能
+     * 没有铺在平铺面板里，只有 Host 知道这次派单从哪来、要飞向谁。
+     */
+    this.visualSeq = 0;
+    this.visualEvents = [];
     /** 绑定变化后的回调（apply 用它在有活的会话时重建作用域工具）。 */
     this.listeners = new Set();
     /** ownerId → 这个会话的显示名（客户端随每次同步带上来）。 */
@@ -278,6 +287,50 @@ export class PaneDispatchService {
       }
     }
     return { ok: true, count: next.length, saved: this.saved };
+  }
+
+  /**
+   * 记录一次派单开始，供浏览器播放「主窗格 → 目标窗格」的光点。
+   *
+   * **只在真的开始投递时调用**：续等（没有 task）、审核、预检失败都不该让光点飞。
+   * 队列只保留最近 64 条，避免长时间运行时无限增长；重启后清空，旧派单不会被重播。
+   *
+   * @param sourceSessionId - 发起派单的会话 id。
+   * @param targetSessionIds - 本次实际要投递的目标会话 id 数组。
+   */
+  noteDispatch(sourceSessionId, targetSessionIds) {
+    if (typeof sourceSessionId !== 'string' || sourceSessionId === '') return;
+    const targets = Array.isArray(targetSessionIds)
+      ? targetSessionIds.filter((id) => typeof id === 'string' && id !== '')
+      : [];
+    if (targets.length === 0) return;
+    this.visualSeq += 1;
+    this.visualEvents.push({
+      seq: this.visualSeq,
+      type: 'dispatch',
+      source: sourceSessionId,
+      targets,
+      at: Date.now(),
+    });
+    if (this.visualEvents.length > 64) this.visualEvents.splice(0, this.visualEvents.length - 64);
+  }
+
+  /**
+   * 取 `since` 之后的派单视觉事件。
+   *
+   * 客户端首次挂载时先只读 `latest`、不播放历史事件，否则刷新页面会把很久以前的
+   * 派单重新飞一遍。返回 `latest` 让客户端记住水位。
+   *
+   * @param request - `{ since: number }`。
+   * @returns `{ events: Array, latest: number }`。
+   */
+  pullVisual(request) {
+    const raw = Number(request?.since);
+    const since = Number.isFinite(raw) ? raw : 0;
+    return {
+      events: this.visualEvents.filter((event) => event.seq > since),
+      latest: this.visualSeq,
+    };
   }
 
   /**

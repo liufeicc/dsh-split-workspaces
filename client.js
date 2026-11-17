@@ -11,6 +11,21 @@
  * 每个窗格各自持有一个会话引用（`ctx.sessions.retain`，来源标记 `splitWorkspaces`），
  * 所以侧边栏的主选择不受影响，多个会话可以同时开着。
  *
+ * 每个窗格的「对话内容区」还会分到一层半透明的渐变色（按会话稳定、同一屏不重复），
+ * 像一块带色温的玻璃：左上角有柔光、向下淡出，一眼就能分清哪一格是哪段对话；
+ * 标题栏保持原样。
+ *
+ * 平铺面板的标题/按钮/菜单使用自带的「站酷快乐体」（字体文件在 `fonts/`，Host 半边用
+ * `/split-workspaces-fonts` 路由提供）；会话正文保持系统原字体。主界面与平铺面板的
+ * 助手正文按段落/列表项逐块淡入上浮（每块 2 秒），用户消息/工具行/思考过程保持静态。
+ *
+ * 派单时还会播放青金色流星：主窗格边框亮 → 带柔光/尾迹的流星直线飞向目标窗格内的
+ * 随机落点（约 2.4 秒）→ 目标边框亮、窗格抖动、半透明白光同时发生并缓慢消失；多目标串行发射，
+ * 不画轨迹线。实现见 `client.fx.js`。Host 热重载会让视觉事件序号归零，轮询侧会
+ * 检测到序号回退并重置水位，避免新派单被旧的已读位置过滤掉。
+ * 分配在 `client.model.js` 的 `assignPaneTints`，染色在 `client.styles.js` 的
+ * `.dshSplitWs_paneBody`。
+ *
  * 另外它给面板提供一个 `openWorkspaceDirectory(path)`：窗格标题栏上的文件夹按钮用它
  * 把该窗格的工作区目录交给系统文件管理器。实现走已经装好的 Session 命名空间
  * （`canOpenWorkspacePath` + `openWorkspacePath`），Host 半边不需要任何新代码，
@@ -130,6 +145,7 @@ window.__ModuleLoader__.load({
       './client.menu.js',
       './client.pane.js',
       './client.views.js',
+      './client.fx.js',
       './client.view.js',
     ];
 
@@ -145,8 +161,8 @@ window.__ModuleLoader__.load({
         return Promise.reject(new Error('client module loader 不支持包内代码块（require.async 缺失）'));
       }
       return Promise.all(CHUNK_FILES.map((file) => require.async(file)))
-        .then(([styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view]) => ({
-          styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, view,
+        .then(([styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, fx, view]) => ({
+          styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, fx, view,
         }));
     }
 
@@ -192,6 +208,7 @@ window.__ModuleLoader__.load({
         pane,
         graph: mods.graphView,
         views: mods.views,
+        fx: mods.fx,
         viewTabs,
       });
 
@@ -405,6 +422,7 @@ window.__ModuleLoader__.load({
         loadSkills: () => skillStore.load(),
         setSkillSelection: (workspacePath, selected) => skillStore.setSelection(workspacePath, selected),
         loadDispatch: () => dispatchSync.load(),
+        pullDispatchVisual: (since) => mods.dispatch.pullDispatchVisual(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY), since),
       };
 
       /**

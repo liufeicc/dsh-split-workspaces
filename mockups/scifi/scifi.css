@@ -1,0 +1,572 @@
+/* ══════════════════════════════════════════════════════════════════
+   多工作区平铺 · 科幻概念稿
+   scifi.css —— 背景、顶栏、状态条、栅格、节点外壳与头部、通用控件
+   ══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --bg-0: #04070d;
+  --bg-1: #070c14;
+  --bg-2: #0a111d;
+  --bg-3: #0d1725;
+
+  --line: #1a2b41;
+  --line-2: #203a55;
+  --line-3: #2b4a68;
+
+  --cyan: #4dd7ff;
+  --cyan-2: #38bdf8;
+  --blue: #3b82f6;
+  --orange: #ff7a1a;
+  --amber: #ffb454;
+  --red: #ff4d6d;
+  --violet: #a78bfa;
+  --green: #3ddc97;
+
+  --text: #dceaf7;
+  --text-2: #a9bed2;
+  --muted: #7b93aa;
+  --dim: #526a80;
+
+  --mono: "Nimbus Mono PS", "Noto Sans Mono CJK SC", "DejaVu Sans Mono", monospace;
+  --sans: "Noto Sans CJK SC", "Liberation Sans", "DejaVu Sans", sans-serif;
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html,
+body { height: 100%; }
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-0);
+  color: var(--text-2);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: rgba(77, 215, 255, .24);
+  color: #f2fbff;
+}
+
+.sprite {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ───────────────────────── 背景层 ───────────────────────── */
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, rgba(110, 172, 224, .62) 1.1px, transparent 1.4px),
+    linear-gradient(rgba(84, 146, 198, .065) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(84, 146, 198, .065) 1px, transparent 1px);
+  background-size: 20px 20px, 100px 100px, 100px 100px;
+  opacity: .7;
+  -webkit-mask-image: radial-gradient(ellipse 82% 78% at 50% 44%, #000 28%, transparent 100%);
+  mask-image: radial-gradient(ellipse 82% 78% at 50% 44%, #000 28%, transparent 100%);
+}
+
+.bg-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 55% 38% at 16% -8%, rgba(56, 189, 248, .20), transparent 65%),
+    radial-gradient(ellipse 45% 35% at 86% 110%, rgba(168, 85, 247, .12), transparent 65%),
+    radial-gradient(ellipse 38% 32% at 55% 48%, rgba(34, 211, 238, .035), transparent 72%);
+}
+
+.bg-scan {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg,
+      rgba(180, 230, 255, .028) 0 1px,
+      transparent 1px 3px);
+  opacity: .5;
+}
+
+.bg-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse 72% 66% at 50% 46%,
+      transparent 44%,
+      rgba(0, 0, 0, .60) 100%);
+}
+
+.app {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+}
+
+/* ───────────────────────── 顶栏 ───────────────────────── */
+.topbar {
+  position: relative;
+  z-index: 20;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  height: 58px;
+  padding: 0 18px;
+  background: linear-gradient(180deg, rgba(7, 12, 20, .94), rgba(4, 7, 12, .90));
+  border-bottom: 1px solid rgba(77, 215, 255, .16);
+  box-shadow:
+    0 1px 0 rgba(120, 210, 255, .04),
+    0 10px 30px rgba(0, 0, 0, .45);
+}
+
+.topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg,
+      transparent,
+      rgba(77, 215, 255, .45) 18%,
+      rgba(77, 215, 255, .08) 55%,
+      transparent);
+  opacity: .8;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.brand-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  color: var(--cyan);
+  border: 1px solid rgba(77, 215, 255, .32);
+  border-radius: 3px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(77, 215, 255, .13), rgba(5, 10, 18, .2));
+  box-shadow:
+    0 0 18px rgba(77, 215, 255, .12),
+    inset 0 0 12px rgba(77, 215, 255, .05);
+}
+
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgba(77, 215, 255, .12);
+  border-radius: 2px;
+}
+
+.brand-mark .icon {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.3;
+  filter: drop-shadow(0 0 5px rgba(77, 215, 255, .45));
+}
+
+.brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.brand-kicker {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  line-height: 1;
+  letter-spacing: .22em;
+  color: var(--cyan);
+  opacity: .65;
+  white-space: nowrap;
+}
+
+.brand-title {
+  font-size: 18px;
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: .06em;
+  color: #eef8ff;
+  text-shadow: 0 0 16px rgba(77, 215, 255, .18);
+  white-space: nowrap;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+}
+
+.seg {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(4, 8, 14, .5);
+}
+
+.hud-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 27px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: .04em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+
+.hud-btn:hover {
+  color: var(--text);
+  background: rgba(77, 215, 255, .04);
+}
+
+.hud-btn.is-on {
+  color: #dff8ff;
+  border-color: rgba(77, 215, 255, .38);
+  background: linear-gradient(180deg, rgba(77, 215, 255, .16), rgba(77, 215, 255, .04));
+  box-shadow:
+    0 0 12px rgba(77, 215, 255, .12),
+    inset 0 0 12px rgba(77, 215, 255, .05);
+  text-shadow: 0 0 10px rgba(77, 215, 255, .35);
+}
+
+.hud-add {
+  border-color: var(--line-2);
+  color: #bcd8ee;
+  padding: 0 12px;
+  background: rgba(12, 22, 36, .45);
+}
+
+.hud-add .icon {
+  width: 12px;
+  height: 12px;
+  color: var(--cyan);
+}
+
+.hud-add:hover {
+  border-color: rgba(77, 215, 255, .5);
+  color: #fff;
+  box-shadow: 0 0 14px rgba(77, 215, 255, .10);
+}
+
+.topbar-rule {
+  width: 1px;
+  height: 20px;
+  margin: 0 2px;
+  background: linear-gradient(180deg, transparent, var(--line-2), transparent);
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+
+.icon-btn:hover {
+  color: var(--cyan);
+  border-color: rgba(77, 215, 255, .28);
+  background: rgba(77, 215, 255, .05);
+  box-shadow: 0 0 10px rgba(77, 215, 255, .08);
+}
+
+.icon-btn:focus-visible,
+.hud-btn:focus-visible,
+.node-mode:focus-visible,
+.send-btn:focus-visible,
+.tool-btn:focus-visible {
+  outline: 1px solid rgba(77, 215, 255, .7);
+  outline-offset: 1px;
+}
+
+/* ───────────────────────── 系统状态条 ───────────────────────── */
+.sysbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 30px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(77, 215, 255, .08);
+  background: rgba(5, 9, 15, .72);
+  font-family: var(--mono);
+  font-size: 8.6px;
+  letter-spacing: .08em;
+  color: var(--dim);
+  position: relative;
+}
+
+.sysbar::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  background: linear-gradient(180deg,
+      rgba(77, 215, 255, .08),
+      rgba(77, 215, 255, .65),
+      rgba(77, 215, 255, .08));
+  box-shadow: 0 0 7px rgba(77, 215, 255, .3);
+}
+
+.sys-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--green);
+  letter-spacing: .16em;
+}
+
+.pulse {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px rgba(61, 220, 151, .8);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.sys-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7b93aa;
+  letter-spacing: .04em;
+}
+
+.sys-meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dim);
+}
+
+.sys-meta b {
+  color: #9cb6cc;
+  font-weight: 500;
+}
+
+.sys-meta em {
+  width: 1px;
+  height: 9px;
+  background: var(--line);
+}
+
+.sys-icon {
+  width: 12px;
+  height: 12px;
+  color: var(--cyan);
+  opacity: .55;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.8); }
+}
+
+/* ───────────────────────── 顶栏 / 状态条响应式 ───────────────────────── */
+@media (max-width: 1560px) {
+  .topbar { height: 54px; padding: 0 14px; }
+  .brand-title { font-size: 16px; }
+}
+
+@media (max-width: 1320px) {
+  .brand-kicker { display: none; }
+  .hud-btn { padding: 0 8px; font-size: 10.5px; }
+  .sys-hint { display: none; }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   动效层 —— 背景漂移、全局扫描、光标光斑、品牌呼吸
+   ══════════════════════════════════════════════════════════════════ */
+
+/* 点阵 / 大网格缓慢漂移 */
+.bg-grid {
+  animation: grid-drift 34s linear infinite;
+}
+
+@keyframes grid-drift {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to { background-position: 0 20px, 0 100px, 100px 0; }
+}
+
+.bg-aurora {
+  animation: aurora-drift 22s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+
+@keyframes aurora-drift {
+  from { transform: translate3d(0, 0, 0) scale(1); opacity: .85; }
+  to { transform: translate3d(-16px, 10px, 0) scale(1.04); opacity: 1; }
+}
+
+/* 跟随鼠标的柔光 */
+.cursor-glow {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  width: 500px;
+  height: 500px;
+  margin: -250px 0 0 -250px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle,
+      rgba(77, 215, 255, .15),
+      rgba(56, 189, 248, .05) 44%,
+      transparent 68%);
+  mix-blend-mode: screen;
+  transform: translate3d(var(--cx, 50vw), var(--cy, 40vh), 0);
+  will-change: transform;
+}
+
+/* 星尘粒子画布 */
+.fx-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: .85;
+}
+
+/* 品牌图标呼吸 + 顶栏扫光 */
+.brand-mark {
+  animation: brand-breathe 4.8s ease-in-out infinite;
+}
+
+@keyframes brand-breathe {
+  0%, 100% {
+    box-shadow:
+      0 0 18px rgba(77, 215, 255, .12),
+      inset 0 0 12px rgba(77, 215, 255, .05);
+  }
+  50% {
+    box-shadow:
+      0 0 32px rgba(77, 215, 255, .30),
+      inset 0 0 18px rgba(77, 215, 255, .10);
+  }
+}
+
+.brand-mark .icon {
+  animation: mark-pulse 4.8s ease-in-out infinite;
+}
+
+@keyframes mark-pulse {
+  0%, 100% {
+    opacity: .82;
+    filter: drop-shadow(0 0 4px rgba(77, 215, 255, .35));
+    transform: scale(.96);
+  }
+  50% {
+    opacity: 1;
+    filter: drop-shadow(0 0 10px rgba(77, 215, 255, .85));
+    transform: scale(1.04);
+  }
+}
+
+.topbar::after {
+  background-size: 220% 100%;
+  animation: topbar-sweep 7s linear infinite;
+}
+
+@keyframes topbar-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+.hud-btn.is-on {
+  animation: btn-breathe 3.6s ease-in-out infinite;
+}
+
+@keyframes btn-breathe {
+  0%, 100% {
+    box-shadow:
+      0 0 12px rgba(77, 215, 255, .12),
+      inset 0 0 12px rgba(77, 215, 255, .05);
+  }
+  50% {
+    box-shadow:
+      0 0 24px rgba(77, 215, 255, .28),
+      inset 0 0 16px rgba(77, 215, 255, .10);
+  }
+}
+
+/* 动效开关 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

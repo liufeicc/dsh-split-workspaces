@@ -24,7 +24,7 @@ import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, re
 const here = dirname(fileURLToPath(import.meta.url));
 
 const mod = await loadBundle(join(here, '..', 'client.js'), { react: ReactStub });
-check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.layout.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.dispatch.js,./client.graph.model.js,./client.graph.view.js,./client.menu.js,./client.pane.js,./client.views.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
+check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.layout.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.dispatch.js,./client.graph.model.js,./client.graph.view.js,./client.menu.js,./client.pane.js,./client.views.js,./client.fx.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
 
 /*
  * 清单与磁盘必须一一对应。

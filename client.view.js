@@ -62,7 +62,7 @@ window.__ModuleLoader__.load({
      * @param deps.views - 会话视图块（`createPaneBody`：带视图标签栏的窗格主体）。
      * @param deps.viewTabs - 会话视图清单源（入口块用 `createViewTabs` 建好）。
      */
-    function createView({ css, cx, errorText, model, menu, pane, graph, views, viewTabs }) {
+    function createView({ css, cx, errorText, model, menu, pane, graph, views, fx, viewTabs }) {
       const { Popover, MenuItem } = menu;
       // 设计模式画布：只画卡片和箭头，校验与布局都在 `client.graph.model.js` 里算好。
       const { GraphBoard } = graph;
@@ -274,6 +274,11 @@ window.__ModuleLoader__.load({
         const items = workspaceState.items;
         const archivedSessionIds = workspaceState.archivedSessionIds;
         const panes = paneState.panes;
+        /*
+         * 每个窗格内容区的背景色。`panes` 一变（加/关窗格、给窗格换会话）就重算：
+         * 颜色跟着会话走、同一屏内不重复，规则见 `client.model.js` 的 `assignPaneTints`。
+         */
+        const paneTints = useMemo(() => model.assignPaneTints(panes), [panes]);
         const presetOptions = presetState.options;
         const presetDefaultId = presetState.defaultId;
 
@@ -655,6 +660,77 @@ window.__ModuleLoader__.load({
           return index;
         }, [panes, workspaceById, sessionState, archivedSessionIds]);
 
+        /*
+         * 派单光效：每 300ms 取一次 Host 的派单视觉事件。
+         *
+         * 只在这个棋盘组件挂载时轮询 —— 一切到别的面板，effect 清理、轮询停止，
+         * 于是「整个平铺面板没显示」时自然不播放。窗格映射每次播放时现读 ref，
+         * 播放途中切换活动窗格不会打断正在飞的光点。
+         */
+        const panesRef = useRef(panes);
+        panesRef.current = panes;
+        const panePlanRef = useRef(panePlan);
+        panePlanRef.current = panePlan;
+        useEffect(() => {
+          if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
+          if (fx === undefined || fx === null || typeof fx.createDispatchFx !== 'function') return undefined;
+          if (typeof paneActions.pullDispatchVisual !== 'function') return undefined;
+          const effect = fx.createDispatchFx({ doc: document, win: window });
+          let disposed = false;
+          let timer = null;
+          let since = null;
+          let failures = 0;
+          const elementForSession = (sessionId) => {
+            for (const candidate of panesRef.current) {
+              const plan = panePlanRef.current.get(candidate.key);
+              if (plan === undefined || plan.sessionId !== sessionId) continue;
+              const node = document.querySelector('[data-pane="' + candidate.key + '"]');
+              if (node !== null) return node;
+            }
+            return null;
+          };
+          const tick = async () => {
+            const result = await paneActions.pullDispatchVisual(since);
+            if (disposed) return;
+            if (result.ok) {
+              failures = 0;
+              if (since === null) {
+                // 首次只记水位：刷新页面不能把历史派单重新飞一遍。
+                since = result.latest;
+              } else {
+                /*
+                 * Host 热重载/重启后，视觉事件队列会从 1 重新计数；客户端水位还停在
+                 * 旧值。如果不回退，新派单的 seq 永远小于 since，会被过滤掉 ——
+                 * 「边框和流星突然都没了」通常就是这个原因。
+                 */
+                const serverLatest = Number(result.latest);
+                if (Number.isFinite(serverLatest) && serverLatest < since) since = serverLatest;
+                if (result.events.length > 0) {
+                  since = result.latest;
+                  for (const event of result.events) {
+                    if (event === null || typeof event !== 'object' || event.type !== 'dispatch') continue;
+                    effect.play({
+                      sourceSessionId: event.source,
+                      targetSessionIds: event.targets,
+                      elementForSession,
+                    });
+                  }
+                }
+              }
+            } else {
+              failures += 1;
+            }
+            // Host 暂时取不到时降频重试，不永久停掉：热重载完成后还能自己恢复。
+            timer = window.setTimeout(tick, failures >= 5 ? 1000 : 300);
+          };
+          tick();
+          return () => {
+            disposed = true;
+            if (timer !== null) window.clearTimeout(timer);
+            effect.dispose();
+          };
+        }, [fx, paneActions]);
+
         /**
          * 任务分派里的卡片 = **会话**，不是窗格。
          *
@@ -877,6 +953,7 @@ window.__ModuleLoader__.load({
             key: pane.key,
             pane,
             grow,
+            tint: paneTints.get(pane.key),
             workspace: workspaceById.get(pane.workspaceId),
             workspaceChoices: splitChoices,
             /*

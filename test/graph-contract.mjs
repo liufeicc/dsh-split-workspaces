@@ -249,8 +249,8 @@ await settle();
 const mounted = stubForRemote.mounted ?? [];
 check('插件把 paneDispatch 命名空间挂到了远端网关上', mounted.length === 1 && mounted[0].package === '@local/dsh-split-workspaces', JSON.stringify(mounted.map((item) => item.package)));
 const descriptors = mounted.length === 0 ? [] : mounted[0].descriptors;
-check('命名空间暴露绑定 list/set、派单视觉 pullVisual 与布局 read/write 五个方法',
-  descriptors.map((item) => item.method).sort().join(',') === 'list,pullVisual,readLayout,set,writeLayout',
+check('命名空间暴露绑定 list/set、派单视觉 pullVisual、卡片状态 readStates 与布局 read/write 六个方法',
+  descriptors.map((item) => item.method).sort().join(',') === 'list,pullVisual,readLayout,readStates,set,writeLayout',
   descriptors.map((item) => item.method).join(','));
 check('每个输入 codec 都是 strict（网关的硬要求）', descriptors.every((item) => item.parameters.every((param) => param.codec.mode === 'strict')));
 check('每个 strict codec 都带 create() schema 工厂（注册表的硬要求）',
@@ -443,11 +443,15 @@ check('选择器默认折叠，先让用户选工作区', findPickerItems(picker
 groupHeads[0].props.onClick();
 picker.flush();
 const pickerItems = findPickerItems(picker);
-check('点开工作区后才列出它的会话', pickerItems.length === 2
-  && pickerItems.every((item) => item.props['data-session'] === 's-a' || item.props['data-session'] === 's-blank'),
+check('点开工作区后才列出它的会话', pickerItems.length === 1
+  && pickerItems[0].props['data-session'] === 's-a',
   JSON.stringify(pickerItems.map((item) => item.props['data-session'])));
-check('新建但还没输入内容的空白会话也出现在左侧列表里',
-  pickerItems.some((item) => item.props['data-session'] === 's-blank'),
+/*
+ * 空白会话的专门用例在文件末尾：它必须“当前开在窗格里”才会出现，
+ * 这里 s-blank 没有打开，所以不应列出来。
+ */
+check('没打开的空白会话不混进普通选择器',
+  !pickerItems.some((item) => item.props['data-session'] === 's-blank'),
   JSON.stringify(pickerItems.map((item) => item.props['data-session'])));
 
 /*
@@ -504,8 +508,6 @@ check('已加入画布的会话从左侧选择器消失',
   && !pickerKeysAfterJoin.includes('s-b')
   && !pickerKeysAfterJoin.includes('s-c'),
   JSON.stringify(pickerKeysAfterJoin));
-check('还没加入画布的空白会话仍留在左侧选择器',
-  pickerKeysAfterJoin.includes('s-blank'), JSON.stringify(pickerKeysAfterJoin));
 
 // 待连线卡片右上角的 × 能把它移出画布，并让它重新出现在左侧选择器。
 const removeStaged = findAll(mixedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCardRemove'))[0];
@@ -589,6 +591,19 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
   const blankInjected = blankBoard.stub.registered.find((definition) => definition.name === 'main').inject();
   const blankModes = findAll(blankBoard.render().tree, (node) => node.props?.['aria-pressed'] !== undefined && typeof node.props.className === 'string' && node.props.className.includes('dshSplitWs_mode'));
   blankModes[1].props.onClick();
+  /*
+   * 空白会话只在“当前确实开在窗格里”时列出。先把 s-blank 留在窗格外，
+   * 确认它不出现；再把它开进 pane-1，走下面的“可拖入、可连线”路径。
+   */
+  const pickerKeysNow = () => {
+    const dom = graphBoardOf(blankBoard.render().tree);
+    const node = findAll(dom.tree, byName('GraphPicker'))[0];
+    return node.props.groups.flatMap((group) => group.items).map((item) => item.key);
+  };
+  const keysBeforeOpen = pickerKeysNow();
+  check('属于工作区但没在任何窗格里打开的空白会话不列',
+    !keysBeforeOpen.includes('s-blank'), JSON.stringify(keysBeforeOpen));
+  blankInjected.paneStore.setSession('pane-1', 's-blank');
   const blankPanel = blankBoard.render();
   const blankGraphDom = graphBoardOf(blankPanel.tree);
   const blankPickerNode = findAll(blankGraphDom.tree, byName('GraphPicker'))[0];
@@ -644,6 +659,95 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
     blankInjected.graphStore.getSnapshot().edges.some((edge) => edge.from === 's-blank' && edge.to === 's-a')
     && findAll(blankWired.tree, (node) => node.type === 'polygon').length === 1,
     JSON.stringify(blankInjected.graphStore.getSnapshot().edges));
+}
+
+/*
+ * 卡片状态徽标：目标进行中 / 待审核。状态与会话在不在图里无关，
+ * 只按 Host 读回的会话自身状态显示。
+ */
+{
+  const stateBoard = await renderBoard(mod, {});
+  const stateModes = findAll(stateBoard.render().tree, (node) => node.props?.['aria-pressed'] !== undefined && typeof node.props.className === 'string' && node.props.className.includes('dshSplitWs_mode'));
+  stateModes[1].props.onClick();
+  const statePanel = stateBoard.render();
+  const stateDom = graphBoardOf(statePanel.tree);
+  const stateScroll = findAll(stateDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphScroll'))[0];
+  stateScroll.props.onDrop({ preventDefault: () => {}, dataTransfer: transferFor('s-a') });
+  statePanel.flush();
+  statePanel.render();
+  const stateBoardDom = graphBoardOf(statePanel.tree);
+  const withStates = mount(stateBoardDom.component, {
+    ...stateBoardDom.props,
+    states: { 's-a': { goal: 'running', reviewOwned: 1, reviewWaiting: 0 } },
+  });
+  const stateText = JSON.stringify(withStates.tree);
+  check('卡片显示目标状态与待审核徽标',
+    stateText.includes('目标进行中') && stateText.includes('待审核'),
+    JSON.stringify(['目标进行中', '待审核'].filter((text) => !stateText.includes(text))));
+  const withoutStates = mount(stateBoardDom.component, { ...stateBoardDom.props, states: {} });
+  check('没有目标状态时不凭空显示目标徽标',
+    !JSON.stringify(withoutStates.tree).includes('目标进行中'));
+}
+
+/*
+ * 点击卡片 → 浮动窗格：复用 PaneFrame，浮窗 pane 不占棋盘布局。
+ */
+{
+  const floatBoard = await renderBoard(mod, {});
+  const floatInjected = floatBoard.stub.registered.find((definition) => definition.name === 'main').inject();
+  const floatModes = findAll(floatBoard.render().tree, (node) => node.props?.['aria-pressed'] !== undefined && typeof node.props.className === 'string' && node.props.className.includes('dshSplitWs_mode'));
+  floatModes[1].props.onClick();
+  const floatPanel = floatBoard.render();
+  const floatDom = graphBoardOf(floatPanel.tree);
+  const floatScroll = findAll(floatDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphScroll'))[0];
+  floatScroll.props.onDrop({ preventDefault: () => {}, dataTransfer: transferFor('s-a') });
+  floatPanel.flush();
+  floatPanel.render();
+  const floatCards = findCards(graphBoardOf(floatPanel.tree));
+  const floatCard = floatCards.find((card) => card.props['data-session'] === 's-a');
+  check('待连线卡片可以点击打开浮窗', floatCard !== undefined && typeof floatCard.props.onClick === 'function');
+  floatCard.props.onClick();
+  floatPanel.flush();
+  floatPanel.render();
+  const floatNodes = findAll(floatPanel.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_floatingPane'));
+  check('点击卡片后渲染出浮动窗格', floatNodes.length === 1, String(floatNodes.length));
+  const floatPaneFrame = findAll(floatNodes[0], byName('PaneFrame'))[0];
+  check('浮窗内部是完整的 PaneFrame，且标记为 floating',
+    floatPaneFrame !== undefined && floatPaneFrame.props.floating === true);
+  const floatResizeHandles = findAll(floatNodes[0], (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_floatResize'));
+  check('浮窗四条边与四个角都有缩放热区',
+    floatResizeHandles.length === 8
+    && ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'].every((dir) => floatResizeHandles.some((node) => node.props['data-dir'] === dir)),
+    JSON.stringify(floatResizeHandles.map((node) => node.props['data-dir'])));
+  /*
+   * 浮窗标题栏要收敛：不提供替换工作区、分屏、自带关闭按钮；
+   * 会话名只作为静态文本显示，不打开切换菜单。
+   */
+  const floatPaneMount = mount(floatPaneFrame.type, floatPaneFrame.props);
+  const floatPopovers = findAll(floatPaneMount.tree, byName('Popover'));
+  check('浮窗标题栏隐藏替换工作区与分屏',
+    !floatPopovers.some((node) => node.props.key === 'replace' || node.props.key === 'split'),
+    JSON.stringify(floatPopovers.map((node) => node.props.key)));
+  check('浮窗标题栏没有自带的关闭按钮',
+    findAll(floatPaneMount.tree, (node) => node.type === 'button' && node.props.key === 'close').length === 0);
+  check('浮窗会话名只显示，不打开切换菜单',
+    findAll(floatPaneMount.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_sessionLabel')).length === 1
+    && !floatPopovers.some((node) => node.props.key === 'session'),
+    JSON.stringify(floatPopovers.map((node) => node.props.key)));
+  const snapAfterOpen = floatInjected.paneStore.getSnapshot();
+  const floatPane = snapAfterOpen.panes.find((pane) => pane.floating === true);
+  check('浮窗 pane 登记在 store 里，但没进棋盘布局',
+    floatPane !== undefined
+    && floatPane.key.startsWith('float-')
+    && floatPane.sessionId === 's-a',
+    JSON.stringify(snapAfterOpen.panes.map((pane) => pane.key)));
+  const floatClose = findAll(floatNodes[0], (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_floatingClose'))[0];
+  check('浮窗带关闭按钮', floatClose !== undefined);
+  floatClose.props.onClick({ stopPropagation: () => {} });
+  floatPanel.flush();
+  check('关闭后浮窗与临时 pane 都消失',
+    findAll(floatPanel.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_floatingPane')).length === 0
+    && floatInjected.paneStore.getSnapshot().panes.every((pane) => pane.floating !== true));
 }
 
 report();

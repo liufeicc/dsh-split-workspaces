@@ -505,6 +505,35 @@ window.__ModuleLoader__.load({
         },
 
         /**
+         * 登记一个**不占棋盘布局**的浮动窗格。
+         *
+         * 浮窗要复用 PaneFrame 的完整交互（输入、切换会话、新建、替换工作区），
+         * 那些操作都按 pane key 读写 paneStore，所以它必须是真实注册的窗格。但它不能
+         * 进入 `layout` 树：平铺棋盘按布局树渲染，进了树就会在棋盘上多出一格。
+         *
+         * 因此这里只把 pane 放进 `panes`，不动 `layout` / `activeKey`；序列化时
+         * `client.layout.js` 会按 `floating` 标记跳过它，刷新后不会恢复成棋盘格子。
+         *
+         * @param workspaceId - 这个浮窗显示哪个工作区的会话。
+         * @param sessionId - 要显示的会话。
+         * @returns 新窗格的 key（`float-` 前缀，和棋盘格子的 `pane-` 区分开）。
+         */
+        addFloatingPane(workspaceId, sessionId) {
+          const key = 'float-' + String(snapshot.nextKey);
+          const pane = {
+            ...createPane(key, workspaceId, sessionId, false),
+            floating: true,
+          };
+          publish({
+            ...snapshot,
+            panes: [...snapshot.panes, pane],
+            initialized: true,
+            nextKey: snapshot.nextKey + 1,
+          });
+          return key;
+        },
+
+        /**
          * 把一个工作区铺成窗格；该工作区已经在棋盘上时复用它。
          * 新窗格接在棋盘的右边。
          * @returns 窗格 key；什么都没变时返回已有窗格的 key。
@@ -696,6 +725,25 @@ window.__ModuleLoader__.load({
             activeKey: snapshot.activeKey === key ? fallback : snapshot.activeKey,
           });
           return tookOver === null ? undefined : tookOver;
+        },
+
+        /**
+         * 移除一个浮动窗格的登记；只允许删 `floating` 窗格。
+         *
+         * 不动 `layout` / `activeKey`：浮窗从来没有进过布局树，删它不应该让棋盘
+         * 少一格或换焦点。
+         *
+         * @param key - `addFloatingPane` 返回的 key。
+         * @returns 是否真的删掉了一个浮窗。
+         */
+        removeFloatingPane(key) {
+          const target = snapshot.panes.find((pane) => pane.key === key);
+          if (target === undefined || target.floating !== true) return false;
+          publish({
+            ...snapshot,
+            panes: snapshot.panes.filter((pane) => pane.key !== key),
+          });
+          return true;
         },
 
         /** 关掉所有窗格。 */
@@ -926,6 +974,73 @@ window.__ModuleLoader__.load({
       return rows.length === 0 ? undefined : rows[0].id;
     }
 
+    /** 浮窗缩放的最小尺寸与离面板边缘的安全距离。 */
+    const FLOATING_MIN_WIDTH = 360;
+    const FLOATING_MIN_HEIGHT = 260;
+    const FLOATING_EDGE_MARGIN = 12;
+
+    /**
+     * 按拖动方向缩放一个浮窗盒子。
+     *
+     * 支持八个方向：n / e / s / w 四条边 + ne / nw / se / sw 四个角。
+     * 顶部条本身是「拖动移动」，它的最上面 5px 才用于向上缩放（见样式），
+     * 剩下的条体仍是移动手势。
+     *
+     * 约束：
+     *   - 宽高不小于 `FLOATING_MIN_WIDTH` / `FLOATING_MIN_HEIGHT`；
+     *   - 盒子始终留在面板内（离四边至少 `FLOATING_EDGE_MARGIN`）；
+     *   - 拖左边缘时右边界固定，拖上边缘时下边界固定。
+     *
+     * 纯函数，视图只负责把指针位移换算成 dx/dy 再喂进来，离线测试可直接断言。
+     *
+     * @param box - `{ x, y, width, height }`。
+     * @param dir - `n` / `e` / `s` / `w` / `ne` / `nw` / `se` / `sw`。
+     * @param dx - 指针相对起点的水平位移。
+     * @param dy - 指针相对起点的垂直位移。
+     * @param bounds - 面板尺寸 `{ width, height }`。
+     * @returns 新的 `{ x, y, width, height }`。
+     */
+    function resizeFloatingBox(box, dir, dx, dy, bounds) {
+      const panelWidth = bounds !== undefined && bounds !== null && Number.isFinite(bounds.width) ? bounds.width : 1200;
+      const panelHeight = bounds !== undefined && bounds !== null && Number.isFinite(bounds.height) ? bounds.height : 800;
+      const originX = box !== undefined && box !== null && Number.isFinite(box.x) ? box.x : FLOATING_EDGE_MARGIN;
+      const originY = box !== undefined && box !== null && Number.isFinite(box.y) ? box.y : FLOATING_EDGE_MARGIN;
+      const originWidth = box !== undefined && box !== null && Number.isFinite(box.width) ? box.width : 640;
+      const originHeight = box !== undefined && box !== null && Number.isFinite(box.height) ? box.height : 480;
+      const moveX = Number.isFinite(dx) ? dx : 0;
+      const moveY = Number.isFinite(dy) ? dy : 0;
+      const direction = typeof dir === 'string' ? dir : 'se';
+      let x = originX;
+      let y = originY;
+      let width = originWidth;
+      let height = originHeight;
+      const right = originX + originWidth;
+      const bottom = originY + originHeight;
+      if (direction.includes('e')) {
+        const maxWidth = Math.max(FLOATING_MIN_WIDTH, panelWidth - FLOATING_EDGE_MARGIN - originX);
+        width = Math.round(Math.min(Math.max(originWidth + moveX, FLOATING_MIN_WIDTH), maxWidth));
+      }
+      if (direction.includes('w')) {
+        const maxWidth = Math.max(FLOATING_MIN_WIDTH, right - FLOATING_EDGE_MARGIN);
+        width = Math.round(Math.min(Math.max(originWidth - moveX, FLOATING_MIN_WIDTH), maxWidth));
+        x = Math.round(right - width);
+      }
+      if (direction.includes('s')) {
+        const maxHeight = Math.max(FLOATING_MIN_HEIGHT, panelHeight - FLOATING_EDGE_MARGIN - originY);
+        height = Math.round(Math.min(Math.max(originHeight + moveY, FLOATING_MIN_HEIGHT), maxHeight));
+      }
+      if (direction.includes('n')) {
+        /*
+         * 向上缩放时底边固定：高度减小多少，y 就往上挪多少。
+         * 上限是「底边减去安全边距」，保证 y 不会跑出面板顶部。
+         */
+        const maxHeight = Math.max(FLOATING_MIN_HEIGHT, bottom - FLOATING_EDGE_MARGIN);
+        height = Math.round(Math.min(Math.max(originHeight - moveY, FLOATING_MIN_HEIGHT), maxHeight));
+        y = Math.round(bottom - height);
+      }
+      return { x, y, width, height };
+    }
+
     return {
       SESSION_SOURCE,
       SPLIT_MIN_PX,
@@ -959,6 +1074,7 @@ window.__ModuleLoader__.load({
       layoutRects,
       neighborPane,
       createPaneStore,
+      resizeFloatingBox,
       selectableSessions,
       reusableBlankSession,
       resolvePaneSessionId,

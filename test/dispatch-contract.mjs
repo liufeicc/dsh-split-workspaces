@@ -76,6 +76,30 @@ check('没有绑定时描述明确说「还没有连箭头」', (() => {
   return tool.description.includes('还没有连任何委派箭头');
 })());
 
+check('readStates 汇总目标阶段与待审核计数（不靠会话列表猜）', (() => {
+  freshHome();
+  const goals = {
+    get: (agent) => (agent === undefined || agent === null
+      ? undefined
+      : { id: 'g-a', revision: 1, phase: 'active', activation: 'armed' }),
+  };
+  const agents = {
+    get: (id) => (id === 's-a' ? { status: 'idle', session: { id: 's-a' } } : undefined),
+  };
+  const service = new host.PaneDispatchService({
+    get: (key) => (key === 'goals' ? goals : (key === 'agents' ? agents : undefined)),
+  });
+  service.reviews.set('s-a\u0000s-b', { targetId: 's-b', status: 'delivered', at: 1 });
+  const states = service.readStates({ sessionIds: ['s-a', 's-b', 's-b', ''] }).states;
+  return states['s-a'].goal === 'running'
+    && states['s-a'].reviewOwned === 1
+    && states['s-b'].goal === 'cleared'
+    && states['s-b'].reviewWaiting === 1;
+})());
+check('readStates 是单形参远程方法（网关校验 args 形状）',
+  host.PaneDispatchService.prototype.readStates.length === 1,
+  String(host.PaneDispatchService.prototype.readStates.length));
+
 check('绑定表去掉重复、自派与空 id', (() => {
   freshHome();
   const service = new host.PaneDispatchService({});

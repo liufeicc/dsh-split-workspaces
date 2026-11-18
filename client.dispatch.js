@@ -71,11 +71,12 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 本包暴露的方法：绑定 list/set/pullVisual，以及 Host 侧布局的 read/write。 */
+    /** 本包暴露的方法：绑定 list/set/pullVisual、卡片状态 readStates，以及布局 read/write。 */
     const REMOTE_DESCRIPTORS = [
       descriptorFor('list', 'PaneDispatchListRequest'),
       descriptorFor('set', 'PaneDispatchSetRequest'),
       descriptorFor('pullVisual', 'PaneDispatchVisualRequest'),
+      descriptorFor('readStates', 'PaneDispatchStatesRequest'),
       descriptorFor('readLayout', 'PaneLayoutReadRequest'),
       descriptorFor('writeLayout', 'PaneLayoutWriteRequest'),
     ];
@@ -213,6 +214,39 @@ window.__ModuleLoader__.load({
         return { ok: true, events, latest };
       } catch {
         return { ok: false, events: [], latest: from };
+      }
+    }
+
+    /**
+     * 读一次任务分派卡片的实时状态（目标阶段 + 待审核计数）。
+     *
+     * 静默降级：老 Host 没有 `readStates`、远端没挂上、网络抖动，都返回空对象，
+     * 卡片退回只显示会话自己的 running 状态，不影响任何派单逻辑。
+     *
+     * @param getService - 惰性解析远端命名空间的函数。
+     * @param sessionIds - 要查询的会话 id 数组（会上限截断）。
+     * @returns `{ [sessionId]: { goal, terminal, reviewOwned, reviewWaiting } }`。
+     */
+    async function readDispatchStates(getService, sessionIds) {
+      const ids = Array.isArray(sessionIds)
+        ? sessionIds.filter((id) => typeof id === 'string' && id !== '').slice(0, 200)
+        : [];
+      if (ids.length === 0) return {};
+      let service;
+      try {
+        service = await waitForService(getService, 2, 80);
+      } catch {
+        service = undefined;
+      }
+      if (service === undefined || service === null) return {};
+      try {
+        const result = await service.readStates({ sessionIds: ids });
+        if (result === undefined || result === null || !result.ok) return {};
+        const value = result.value === undefined || result.value === null ? {} : result.value;
+        const states = value.states;
+        return states !== null && typeof states === 'object' && !Array.isArray(states) ? states : {};
+      } catch {
+        return {};
       }
     }
 
@@ -455,6 +489,7 @@ window.__ModuleLoader__.load({
       writeBindings,
       waitForService,
       pullDispatchVisual,
+      readDispatchStates,
       createDispatchSync,
     };
   },

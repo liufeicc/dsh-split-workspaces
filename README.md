@@ -214,6 +214,8 @@ deleting an arrow revokes the authorization. There is no second configuration: t
 permission.
 
 - **Draw one**: drag from the dot on a card's right edge onto another card.
+- **See the content**: click a card to open that session in a floating window — draggable,
+  accepting input, and leaving the design canvas in place.
 - **Delete one**: click the small cross at the arrow's midpoint.
 - **Sessions, not panes**: the same session opened in two panes still has one card, and
   closing a pane never deletes an arrow. Only deleting the session drops its edges.
@@ -226,9 +228,23 @@ permission.
   unwired when that arrow is deleted. Sessions **with content** that belong to no registered
   workspace go into an "unknown workspace" group at the end; blank sessions with no workspace
   home are left out — they are just unused "New session" shells, and listing them would add a
-  phantom group of identically named "Untitled session" rows.
+  phantom group of identically named "Untitled session" rows. A blank session that *does* have
+  a workspace home is listed only **while it is open in a pane**: the platform persists a blank
+  session record the moment it is created, so older unused shells would otherwise fill the
+  picker with identical names.
 - **Wire after dropping**: on the canvas, drag from a card's right-edge light dot onto another
   card to create a relation; the × at the top-right of an unwired card removes it from the canvas.
+- **Card status**: each card shows that session's own goal state (goal running / paused /
+  blocked / complete) and review state (review needed / awaiting review), **whether or not it
+  has arrows**. The Host synthesizes both; the card refreshes every 1.5 s while design mode is
+  open.
+- **Floating panes**: clicking a card opens that session in a floating window — draggable, and
+  several can be open at once. It keeps the composer, goal bar, preset / MCP / SKILL controls
+  and view tabs; the **session name is read-only** (no switching), and workspace replace, split
+  and the title-bar close icon are not offered (close with the floating bar). All four edges
+  and all four corners resize it (the top strip's topmost few pixels grow it upward; the rest
+  of the strip still moves it). Floating panes are never written into the saved layout and
+  close automatically when you switch back to tile mode.
 - **Trees stack as whole blocks**: when several disconnected trees exist, each tree is laid out
   on its own and the next tree starts below the previous tree's bottom edge, so arrows and
   notes from different trees never interleave.
@@ -509,8 +525,8 @@ visual only — delivery, waiting and reviews are unchanged.
   nothing. **The one exception is Design mode's left-hand session picker**: blank sessions are
   listed there (and can be wired into the graph) because "create the target first, wire it,
   then dispatch work into it" is a real workflow; a blank node is also kept when the graph is
-  saved and restored. Only a blank session that belongs to a workspace is listed this way;
-  an orphaned blank shell is not.
+  saved and restored. Only a blank session that belongs to a workspace and is **currently open
+  in a pane** is listed this way; an orphaned or unopened blank shell is not.
 - **`New session` reuses a blank session first**: when this workspace already has a blank
   session that no other pane is pinned to, the pane switches to it right away (still applying
   the pane's staged mode) instead of asking the Host to create another empty record; only when
@@ -935,7 +951,8 @@ the whole implementation.
   plus the bezier path, pane edge points, board edge points and client polling wiring.
 - `test/graph-contract.mjs` — offline contract tests for the delegation graph
   (`node test/graph-contract.mjs`): the pure model's three layers, the `paneDispatch` namespace
-  and codec shape, the binding-sync diff, and the really rendered mode switch / cards / arrows.
+  and codec shape, the binding-sync diff, and the really rendered mode switch / card-state
+  badges / floating panes (open, close, outside the board layout) / arrows.
 - `test/skill-contract.mjs` — offline contract tests for the SKILL switch
   (`node test/skill-contract.mjs`): two deliberate product decisions — the button is absent when
   the skill service is not mounted, and an empty directory gets a pointer to where skills live

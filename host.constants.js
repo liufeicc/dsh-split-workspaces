@@ -24,6 +24,8 @@ export const REMOTE_MARKERS = Object.freeze({
     Object.freeze({ method: 'set', invocation: Object.freeze({ kind: 'direct' }) }),
     // 派单视觉事件：客户端每 300ms 取一次增量，用来播放「光点从主窗格飞到目标窗格」。
     Object.freeze({ method: 'pullVisual', invocation: Object.freeze({ kind: 'direct' }) }),
+    // 任务分派卡片状态：目标阶段与待审核计数，客户端按需轮询。
+    Object.freeze({ method: 'readStates', invocation: Object.freeze({ kind: 'direct' }) }),
     // 布局持久化：桌面版重启后端口会变，localStorage 的 origin 读不到旧数据，
     // 所以布局必须跟着 profile 落到 Host 的 storages 下。
     Object.freeze({ method: 'readLayout', invocation: Object.freeze({ kind: 'direct' }) }),

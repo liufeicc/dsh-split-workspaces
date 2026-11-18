@@ -248,7 +248,7 @@ window.__ModuleLoader__.load({
        * 只有 `.dshSplitWs_paneBody` 用它和深色底混出内容区底色。这样「换背景色」
        * 和「换标题栏样式」是两件互不牵连的事，将来改任何一边都不会互相打脸。
        */
-      function PaneFrame({ pane, grow, tint, workspace, workspaceChoices = [], replaceChoices = [], workspaceSessions = new Map(), reusableBlankByWorkspace = new Map(), rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
+      function PaneFrame({ pane, grow, tint, workspace, workspaceChoices = [], replaceChoices = [], workspaceSessions = new Map(), reusableBlankByWorkspace = new Map(), rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, floating = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
@@ -849,7 +849,11 @@ window.__ModuleLoader__.load({
          * @param event - 点击事件；只用到它的落点。
          */
         const activate = (event) => {
-          paneActions.setActive(pane.key);
+          /*
+           * 浮窗不在棋盘布局里，点它不能把 activeKey 改成浮窗 key —— 否则切回平铺时
+           * 没有哪一格是 active。焦点照常送进输入框（后半段）。
+           */
+          if (floating !== true) paneActions.setActive(pane.key);
           /*
            * 刚拖完的那一次 click 不抢键盘光标：光标已经由拖动收尾在下一帧安放进这个
            * 窗格（那时 DOM 才搬到新位置）。不挡的话，它会在同一个任务里对**还没搬走**
@@ -903,8 +907,10 @@ window.__ModuleLoader__.load({
            * 为什么做成「每格一个图标」而不是面板顶部的一个按钮：替换是一格自己的事，
            * 按钮就在那一格身上，于是永远不必再回答「替哪一格」——省掉一层
            * 「先选窗格」的菜单，也不会点错格子。位置语义见 renderReplaceMenu。
+           *
+           * 浮窗里不提供：浮窗对应的是「点开的这张卡片」，换工作区会让它与卡片对不上。
            */
-          h(Popover, {
+          ...(floating ? [] : [h(Popover, {
             key: 'replace',
             icon: h(ReplaceGlyph, null),
             title: t('pane.replaceHint'),
@@ -920,13 +926,16 @@ window.__ModuleLoader__.load({
               // 关闭时回到第一级；下次打开不会停在上次那个工作区的会话列表里。
               if (next !== true) setReplaceTarget(null);
             },
-          }, renderReplaceMenu),
+          }, renderReplaceMenu)]),
           /*
            * 分屏：一个图标按钮弹出两段菜单（方向 → 工作区）。
            *
            * 触发器上的图标跟着已选方向走，第二步里一眼能看出这次是往哪边切。
+           *
+           * 浮窗里不提供分屏：浮窗没有棋盘位置，分出来的格子只会进平铺布局，
+           * 用户会以为它应该在浮窗内部。
            */
-          h(Popover, {
+          ...(floating ? [] : [h(Popover, {
             key: 'split',
             icon: h(SplitGlyph, { direction: splitDirection ?? 'right' }),
             title: t('pane.splitHint'),
@@ -936,7 +945,7 @@ window.__ModuleLoader__.load({
               setSplitOpen(next);
               if (next !== true) setSplitDirection(null);
             },
-          }, renderSplitMenu),
+          }, renderSplitMenu)]),
         ];
         if (presetOptions.length > 0) {
           headChildren.push(h(Popover, {
@@ -1064,74 +1073,87 @@ window.__ModuleLoader__.load({
             onReload: () => paneActions.loadSkills(),
           }));
         }
-        headChildren.push(h(Popover, {
-          key: 'session',
-          label: sessionLabel,
-          title: t('pane.switchSession'),
-          align: 'end',
-          disabled: rows.length === 0 && sessionId === undefined,
-        }, (close) => [
-          h(MenuItem, {
-            key: 'new',
-            label: busy ? t('pane.creating') : t('pane.createSession'),
+        if (floating === true) {
+          /*
+           * 浮窗固定显示打开时那个会话，不给切换入口：只用一段静态文字标出是哪段对话。
+           */
+          headChildren.push(h('span', {
+            key: 'session',
+            className: css.sessionLabel,
+            title: sessionLabel,
+          }, sessionLabel));
+        } else {
+          headChildren.push(h(Popover, {
+            key: 'session',
+            label: sessionLabel,
+            title: t('pane.switchSession'),
+            align: 'end',
+            disabled: rows.length === 0 && sessionId === undefined,
+          }, (close) => [
+            h(MenuItem, {
+              key: 'new',
+              label: busy ? t('pane.creating') : t('pane.createSession'),
+              onClick: () => {
+                close();
+                createSession();
+              },
+            }),
+            ...rows.map((row) => {
+              const label = row.displayTitle === undefined || row.displayTitle === '' ? t('pane.untitled') : row.displayTitle;
+              /*
+               * 每个会话一行，行尾一个垃圾桶按钮：左边那半还是「切到这个会话」，
+               * 右边那半是「永久删掉它」。
+               *
+               * 为什么删除做在**每一行**上，而不是菜单底部一个「删除会话」：菜单里摆的就是
+               * 一列会话，「删哪一个」在那一行上问最直接。底部放一个按钮，用户得先自己
+               * 推出「它删的是我正看着的那一个」—— 而他想清的往往正是**别的**那一行。
+               *
+               * 两个按钮必须平级：`MenuItem` 自己就是 <button>，把图标按钮塞进去是无效
+               * HTML（浏览器会把内层拆到外面），点击落到谁身上就说不准了。
+               */
+              return h('div', { key: row.id, className: css.menuRow },
+                h(MenuItem, {
+                  label,
+                  // 列表里只会有真实对话（空白会话被 selectableSessions 过滤掉了），
+                  // 因此行尾只提示「运行中」这一种状态。
+                  hint: row.running === true ? t('pane.running') : undefined,
+                  active: row.id === sessionId,
+                  onClick: () => {
+                    close();
+                    paneActions.setSession(pane.key, row.id);
+                  },
+                }),
+                // 会话名进按钮的提示语：一列里好几个垃圾桶，只靠位置分不清删的是哪一个。
+                h(MenuDeleteButton, {
+                  label: t('pane.deleteSessionNamed', { title: label }),
+                  onClick: () => {
+                    close();
+                    requestDeleteSession(row.id, row.displayTitle);
+                  },
+                }));
+            }),
+          ]));
+        }
+        if (floating !== true) {
+          headChildren.push(h('button', {
+            key: 'close',
+            type: 'button',
+            className: css.iconButton,
+            title: t('pane.close'),
+            'aria-label': t('pane.close'),
             onClick: () => {
-              close();
-              createSession();
+              /*
+               * 关掉的是当前窗格时，焦点会交给顶替它位置的窗格（存储算好并返回），
+               * 光标也要跟过去 —— 但必须等一帧，理由见 `focusAfterCommit`。
+               * 关掉的不是当前窗格时没有接手者，光标原地不动。
+               */
+              const survivor = paneActions.removePane(pane.key);
+              if (survivor === undefined || survivor === null) return;
+              focusAfterCommit(currentDocument(), survivor);
             },
-          }),
-          ...rows.map((row) => {
-            const label = row.displayTitle === undefined || row.displayTitle === '' ? t('pane.untitled') : row.displayTitle;
-            /*
-             * 每个会话一行，行尾一个垃圾桶按钮：左边那半还是「切到这个会话」，
-             * 右边那半是「永久删掉它」。
-             *
-             * 为什么删除做在**每一行**上，而不是菜单底部一个「删除会话」：菜单里摆的就是
-             * 一列会话，「删哪一个」在那一行上问最直接。底部放一个按钮，用户得先自己
-             * 推出「它删的是我正看着的那一个」—— 而他想清的往往正是**别的**那一行。
-             *
-             * 两个按钮必须平级：`MenuItem` 自己就是 <button>，把图标按钮塞进去是无效
-             * HTML（浏览器会把内层拆到外面），点击落到谁身上就说不准了。
-             */
-            return h('div', { key: row.id, className: css.menuRow },
-              h(MenuItem, {
-                label,
-                // 列表里只会有真实对话（空白会话被 selectableSessions 过滤掉了），
-                // 因此行尾只提示「运行中」这一种状态。
-                hint: row.running === true ? t('pane.running') : undefined,
-                active: row.id === sessionId,
-                onClick: () => {
-                  close();
-                  paneActions.setSession(pane.key, row.id);
-                },
-              }),
-              // 会话名进按钮的提示语：一列里好几个垃圾桶，只靠位置分不清删的是哪一个。
-              h(MenuDeleteButton, {
-                label: t('pane.deleteSessionNamed', { title: label }),
-                onClick: () => {
-                  close();
-                  requestDeleteSession(row.id, row.displayTitle);
-                },
-              }));
-          }),
-        ]));
-        headChildren.push(h('button', {
-          key: 'close',
-          type: 'button',
-          className: css.iconButton,
-          title: t('pane.close'),
-          'aria-label': t('pane.close'),
-          onClick: () => {
-            /*
-             * 关掉的是当前窗格时，焦点会交给顶替它位置的窗格（存储算好并返回），
-             * 光标也要跟过去 —— 但必须等一帧，理由见 `focusAfterCommit`。
-             * 关掉的不是当前窗格时没有接手者，光标原地不动。
-             */
-            const survivor = paneActions.removePane(pane.key);
-            if (survivor === undefined || survivor === null) return;
-            focusAfterCommit(currentDocument(), survivor);
-          },
-        }, h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
-          h('path', { d: 'M4 4l8 8M12 4l-8 8', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }))));
+          }, h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+            h('path', { d: 'M4 4l8 8M12 4l-8 8', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round' }))));
+        }
 
         /*
          * 出错提示与对话本体同样带 key，出错提示出现/消失也不会挪动对话本体的位置。
@@ -1149,12 +1171,15 @@ window.__ModuleLoader__.load({
            * `pointercancel` 与 `lostpointercapture` 都当「放弃这次拖动」：
            * 前者是系统收回指针（触摸被手势接管），后者是指针捕获被夺走，
            * 两种情况下都不该留下半截拖动状态。
+           *
+           * 浮窗不在棋盘里，没有「交换位置」可做；它的拖动由浮窗外层的拖动条负责，
+           * 所以这里整组不绑，免得两套拖动抢同一个手势。
            */
-          onPointerDown: onHeadPointerDown,
-          onPointerMove: onHeadPointerMove,
-          onPointerUp: onHeadPointerUp,
-          onPointerCancel: onHeadPointerCancel,
-          onLostPointerCapture: onHeadPointerCancel,
+          onPointerDown: floating === true ? undefined : onHeadPointerDown,
+          onPointerMove: floating === true ? undefined : onHeadPointerMove,
+          onPointerUp: floating === true ? undefined : onHeadPointerUp,
+          onPointerCancel: floating === true ? undefined : onHeadPointerCancel,
+          onLostPointerCapture: floating === true ? undefined : onHeadPointerCancel,
         }, headChildren)];
         if (error !== null) paneChildren.push(h('div', { key: 'error', className: css.paneError }, error));
         paneChildren.push(h('div', { key: 'body', className: css.paneBody },
@@ -1166,6 +1191,7 @@ window.__ModuleLoader__.load({
         return h('section', {
           className: css.pane,
           'data-pane': pane.key,
+          'data-floating': floating === true ? 'true' : 'false',
           'data-active': active === true ? 'true' : 'false',
           /*
            * 两个视觉标记只管拖动这一件事：
@@ -1197,9 +1223,9 @@ window.__ModuleLoader__.load({
            *     Tab 的落点是浏览器的地盘，落到标题栏按钮上是用户想用键盘走一遍标题栏，
            *     落到会话区里别的可聚焦元素上也可能是有意为之，抢走等于毁掉键盘可达性。
            */
-          onPointerDownCapture: () => paneActions.setActive(pane.key),
+          onPointerDownCapture: floating === true ? undefined : () => paneActions.setActive(pane.key),
           onClickCapture: activate,
-          onFocusCapture: () => paneActions.setActive(pane.key),
+          onFocusCapture: floating === true ? undefined : () => paneActions.setActive(pane.key),
         }, paneChildren);
       }
       PaneFrame.displayName = 'PaneFrame';

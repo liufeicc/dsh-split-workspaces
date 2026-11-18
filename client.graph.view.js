@@ -70,6 +70,31 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 把 Host 读回的卡片状态翻成界面徽标。
+     *
+     * 状态来源有两块（见 Host 的 `readStates`）：
+     *   - `goal`：这个会话自己的目标阶段（running / paused / blocked / complete）；
+     *   - `reviewOwned` / `reviewWaiting`：待审核关系里自己作为发起方/目标的计数。
+     *
+     * 「不管有没有连线都显示」：这里只关心会话自己的状态，不要求它在图里有什么边。
+     *
+     * @param state - `{ goal, reviewOwned, reviewWaiting }`，可能 undefined。
+     * @param t - 翻译函数。
+     * @returns `[{ key, label, tone }]`。
+     */
+    function stateBadges(state, t) {
+      if (state === undefined || state === null || typeof state !== 'object') return [];
+      const badges = [];
+      if (state.goal === 'running') badges.push({ key: 'goal-running', label: t('graph.goalRunning'), tone: 'running' });
+      else if (state.goal === 'paused') badges.push({ key: 'goal-paused', label: t('graph.goalPaused'), tone: 'paused' });
+      else if (state.goal === 'blocked') badges.push({ key: 'goal-blocked', label: t('graph.goalBlocked'), tone: 'blocked' });
+      else if (state.goal === 'complete') badges.push({ key: 'goal-complete', label: t('graph.goalComplete'), tone: 'complete' });
+      if (Number(state.reviewOwned) > 0) badges.push({ key: 'review-owned', label: t('graph.reviewOwned'), tone: 'review' });
+      if (Number(state.reviewWaiting) > 0) badges.push({ key: 'review-waiting', label: t('graph.reviewWaiting'), tone: 'review' });
+      return badges;
+    }
+
+    /**
      * 左侧的二级会话选择器。
      *
      * 第一级是工作区（默认**全部折叠**，一行一个），点开后才列出该工作区的会话；
@@ -83,7 +108,7 @@ window.__ModuleLoader__.load({
      * @param props.dragMime - 拖拽时写入的私有 MIME。
      */
     function GraphPicker(props) {
-      const { groups, onStage, t, css, cx, dragMime } = props;
+      const { groups, onStage, t, css, cx, dragMime, states } = props;
       /** 展开的工作区 key 集合；默认全折叠，先让用户选工作区。 */
       const [open, setOpen] = useState(() => new Set());
       const toggle = (key) => {
@@ -132,50 +157,61 @@ window.__ModuleLoader__.load({
               'aria-hidden': true,
             })),
           expanded ? h('div', { key: 'items', className: css.graphPickerItems },
-            group.items.map((item) => h('div', {
-              key: item.key,
-              className: css.graphPickerItem,
-              style: { '--pick-accent': accent },
-              role: 'button',
-              tabIndex: 0,
-              draggable: true,
-              'data-session': item.key,
-              title: t('graph.pickerItemHint', { title: item.label }),
-              onDragStart: (event) => {
-                event.dataTransfer.setData(dragMime, item.key);
-                event.dataTransfer.setData('text/plain', item.key);
-                event.dataTransfer.effectAllowed = 'copy';
+            group.items.map((item) => {
+              const badges = stateBadges(states === undefined || states === null ? undefined : states[item.key], t);
+              return h('div', {
+                key: item.key,
+                className: css.graphPickerItem,
+                style: { '--pick-accent': accent },
+                role: 'button',
+                tabIndex: 0,
+                draggable: true,
+                'data-session': item.key,
+                title: t('graph.pickerItemHint', { title: item.label }),
+                onDragStart: (event) => {
+                  event.dataTransfer.setData(dragMime, item.key);
+                  event.dataTransfer.setData('text/plain', item.key);
+                  event.dataTransfer.effectAllowed = 'copy';
+                },
+                onClick: () => onStage(item.key),
+                onKeyDown: (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  onStage(item.key);
+                },
               },
-              onClick: () => onStage(item.key),
-              onKeyDown: (event) => {
-                if (event.key !== 'Enter' && event.key !== ' ') return;
-                event.preventDefault();
-                onStage(item.key);
-              },
-            },
-              h('div', { key: 'top', className: css.graphPickerCardTop },
-                h('span', { key: 'ws', className: css.graphPickerCardWorkspace }, item.workspaceTitle),
-                item.running === true
-                  ? h('span', { key: 'run', className: css.graphPickerCardRun, title: t('pane.running') })
-                  : null),
-              h('div', { key: 'label', className: css.graphPickerCardTitle }, item.label),
-              h('div', { key: 'hint', className: css.graphPickerCardHint },
-                h('span', { key: 'text', className: css.graphPickerCardHintText }, t('graph.pickerDrag')),
-                h('svg', {
-                  key: 'arrow',
-                  className: css.graphPickerCardArrow,
-                  width: 12,
-                  height: 12,
-                  viewBox: '0 0 12 12',
-                  'aria-hidden': true,
-                }, h('path', {
-                  d: 'M3 9L9 3M4.2 3H9v4.8',
-                  fill: 'none',
-                  stroke: 'currentColor',
-                  strokeWidth: 1.2,
-                  strokeLinecap: 'round',
-                  strokeLinejoin: 'round',
-                })))))) : null));
+                h('div', { key: 'top', className: css.graphPickerCardTop },
+                  h('span', { key: 'ws', className: css.graphPickerCardWorkspace }, item.workspaceTitle),
+                  badges.length > 0
+                    ? h('span', {
+                      key: 'state',
+                      className: css.graphPickerCardState,
+                      'data-tone': badges[0].tone,
+                    }, badges[0].label)
+                    : null,
+                  item.running === true
+                    ? h('span', { key: 'run', className: css.graphPickerCardRun, title: t('pane.running') })
+                    : null),
+                h('div', { key: 'label', className: css.graphPickerCardTitle }, item.label),
+                h('div', { key: 'hint', className: css.graphPickerCardHint },
+                  h('span', { key: 'text', className: css.graphPickerCardHintText }, t('graph.pickerDrag')),
+                  h('svg', {
+                    key: 'arrow',
+                    className: css.graphPickerCardArrow,
+                    width: 12,
+                    height: 12,
+                    viewBox: '0 0 12 12',
+                    'aria-hidden': true,
+                  }, h('path', {
+                    d: 'M3 9L9 3M4.2 3H9v4.8',
+                    fill: 'none',
+                    stroke: 'currentColor',
+                    strokeWidth: 1.2,
+                    strokeLinecap: 'round',
+                    strokeLinejoin: 'round',
+                  }))));
+              })
+            ) : null));
       }
 
       return h('aside', { className: css.graphPicker },
@@ -231,7 +267,7 @@ window.__ModuleLoader__.load({
      * @param props.degraded - 绑定服务没就绪时为真，画布顶部给一行说明。
      */
     function GraphBoard(props) {
-      const { cards: cardList, edges, layout, graph, actions, pickerGroups, t, css, cx, degraded, diagnostic } = props;
+      const { cards: cardList, states, edges, layout, graph, actions, pickerGroups, t, css, cx, degraded, diagnostic } = props;
       const canvasRef = useRef(null);
       /** 正在拉的那条线：`{ from, x, y }`，`x` / `y` 是画布坐标。 */
       const [drag, setDrag] = useState(null);
@@ -371,6 +407,7 @@ window.__ModuleLoader__.load({
          */
         const isStaged = item.staged === true;
         const label = card.label === undefined || card.label === '' ? t('pane.untitled') : card.label;
+        const badges = stateBadges(states === undefined || states === null ? undefined : states[card.key], t);
         return h('div', {
           key: card.key,
           className: css.graphCard,
@@ -386,13 +423,11 @@ window.__ModuleLoader__.load({
           'data-running': card.running === true ? 'true' : 'false',
           'data-staged': isStaged ? 'true' : 'false',
           /*
-           * 点卡片 = 「去平铺里看这个会话」。这个会话没在任何窗格里打开时点了没意义，
-           * 卡片的悬停提示会如实说明（而不是假装能跳过去）。
+           * 点卡片 = 打开这张卡片对应会话的浮动窗格（输入、切会话都照旧）。
+           * 不再切回平铺：任务分派里点开一段对话看细节，不该把画布本身关掉。
            */
-          onClick: card.inPane === true ? () => actions.openPane(card.key) : undefined,
-          title: isStaged
-            ? t('graph.stagedHint')
-            : (card.inPane === true ? t('graph.openHint') : t('graph.noSessionHint')),
+          onClick: () => actions.openFloating(card.key),
+          title: isStaged ? t('graph.stagedHint') : t('graph.openFloatingHint'),
         },
           h('div', { key: 'ws', className: css.graphCardWorkspace }, card.workspaceTitle),
           h('div', { key: 'title', className: css.graphCardTitle }, label),
@@ -400,6 +435,11 @@ window.__ModuleLoader__.load({
             card.running === true
               ? h('span', { key: 'dot', className: css.graphCardRunning }, t('pane.running'))
               : null,
+            badges.map((badge) => h('span', {
+              key: badge.key,
+              className: css.graphCardState,
+              'data-tone': badge.tone,
+            }, badge.label)),
             isStaged
               ? h('span', { key: 'staged', className: css.graphCardStaged }, t('graph.stagedBadge'))
               : null),
@@ -592,6 +632,7 @@ window.__ModuleLoader__.load({
         h('div', { className: css.graphBody },
           h(GraphPicker, {
             groups: pickerGroups,
+            states,
             onStage: actions.stageSession,
             t,
             css,

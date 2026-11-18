@@ -167,6 +167,8 @@ window.__ModuleLoader__.load({
       const panes = [];
       for (const pane of snapshot.panes) {
         if (pane === null || typeof pane !== 'object') continue;
+        // 浮窗只是屏幕上临时开着的窗格，不属于棋盘布局，不能写进保存结构。
+        if (pane.floating === true) continue;
         if (typeof pane.key !== 'string' || pane.key === '') continue;
         if (typeof pane.workspaceId !== 'string' || pane.workspaceId === '') continue;
         const workspace = typeof workspaceById?.get === 'function'

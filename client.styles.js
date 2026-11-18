@@ -38,7 +38,36 @@ window.__ModuleLoader__.load({
       // 本面板的强调色变量：优先用主题的蓝色强调 token，取不到时退回同色系的静态蓝，
       // 绝不退回 --dsw-alias-brand-primary（它在深色主题里是近白的中性填充色，会白底白字）。
       // 平铺面板的标题、按钮、菜单也用这套字体；会话正文由上面那条全局规则统一负责。
-      '.dshSplitWs_root{--dshSplitWs-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-static-deepseek-500));--dsw-font-family:"SplitWorkspaceKuaile","ZCOOL KuaiLe","Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;box-sizing:border-box;display:flex;flex-direction:column;height:100%;min-width:0;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}',
+      '.dshSplitWs_root{--dshSplitWs-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-static-deepseek-500));--dsw-font-family:"SplitWorkspaceKuaile","ZCOOL KuaiLe","Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;box-sizing:border-box;position:relative;display:flex;flex-direction:column;height:100%;min-width:0;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}',
+      // 任务分派浮窗：绝对定位在面板内，拖动条负责移动，PaneFrame 负责全部会话交互。
+      '.dshSplitWs_floatingPane{position:absolute;display:flex;flex-direction:column;border:1px solid rgba(94,231,255,.35);border-radius:14px;background:var(--dsw-alias-bg-layer-1,#0b1422);box-shadow:0 24px 60px rgba(0,0,0,.55),0 0 0 1px rgba(94,231,255,.08);overflow:hidden}',
+      '.dshSplitWs_floatingBar{flex:none;display:flex;align-items:center;gap:8px;height:26px;padding:0 14px 0 12px;background:linear-gradient(90deg,rgba(94,231,255,.12),rgba(167,139,250,.08));border-bottom:1px solid rgba(94,231,255,.16);color:var(--dsw-alias-label-primary,#e7f7ff);font-size:11px;cursor:move;user-select:none;touch-action:none}',
+      '.dshSplitWs_floatingTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.05em}',
+      '.dshSplitWs_floatingClose{flex:none;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#8fa8bf);font:inherit;font-size:15px;line-height:18px;cursor:pointer}',
+      '.dshSplitWs_floatingClose:hover{background:rgba(255,107,138,.16);color:#ff8aa0}',
+      /*
+       * 内容层显式建立独立层叠上下文（position + z-index:0）：
+       * 平台输入框/滚动区内部可能带很高的 z-index，若这里不隔离，那些元素会直接
+       * 跟缩放热区在同一个上下文里比大小，把浮窗底部的热区盖住 —— 表现就是
+       * 「左边/右边能拖，底部和左下角拖不动」。
+       */
+      '.dshSplitWs_floatingBody{position:relative;z-index:0;flex:1;min-height:0;display:flex}',
+      '.dshSplitWs_floatingBody .dshSplitWs_pane{flex:1;height:100%;min-height:0;border-radius:0}',
+      // 缩放热区：四条边 + 四个角。顶部条本身仍用于移动，只有最上面 5px 是 n 缩放，
+      // 左右上角分别让出 12px 给 ne/nw，避免和条上的关闭按钮/标题抢点击。
+      // z-index 必须高于内容层（0）一个数量级，否则会被会话视图里的高 z-index 元素吃掉。
+      '.dshSplitWs_floatResize{position:absolute;z-index:20;touch-action:none;background:transparent}',
+      '.dshSplitWs_floatResize[data-dir=e]{top:14px;right:0;bottom:16px;width:9px;cursor:ew-resize}',
+      '.dshSplitWs_floatResize[data-dir=w]{top:14px;left:0;bottom:16px;width:9px;cursor:ew-resize}',
+      '.dshSplitWs_floatResize[data-dir=s]{left:16px;right:16px;bottom:0;height:10px;cursor:ns-resize}',
+      '.dshSplitWs_floatResize[data-dir=n]{top:0;left:12px;right:12px;height:5px;cursor:ns-resize}',
+      '.dshSplitWs_floatResize[data-dir=se]{right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize}',
+      '.dshSplitWs_floatResize[data-dir=sw]{left:0;bottom:0;width:16px;height:16px;cursor:nesw-resize}',
+      '.dshSplitWs_floatResize[data-dir=ne]{right:0;top:0;width:12px;height:12px;cursor:nesw-resize}',
+      '.dshSplitWs_floatResize[data-dir=nw]{left:0;top:0;width:12px;height:12px;cursor:nwse-resize}',
+      '.dshSplitWs_floatResize:hover{background:rgba(94,231,255,.22)}',
+      '.dshSplitWs_floatResize[data-dir=se]::after{content:"";position:absolute;right:3px;bottom:3px;width:7px;height:7px;border-right:1px solid rgba(94,231,255,.6);border-bottom:1px solid rgba(94,231,255,.6)}',
+      '.dshSplitWs_floatResize[data-dir=sw]::after{content:"";position:absolute;left:3px;bottom:3px;width:7px;height:7px;border-left:1px solid rgba(94,231,255,.6);border-bottom:1px solid rgba(94,231,255,.6)}',
       '.dshSplitWs_head{flex:none;display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:14px 20px 10px;border-bottom:.5px solid var(--dsw-alias-border-l1)}',
       '[data-platform=darwin] .dshSplitWs_head{padding-top:calc(14px + var(--dsh-frame-top-clearance,0px))}',
       '.dshSplitWs_headMain{min-width:0}',
@@ -143,6 +172,8 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_trigger:disabled{opacity:.5;cursor:default}',
       '.dshSplitWs_triggerOpen{border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}',
       '.dshSplitWs_triggerLabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      // 浮窗标题栏里的会话名：只读，长得像触发器但没有下拉与点击。
+      '.dshSplitWs_sessionLabel{display:inline-flex;align-items:center;max-width:190px;height:26px;padding:0 6px;color:var(--dsw-alias-label-secondary);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       // 焦点标题栏里的模式/会话触发器：同样只继承标题栏颜色（黑底白字，见上面那段说明），
       // 键盘焦点圈也改成 currentColor 才看得见。
       '.dshSplitWs_pane[data-active=true] .dshSplitWs_trigger{color:inherit;opacity:.9}',
@@ -264,9 +295,17 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphCardEmpty:hover{border-color:var(--dsw-alias-border-l1)}',
       '.dshSplitWs_graphCardWorkspace{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.dshSplitWs_graphCardTitle{font-size:13px;line-height:19px;font-weight:550;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}',
-      '.dshSplitWs_graphCardMeta{display:flex;align-items:center;gap:6px;margin-top:auto;font-size:11px;line-height:16px}',
+      '.dshSplitWs_graphCardMeta{display:flex;align-items:center;gap:6px;margin-top:auto;font-size:11px;line-height:16px;flex-wrap:wrap}',
       '.dshSplitWs_graphCardRunning{color:var(--dshSplitWs-accent)}',
       '.dshSplitWs_graphCardStaged{color:var(--dshSplitWs-accent)}',
+      // 目标/审核状态徽标：同一套胶囊，颜色由 data-tone 决定。
+      '.dshSplitWs_graphCardState{flex:none;padding:0 6px;border:1px solid currentColor;border-radius:999px;font-size:10px;line-height:14px;opacity:.92}',
+      '.dshSplitWs_graphPickerCardState{flex:none;margin-left:auto;padding:0 5px;border:1px solid currentColor;border-radius:999px;font-size:9px;line-height:13px;opacity:.9}',
+      '.dshSplitWs_graphCardState[data-tone=running],.dshSplitWs_graphPickerCardState[data-tone=running]{color:#5ee7ff}',
+      '.dshSplitWs_graphCardState[data-tone=paused],.dshSplitWs_graphPickerCardState[data-tone=paused]{color:#ffd166}',
+      '.dshSplitWs_graphCardState[data-tone=blocked],.dshSplitWs_graphPickerCardState[data-tone=blocked]{color:#ff7a8a}',
+      '.dshSplitWs_graphCardState[data-tone=complete],.dshSplitWs_graphPickerCardState[data-tone=complete]{color:#6ef0b8}',
+      '.dshSplitWs_graphCardState[data-tone=review],.dshSplitWs_graphPickerCardState[data-tone=review]{color:#c4a7ff;background:rgba(167,139,250,.1)}',
       // 待连线卡片右上角的「移出画布」。平时淡一点，悬停/聚焦时清楚起来。
       '.dshSplitWs_graphCardRemove{position:absolute;top:5px;right:5px;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;line-height:18px;text-align:center;cursor:pointer;opacity:.7}',
       '.dshSplitWs_graphCardRemove:hover{opacity:1;color:var(--dsw-alias-label-primary)}',
@@ -798,6 +837,12 @@ window.__ModuleLoader__.load({
     /** class 名对照表：组件里统一用这里的名字，避免散落的裸字符串。 */
     const css = {
       root: 'dshSplitWs_root',
+      floatingPane: 'dshSplitWs_floatingPane',
+      floatingBar: 'dshSplitWs_floatingBar',
+      floatingTitle: 'dshSplitWs_floatingTitle',
+      floatingClose: 'dshSplitWs_floatingClose',
+      floatingBody: 'dshSplitWs_floatingBody',
+      floatResize: 'dshSplitWs_floatResize',
       head: 'dshSplitWs_head',
       headMain: 'dshSplitWs_headMain',
       title: 'dshSplitWs_title',
@@ -837,6 +882,7 @@ window.__ModuleLoader__.load({
       trigger: 'dshSplitWs_trigger',
       triggerOpen: 'dshSplitWs_triggerOpen',
       triggerLabel: 'dshSplitWs_triggerLabel',
+      sessionLabel: 'dshSplitWs_sessionLabel',
       popoverList: 'dshSplitWs_popoverList',
       menuItem: 'dshSplitWs_menuItem',
       menuItemActive: 'dshSplitWs_menuItemActive',
@@ -906,6 +952,8 @@ window.__ModuleLoader__.load({
       graphCardMeta: 'dshSplitWs_graphCardMeta',
       graphCardRunning: 'dshSplitWs_graphCardRunning',
       graphCardStaged: 'dshSplitWs_graphCardStaged',
+      graphCardState: 'dshSplitWs_graphCardState',
+      graphPickerCardState: 'dshSplitWs_graphPickerCardState',
       graphCardRemove: 'dshSplitWs_graphCardRemove',
       graphPort: 'dshSplitWs_graphPort',
       graphEmpty: 'dshSplitWs_graphEmpty',

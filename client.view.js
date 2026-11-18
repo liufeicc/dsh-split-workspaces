@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
      * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
      * 正是「无法确认浏览器到底加载了哪一版」。
      */
-    const CLIENT_BUILD = '2026-11-18d';
+    const CLIENT_BUILD = '2026-11-18j';
 
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
@@ -867,6 +867,9 @@ window.__ModuleLoader__.load({
               workspaceTitle: workspace === undefined ? t('pane.unknownWorkspace') : workspace.title,
               running: row.running === true,
               inPane: inPane.has(row.id),
+              // 空白会话（建了但没输入内容）要区分“当前真的开在窗格里”与历史空壳，
+              // 见 `pickerGroups` 的过滤条件。
+              blank: row.blank === true,
             };
           });
         }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t]);
@@ -937,6 +940,12 @@ window.__ModuleLoader__.load({
          *
          * 分组与字母排序交给模型（`groupSessionsByWorkspace`）；没有任何可选项的工作区
          * 整组隐藏，避免展开一个空组。
+         *
+         * **空白会话要额外过一道筛**：只列「当前确实开在平铺窗格里」的那一个。
+         * 平台每次新建会话都会立即落一个空白会话记录，历史上反复新建就会在每个工作区
+         * 攒下好几个「未命名会话」；它们没有内容、也没有用途，全列出来只会把左侧刷满。
+         * 当前打开的空白会话则是真实需求（先建目标再连线派活），必须留。已经连进图的
+         * 空白节点不受影响 —— 它本来就不在左侧列（被 connected 过滤），画布卡片照常渲染。
          */
         const pickerGroups = useMemo(() => {
           const connected = new Set();
@@ -950,7 +959,10 @@ window.__ModuleLoader__.load({
               label: group.label,
               items: group.items
                 .map((id) => graphCardById.get(id))
-                .filter((card) => card !== undefined && !connected.has(card.key) && !stagedSessions.has(card.key))
+                .filter((card) => card !== undefined
+                  && !connected.has(card.key)
+                  && !stagedSessions.has(card.key)
+                  && (card.blank !== true || card.inPane === true))
                 .map((card) => ({
                   key: card.key,
                   label: card.label,
@@ -994,23 +1006,6 @@ window.__ModuleLoader__.load({
            */
           Promise.resolve(graphActions.syncBindings(bindings)).catch(() => undefined);
         }, [bindings, graphActions, rosterReady]);
-
-        /**
-         * 任务分派里点一张卡片：切回平铺并聚焦「正在显示这个会话」的那一格。
-         *
-         * 一个会话可能同时开在好几格里，取第一格即可（用户想看的都是同一段对话）。
-         * 这个会话没在任何窗格里打开时什么也不做 —— 画布那边不会给出可点的提示。
-         */
-        const openPaneFromGraph = useCallback((sessionId) => {
-          for (const pane of panes) {
-            const plan = panePlan.get(pane.key);
-            if (plan !== undefined && plan.sessionId === sessionId) {
-              viewModeStore.setMode(graphModel.MODE_TILES);
-              paneActions.setActive(pane.key);
-              return;
-            }
-          }
-        }, [panes, panePlan, viewModeStore, graphModel, paneActions]);
 
         /** 渲染一个窗格元素；`grow` 是它在分屏里占的比例（整块棋盘上只有一个窗格时为空）。 */
         const renderPane = (pane, grow) => {
@@ -1125,6 +1120,214 @@ window.__ModuleLoader__.load({
         };
 
         /*
+         * 任务分派卡片的浮动窗格。
+         *
+         * 浮窗不是另写一套会话视图：它把同一个 PaneFrame 渲染进一个绝对定位的容器，
+         * 所以输入、切换/新建会话、替换工作区、标签栏全部照旧。它需要一个真实注册的
+         * pane key（见 `paneStore.addFloatingPane`），但不在布局树里，因此不占棋盘格子。
+         *
+         * 位置与层级只活在客户端 state：浮窗是临时视图，不写保存布局。
+         * 切回平铺模式时全部关闭，免得浮窗叠在棋盘上。
+         */
+        const [floatingPanes, setFloatingPanes] = useState([]);
+        /** 浮窗 z-index 只增不减：点一下哪张就把它提到最上层。 */
+        const floatingZ = useRef(1);
+        /** 面板根节点，用来把浮窗约束在可视区域内。 */
+        const rootRef = useRef(null);
+
+        const bringFloatingToFront = (paneKey) => {
+          const z = floatingZ.current++;
+          setFloatingPanes((current) => {
+            if (!current.some((entry) => entry.paneKey === paneKey)) return current;
+            return current.map((entry) => (entry.paneKey === paneKey ? { ...entry, z } : entry));
+          });
+        };
+
+        const closeFloatingPane = (paneKey) => {
+          paneActions.removeFloatingPane(paneKey);
+          setFloatingPanes((current) => current.filter((entry) => entry.paneKey !== paneKey));
+        };
+
+        /** 打开某张卡片对应的浮窗；同一会话已经开着时只置顶，不重复开。 */
+        const openFloatingPane = (sessionId, workspaceId) => {
+          if (typeof sessionId !== 'string' || sessionId === '') return;
+          const existing = floatingPanes.find((entry) => {
+            const plan = panePlan.get(entry.paneKey);
+            return plan !== undefined && plan.sessionId === sessionId;
+          });
+          if (existing !== undefined) {
+            bringFloatingToFront(existing.paneKey);
+            return;
+          }
+          let targetWorkspace = workspaceId;
+          if (typeof targetWorkspace !== 'string' || targetWorkspace === '') {
+            targetWorkspace = items.length > 0 ? items[0].workspaceId : undefined;
+          }
+          if (typeof targetWorkspace !== 'string' || targetWorkspace === '') return;
+          const paneKey = paneActions.addFloatingPane(targetWorkspace, sessionId);
+          if (typeof paneKey !== 'string' || paneKey === '') return;
+          const rect = rootRef.current !== null && rootRef.current !== undefined
+            && typeof rootRef.current.getBoundingClientRect === 'function'
+            ? rootRef.current.getBoundingClientRect()
+            : undefined;
+          const panelWidth = rect !== undefined && rect.width > 0 ? rect.width : 1200;
+          const panelHeight = rect !== undefined && rect.height > 0 ? rect.height : 800;
+          const width = Math.max(360, Math.min(760, Math.round(panelWidth - 120)));
+          const height = Math.max(320, Math.min(620, Math.round(panelHeight - 110)));
+          const offset = (floatingPanes.length % 6) * 26;
+          const x = Math.max(12, Math.min(panelWidth - width - 12, Math.round((panelWidth - width) / 2 - 60 + offset)));
+          const y = Math.max(12, Math.min(panelHeight - height - 12, Math.round((panelHeight - height) / 2 - 30 + offset)));
+          const z = floatingZ.current++;
+          setFloatingPanes((current) => [...current, { paneKey, x, y, width, height, z }]);
+        };
+
+        /** 按住浮窗顶部的拖动条移动它；限制在面板可视区域内。 */
+        const startFloatingDrag = (event, paneKey) => {
+          if (event === null || typeof event !== 'object') return;
+          if (event.button !== undefined && event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const entry = floatingPanes.find((item) => item.paneKey === paneKey);
+          if (entry === undefined) return;
+          const rect = rootRef.current !== null && rootRef.current !== undefined
+            && typeof rootRef.current.getBoundingClientRect === 'function'
+            ? rootRef.current.getBoundingClientRect()
+            : undefined;
+          const panelWidth = rect !== undefined && rect.width > 0 ? rect.width : 1200;
+          const panelHeight = rect !== undefined && rect.height > 0 ? rect.height : 800;
+          const startX = event.clientX;
+          const startY = event.clientY;
+          const originX = entry.x;
+          const originY = entry.y;
+          const move = (moveEvent) => {
+            const x = Math.max(12, Math.min(panelWidth - entry.width - 12, originX + moveEvent.clientX - startX));
+            const y = Math.max(12, Math.min(panelHeight - entry.height - 12, originY + moveEvent.clientY - startY));
+            setFloatingPanes((current) => current.map((item) => (
+              item.paneKey === paneKey ? { ...item, x, y } : item
+            )));
+          };
+          const end = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', end);
+            window.removeEventListener('pointercancel', end);
+          };
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', end);
+          window.addEventListener('pointercancel', end);
+        };
+
+        /**
+         * 按住浮窗边缘/角落缩放。
+         *
+         * 方向只有 e / w / s / se / sw：顶部是拖动条，不做上边缘缩放，免得两套手势
+         * 抢同一个位置。尺寸与边界约束全部交给模型里的 `resizeFloatingBox`。
+         */
+        const startFloatingResize = (event, paneKey, dir) => {
+          if (event === null || typeof event !== 'object') return;
+          if (event.button !== undefined && event.button !== 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          bringFloatingToFront(paneKey);
+          const entry = floatingPanes.find((item) => item.paneKey === paneKey);
+          if (entry === undefined) return;
+          const rect = rootRef.current !== null && rootRef.current !== undefined
+            && typeof rootRef.current.getBoundingClientRect === 'function'
+            ? rootRef.current.getBoundingClientRect()
+            : undefined;
+          const panelWidth = rect !== undefined && rect.width > 0 ? rect.width : 1200;
+          const panelHeight = rect !== undefined && rect.height > 0 ? rect.height : 800;
+          const startX = event.clientX;
+          const startY = event.clientY;
+          const origin = { x: entry.x, y: entry.y, width: entry.width, height: entry.height };
+          const move = (moveEvent) => {
+            const next = model.resizeFloatingBox(
+              origin,
+              dir,
+              moveEvent.clientX - startX,
+              moveEvent.clientY - startY,
+              { width: panelWidth, height: panelHeight },
+            );
+            setFloatingPanes((current) => current.map((item) => (
+              item.paneKey === paneKey ? { ...item, ...next } : item
+            )));
+          };
+          const end = () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', end);
+            window.removeEventListener('pointercancel', end);
+          };
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', end);
+          window.addEventListener('pointercancel', end);
+        };
+
+        /*
+         * 切回平铺时关掉所有浮窗：浮窗没有棋盘位置，留着会盖住窗格。
+         * 用 effect 而不是在模式按钮里处理，是因为模式也可能从 Host 恢复/快捷键切换。
+         */
+        useEffect(() => {
+          if (modeState.mode === graphModel.MODE_GRAPH) return;
+          if (floatingPanes.length === 0) return;
+          for (const entry of floatingPanes) paneActions.removeFloatingPane(entry.paneKey);
+          setFloatingPanes([]);
+        }, [modeState.mode, floatingPanes, paneActions, graphModel]);
+
+        /** 把浮窗列表渲染成绝对定位容器；pane 已被删除的条目直接跳过。 */
+        const floatingNodes = floatingPanes.map((entry) => {
+          const pane = panes.find((candidate) => candidate.key === entry.paneKey);
+          if (pane === undefined) return null;
+          const base = renderPane(pane);
+          if (base === null) return null;
+          const plan = panePlan.get(pane.key);
+          const summary = plan === undefined ? undefined : plan.summary;
+          const rawTitle = summary === undefined ? undefined : summary.displayTitle;
+          const title = summary === undefined || summary.blank === true || rawTitle === undefined || rawTitle === ''
+            ? t('pane.untitled')
+            : rawTitle;
+          return h('div', {
+            key: entry.paneKey,
+            className: css.floatingPane,
+            style: {
+              left: entry.x + 'px',
+              top: entry.y + 'px',
+              width: entry.width + 'px',
+              height: entry.height + 'px',
+              zIndex: entry.z,
+            },
+            onPointerDown: () => bringFloatingToFront(entry.paneKey),
+          },
+            h('div', {
+              className: css.floatingBar,
+              onPointerDown: (event) => startFloatingDrag(event, entry.paneKey),
+            },
+              h('span', { className: css.floatingTitle, title }, title),
+              h('button', {
+                type: 'button',
+                className: css.floatingClose,
+                title: t('graph.floatingClose'),
+                'aria-label': t('graph.floatingClose'),
+                onPointerDown: (event) => event.stopPropagation(),
+                onClick: (event) => {
+                  event.stopPropagation();
+                  closeFloatingPane(entry.paneKey);
+                },
+              }, '×')),
+            h('div', { className: css.floatingBody },
+              h(PaneFrame, {
+                ...base.props,
+                grow: undefined,
+                active: true,
+                floating: true,
+              })),
+            ...['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'].map((dir) => h('div', {
+              key: 'resize-' + dir,
+              className: css.floatResize,
+              'data-dir': dir,
+              onPointerDown: (event) => startFloatingResize(event, entry.paneKey, dir),
+            })));
+        });
+
+        /*
          * 顶部两个模式按钮。
          *
          * 用 `aria-pressed` 表达选中而不是换一套 class：读屏会念「已按下」，视觉上由
@@ -1148,9 +1351,56 @@ window.__ModuleLoader__.load({
             onClick: () => viewModeStore.setMode(graphModel.MODE_GRAPH),
           }, t('mode.graph')));
 
+        /**
+         * 卡片上的实时状态：目标阶段 + 待审核计数。
+         *
+         * 只依赖会话 id 列表轮询（默认 1.5s）：目标状态活在 Host 的 goal 服务里，
+         * 客户端会话列表的 `running` 看不到 paused/blocked/待审核。任务分派模式之外
+         * 不轮询，切回平铺时把状态清空。
+         */
+        const [cardStates, setCardStates] = useState({});
+        const graphSessionIds = useMemo(() => graphCards.map((card) => card.key), [graphCards]);
+        useEffect(() => {
+          if (modeState.mode !== graphModel.MODE_GRAPH) {
+            setCardStates((current) => (Object.keys(current).length === 0 ? current : {}));
+            return undefined;
+          }
+          if (typeof paneActions.readDispatchStates !== 'function') return undefined;
+          let disposed = false;
+          let timer = null;
+          const tick = async () => {
+            let next = {};
+            try {
+              next = await paneActions.readDispatchStates(graphSessionIds);
+            } catch {
+              next = {};
+            }
+            if (disposed) return;
+            setCardStates((current) => {
+              /*
+               * 状态对象很小（画布卡片数量有限），用序列化比较避免每 1.5 秒都触发
+               * 一次重渲染；不比较的话整块画布会周期性地重绘，箭头光效也会闪。
+               */
+              try {
+                if (JSON.stringify(current) === JSON.stringify(next)) return current;
+              } catch {
+                /* 序列化失败就正常更新，不把状态显示卡死 */
+              }
+              return next;
+            });
+            timer = window.setTimeout(tick, 1500);
+          };
+          tick();
+          return () => {
+            disposed = true;
+            if (timer !== null) window.clearTimeout(timer);
+          };
+        }, [modeState.mode, graphSessionIds, paneActions, graphModel]);
+
         const graphBoard = h(GraphBoard, {
           key: 'graph',
           cards: graphCards,
+          states: cardStates,
           edges: graphState.edges,
           /*
            * 一行自诊断。用户报「箭头没了」时，这一行能直接分清是：
@@ -1171,7 +1421,14 @@ window.__ModuleLoader__.load({
             removeEdge: graphActions.removeEdge,
             // 少了这一行：编辑器打开后点「保存」会调一个 undefined —— 什么都不发生。
             setNote: graphActions.setNote,
-            openPane: openPaneFromGraph,
+            /*
+             * 点卡片 = 打开这张卡片对应会话的浮动窗格，不再切回平铺。
+             * 工作区 id 用来给浮窗里的 PaneFrame 找标题与替换菜单。
+             */
+            openFloating: (sessionId) => {
+              const card = graphCardById.get(sessionId);
+              openFloatingPane(sessionId, card === undefined ? '' : card.workspaceKey);
+            },
             stageSession,
             unstageSession,
           },
@@ -1259,7 +1516,7 @@ window.__ModuleLoader__.load({
           setAddError(t('panel.saveFailed') + (typeof result?.reason === 'string' && result.reason !== '' ? ': ' + result.reason : ''));
         };
 
-        return h('div', { className: css.root, [BOARD_MARKER]: 'true' },
+        return h('div', { className: css.root, [BOARD_MARKER]: 'true', ref: rootRef },
           h('header', { className: css.head },
             h('div', { className: css.headMain },
               h('h1', { className: css.title }, t('panel.title'))),
@@ -1368,7 +1625,8 @@ window.__ModuleLoader__.load({
             : modeState.mode === graphModel.MODE_GRAPH
               ? graphBoard
               : h('div', { className: css.board },
-                  h('div', { className: css.boardTree }, renderNode(paneState.layout))));
+                  h('div', { className: css.boardTree }, renderNode(paneState.layout))),
+          floatingNodes);
       }
       SplitPanel.displayName = 'SplitPanel';
 

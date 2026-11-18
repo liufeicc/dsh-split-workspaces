@@ -345,6 +345,75 @@ check('只有一个工作区时布局就是单个窗格', (() => {
   return store.getSnapshot().layout.type === 'leaf';
 })());
 
+// --- 浮动窗格：不占棋盘布局，也不写进保存结构 -------------------------------------
+
+check('浮窗登记为 pane，但不改变布局与焦点', (() => {
+  const store = createPaneStore();
+  store.ensureInitialized('ws-a', ['ws-a']);
+  const before = store.getSnapshot();
+  const key = store.addFloatingPane('ws-a', 's-a');
+  const after = store.getSnapshot();
+  return key.startsWith('float-')
+    && after.layout === before.layout
+    && after.activeKey === before.activeKey
+    && after.panes.some((pane) => pane.key === key && pane.floating === true)
+    && store.removeFloatingPane(key) === true
+    && store.getSnapshot().panes.every((pane) => pane.key !== key);
+})());
+check('棋盘保存忽略浮窗', (() => {
+  const store = createPaneStore();
+  store.ensureInitialized('ws-a', ['ws-a']);
+  store.addFloatingPane('ws-a', 's-a');
+  const workspaceById = new Map([['ws-a', { workspaceId: 'ws-a', path: '/tmp/a' }]]);
+  const payload = mods.layout.serialize(store.getSnapshot(), workspaceById, null, { scope: 'tiles' });
+  return payload !== null
+    && payload.panes.length === 1
+    && payload.panes.every((pane) => !String(pane.key).startsWith('float-'));
+})());
+check('拖动浮窗右边缘只改宽度', (() => {
+  const next = mods.model.resizeFloatingBox(
+    { x: 100, y: 100, width: 500, height: 400 }, 'e', 40, 0, { width: 1200, height: 800 },
+  );
+  return next.x === 100 && next.y === 100 && next.width === 540 && next.height === 400;
+})());
+check('拖动浮窗左边缘时右边界保持不动', (() => {
+  const next = mods.model.resizeFloatingBox(
+    { x: 100, y: 100, width: 500, height: 400 }, 'w', 60, 0, { width: 1200, height: 800 },
+  );
+  return next.x === 160 && next.width === 440 && next.x + next.width === 600;
+})());
+check('拖动浮窗上边缘时下边界保持不动', (() => {
+  const next = mods.model.resizeFloatingBox(
+    { x: 100, y: 100, width: 500, height: 400 }, 'n', 0, 60, { width: 1200, height: 800 },
+  );
+  return next.y === 160 && next.height === 340 && next.y + next.height === 500;
+})());
+check('浮窗向上缩放有下限且不越出面板顶部', (() => {
+  const shrink = mods.model.resizeFloatingBox(
+    { x: 100, y: 100, width: 500, height: 400 }, 'n', 0, 5000, { width: 1200, height: 800 },
+  );
+  const grow = mods.model.resizeFloatingBox(
+    { x: 100, y: 100, width: 500, height: 400 }, 'n', 0, -5000, { width: 1200, height: 800 },
+  );
+  return shrink.height === 260 && shrink.y === 240
+    && grow.height === 500 - 12 && grow.y === 12;
+})());
+check('浮窗内容层与缩放热区的层叠顺序固定（底部热区不能被输入框盖住）', (() => {
+  const css = mods.styles.CSS;
+  return /\.dshSplitWs_floatingBody\{position:relative;z-index:0/.test(css)
+    && /\.dshSplitWs_floatResize\{position:absolute;z-index:20/.test(css);
+})());
+check('浮窗缩放有最小尺寸，且不越出面板', (() => {
+  const min = mods.model.resizeFloatingBox(
+    { x: 100, y: 100, width: 500, height: 400 }, 'se', -1000, -1000, { width: 1200, height: 800 },
+  );
+  const max = mods.model.resizeFloatingBox(
+    { x: 100, y: 100, width: 500, height: 400 }, 'se', 5000, 5000, { width: 1200, height: 800 },
+  );
+  return min.width === 360 && min.height === 260
+    && max.width === 1200 - 12 - 100 && max.height === 800 - 12 - 100;
+})());
+
 // --- 会话解析：分屏出来的窗格不镜像隔壁的会话 ---------------------------------------
 
 const rows = [{ id: 's-1' }];

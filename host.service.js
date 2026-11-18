@@ -22,6 +22,7 @@ import {
 } from './host.constants.js';
 import { loadReviews, loadStore, makeTarget, saveReviews, saveStore } from './host.store.js';
 import { loadLayoutFile, saveLayoutFile } from './host.layout.js';
+import { classifyGoal } from './host.goal-state.js';
 
 /**
  * 绑定关系与工具执行的全部状态。
@@ -388,6 +389,70 @@ export class PaneDispatchService {
       });
     }
     return { targets };
+  }
+
+  /**
+   * 读取任务分派卡片的实时状态：目标阶段 + 待审核计数。
+   *
+   * 为什么不能只靠客户端会话列表：`sessions.list` 只知道回合 running/idle，
+   * 不知道这个会话有没有 goal、goal 是否 paused/blocked/complete，更不知道
+   * 有没有交付在等审核。目标状态只活在 Host 的 `goals` 服务里，审核账只活在本
+   * 服务的 `reviews` 里，所以必须由 Host 合成一次再交给卡片显示。
+   *
+   * 读 goal 走 `agents.get(id)` 拿活 agent；冷会话取不到 agent 时按「读不到」处理
+   * （不为了看状态去 `resolveAgent` 唤醒它，那会产生副作用）。
+   *
+   * @param request - `{ sessionIds: string[] }`。
+   * @returns `{ states: { [sessionId]: { goal, terminal, reviewOwned, reviewWaiting } } }`。
+   */
+  readStates(request) {
+    const raw = Array.isArray(request?.sessionIds) ? request.sessionIds : [];
+    const ids = [];
+    const seen = new Set();
+    for (const id of raw) {
+      if (typeof id !== 'string' || id === '' || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+      // 画布上的卡片数量有限；设个上限，避免一次远端调用被塞进整张会话表。
+      if (ids.length >= 200) break;
+    }
+    const goals = this.ctx.get('goals');
+    const agents = this.ctx.get('agents');
+    const states = {};
+    for (const id of ids) {
+      let agent;
+      try {
+        agent = agents !== undefined && agents !== null && typeof agents.get === 'function'
+          ? agents.get(id)
+          : undefined;
+      } catch {
+        agent = undefined;
+      }
+      let view;
+      if (goals !== undefined && goals !== null && typeof goals.get === 'function') {
+        try {
+          view = goals.get(agent);
+        } catch {
+          view = undefined;
+        }
+      }
+      const goal = classifyGoal(view, agent);
+      let reviewOwned = 0;
+      let reviewWaiting = 0;
+      for (const key of this.reviews.keys()) {
+        const separator = key.indexOf('\u0000');
+        if (separator < 0) continue;
+        if (key.slice(0, separator) === id) reviewOwned += 1;
+        if (key.slice(separator + 1) === id) reviewWaiting += 1;
+      }
+      states[id] = {
+        goal: goal.status,
+        terminal: goal.terminal,
+        reviewOwned,
+        reviewWaiting,
+      };
+    }
+    return { states };
   }
 
   /**

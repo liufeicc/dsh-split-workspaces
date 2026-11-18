@@ -414,6 +414,8 @@ window.__ModuleLoader__.load({
         setActive: (key) => paneStore.setActive(key),
         setRatio: (splitId, ratio) => paneStore.setRatio(splitId, ratio),
         ensureInitialized: (currentWorkspaceId, workspaceIds) => paneStore.ensureInitialized(currentWorkspaceId, workspaceIds),
+        addFloatingPane: (workspaceId, sessionId) => paneStore.addFloatingPane(workspaceId, sessionId),
+        removeFloatingPane: (key) => paneStore.removeFloatingPane(key),
         saveLayout: (snapshot, workspaceById, graph, scope) => persistLayout(snapshot, workspaceById, graph, scope),
         restoreSavedLayout: (context) => restorePersistedLayout(context),
         hasSavedLayout: () => readSavedLayout() !== null,
@@ -425,6 +427,7 @@ window.__ModuleLoader__.load({
         setSkillSelection: (workspacePath, selected) => skillStore.setSelection(workspacePath, selected),
         loadDispatch: () => dispatchSync.load(),
         pullDispatchVisual: (since) => mods.dispatch.pullDispatchVisual(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY), since),
+        readDispatchStates: (sessionIds) => mods.dispatch.readDispatchStates(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY), sessionIds),
       };
 
       /**

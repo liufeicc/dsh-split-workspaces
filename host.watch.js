@@ -122,6 +122,12 @@ export function watchDetached(ctx, service, key, agent) {
       interruptedBy: current.interruptedBy === 'user' ? 'user' : '',
     };
     /*
+     * 用户手停的证据不能只留在 pending 里：A 取走结果后 pending 会被删掉，之后
+     * 再调 control_task 就查不到「这是用户停的」。在服务上留一个短命标记，
+     * 直到目标重新运行或接到新任务。
+     */
+    if (current.interruptedBy === 'user') service.humanStopped?.add(key);
+    /*
      * 交付即记审核：不再等「结果被 A 取走」才落账。
      *
      * 真机踩过：目标 11:13 完成、Host 17:41 重启，中间 A 没回来取结果 —— 旧实现

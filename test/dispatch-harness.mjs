@@ -97,7 +97,16 @@ function createHostContext({
         agent: {
           id: sessionId,
           session,
-          status: agents.get(sessionId)?.status ?? 'idle',
+          /*
+           * 用 getter 读 agents 表，而不是在 resolve 时拍一张快照。
+           *
+           * 停止/纠正流程要判断「agent 是不是真的还在 running」，而测试会在
+           * resolve 之后改状态（模拟 cancel 把回合收尾）。快照会让这些判断永远
+           * 看到旧值 —— 旧用例恰好没依赖它，但停止用例必须依赖。
+           */
+          get status() {
+            return agents.get(sessionId)?.status ?? 'idle';
+          },
           cancel(cause, cancelOptions) {
             agentCancelCalls.push({ sessionId, cause, options: cancelOptions });
             order.push('cancel');
@@ -190,7 +199,8 @@ export function boot(options) {
   const harness = createHostContext(options);
   host.apply(harness.ctx);
   const tool = harness.registered.find((definition) => definition.name === host.TOOL_NAME);
-  return { ...harness, tool };
+  const controlTool = harness.registered.find((definition) => definition.name === host.CONTROL_TOOL_NAME);
+  return { ...harness, tool, controlTool };
 }
 
 /**
@@ -207,7 +217,8 @@ export function reboot(options) {
   const harness = createHostContext(options);
   host.apply(harness.ctx);
   const tool = harness.registered.find((definition) => definition.name === host.TOOL_NAME);
-  return { ...harness, tool };
+  const controlTool = harness.registered.find((definition) => definition.name === host.CONTROL_TOOL_NAME);
+  return { ...harness, tool, controlTool };
 }
 
 /** 我们自己投进去的那条用户消息。 */
@@ -343,11 +354,18 @@ export function fakeMultiGoals({ failFor = new Set(), strictCreate = false } = {
       return views.get(id);
     },
     /** 模拟「停止把目标暂停了」：真实暂停是 durable 变更，会推进 revision。 */
-    pause(id) {
+    pause(agentOrId, ref) {
+      // 兼容两种调用：测试里的 `goals.pause('s-b')` 与插件里的 `goals.pause(agent, ref)`。
+      const id = typeof agentOrId === 'string' ? agentOrId : agentOrId?.session?.id;
       const view = views.get(id);
-      if (view === undefined) return;
+      if (view === undefined) throw new Error('no goal to pause');
+      if (ref !== undefined && (view.id !== ref.id || view.revision !== ref.revision)) {
+        throw new Error('stale goal ref');
+      }
+      if (view.phase !== 'active') throw new Error('goal is not active');
       views.set(id, { ...view, phase: 'paused', activation: 'disarmed', revision: view.revision + 1 });
       calls.pause.push(id);
+      return views.get(id);
     },
     /** 与真实 `goals.clear` 一样：任何 phase 都能清（含 complete），清完就没有目标了。 */
     clear(agent, ref) {

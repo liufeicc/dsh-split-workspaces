@@ -64,7 +64,9 @@
  *   - `host.batch.js` —— 一批目标的调度与收尾（预检、并发等待、all/any）；
  *   - `host.watch.js` —— 派出去之后的盯与认（后台监视、重启后认回孤儿单子）；
  *   - `host.report.js` —— 只读汇报的旁注请求（历史裁剪、提示词、并行与超时）；
- *   - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` 工具定义。
+ *   - `host.control.js` —— 停止与唤醒（等目标真正 idle、暂停、重新开票）；
+ *   - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` 工具定义；
+ *   - `host.tool.control.js` —— 面向模型的 `control_task` 工具定义。
  *
  * 下面仍把原有的公共符号原样转出去，`test/dispatch-contract.mjs` 等既有用例
  * 继续 `import('../index.js')` 就能拿到同一套东西。
@@ -75,11 +77,19 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { REMOTE_MARKERS, REMOTE_METHODS, SERVICE_KEY, TOOL_NAME } from './host.constants.js';
+import {
+  CONTROL_TOOL_NAME,
+  REMOTE_MARKERS,
+  REMOTE_METHODS,
+  REPORT_TOOL_NAME,
+  SERVICE_KEY,
+  TOOL_NAME,
+} from './host.constants.js';
 import { adoptOrphanGoals } from './host.watch.js';
 import { errorText, noticeMessage } from './host.message.js';
 import { PaneDispatchService } from './host.service.js';
 import { createDispatchTool, createReportTool } from './host.tool.js';
+import { createControlTool } from './host.tool.control.js';
 
 /** 本行的 Loader row id 与插件名（必须与 cordis.patch.yml 里那一行一致）。 */
 export const name = 'split-workspaces';
@@ -192,7 +202,8 @@ export function apply(ctx) {
     value: REMOTE_MARKERS,
   });
   ctx.provide(SERVICE_KEY, service);
-  ctx.logger?.info?.('split-workspaces: 任务分派已激活（工具 ' + TOOL_NAME + '）');
+  ctx.logger?.info?.('split-workspaces: 任务分派已激活（工具 '
+    + TOOL_NAME + ' / ' + REPORT_TOOL_NAME + ' / ' + CONTROL_TOOL_NAME + '）');
 
   ctx.effect(() => {
     /*
@@ -249,8 +260,9 @@ export function apply(ctx) {
         try {
           disposers.push(agent.ctx.tools.register(createDispatchTool(service, agentId)));
           disposers.push(agent.ctx.tools.register(createReportTool(service, agentId)));
+          disposers.push(agent.ctx.tools.register(createControlTool(service, agentId)));
         } catch (reason) {
-          // 两个工具要么都注册，要么都不留：只留半个作用域会让 A 看到不完整的工具面。
+          // 三个工具要么都注册，要么都不留：只留半个作用域会让 A 看到不完整的工具面。
           for (const dispose of disposers) {
             try {
               dispose();
@@ -377,6 +389,7 @@ export function apply(ctx) {
  * ------------------------------------------------------------------ */
 
 export {
+  CONTROL_TOOL_NAME,
   DISPATCH_SLICE_MS,
   DISPATCH_TIMEOUT_MS,
   REPORT_TOOL_NAME,
@@ -401,6 +414,8 @@ export {
   reportDescription,
 } from './host.tool.js';
 export { runReport, runReports } from './host.report.js';
+export { resumeBatch, stopBatch } from './host.control.js';
+export { controlDescription, createControlTool } from './host.tool.control.js';
 export {
   batchStatus,
   isSuccessStatus,

@@ -133,11 +133,12 @@
 
 - **设计模式 + 任务分派**：面板顶部多一个 `设计`，把每个**会话**画成卡片、用箭头连成
   一棵有向树 —— 箭头方向就是授权方向，删掉箭头等于撤回授权。连了箭头的会话会拿到
-  **作用域版** `dispatch_task` 与 `report_task` 工具（描述里直接列出可派目标）：
+  **作用域版** `dispatch_task`、`report_task` 与 `control_task` 工具（描述里直接列出可派目标）：
   `dispatch_task` 把任务交给对方会话并拿回结论，一次可派给多个目标、并行推进，支持
   「等全部 / 等第一个 / 派完就走」三种收尾，派完就走的还会在回合结束前被提醒回来收结果；
   `report_task` 则按 A 的要求，让目标基于自己的模型可见历史做一次**只读汇报**，
-  不改目标、不创建 goal、不产生交付结论。每次结果还会附上其余空闲目标，提示继续分配；
+  不改目标、不创建 goal、不产生交付结论；`control_task` 用来中途停住（等目标真正 idle、
+  暂停）或唤醒暂停的原目标。每次结果还会附上其余空闲目标，提示继续分配；
   交付后必须先审核，才能给同一个目标派新任务。详见下面的专节。
 
 ## 设计模式：把委派关系画成箭头
@@ -208,7 +209,8 @@
 
 ### 模型怎么用
 
-A 的模型多了一个 `dispatch_task` 工具：
+A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具：前者派活，
+`report_task` 只读汇报，`control_task` 停止或唤醒。下面先说派单。
 
 | 参数 | 说明 |
 |---|---|
@@ -277,6 +279,42 @@ A 的模型多了一个 `dispatch_task` 工具：
 - 只读**模型可见历史**：历史窗口外、没有落进历史的工具输出看不到；
 - 汇报是另一个模型的总结，不是真相；关键结论仍要 A 自己看证据；
 - 它不改变派单状态，不能代替 `dispatch_task` 取结果，也不能代替 `reviews` 审核。
+
+### 停止与唤醒：`control_task`
+
+`dispatch_task` 负责把活交出去；`control_task` 负责在任务跑到一半时**停住**，以及把
+停住的目标**唤醒**。它只做控制，不派新任务、也不取结果。
+
+| 参数 | 说明 |
+|---|---|
+| `action` | `stop` = 停止目标当前任务并暂停；`resume` = 唤醒暂停的原目标继续 |
+| `targets` | 要控制的目标，最多 8 个；每项可用序号、完整标题、标题片段或会话 id |
+
+**stop**：
+
+- 与目标窗格的停止按钮同一个底层动作：`agent.cancel({ kind: 'hook' })` 中止当前回合，
+  `keepInbox: true` 保留目标队列里用户自己的输入；
+- 顺序是 `disarm → cancel → 等 agent 真正 idle → pause`。**不能先 pause**：
+  `goal-round-driver` 看到暂停且 agent 还在跑，会补一刀 `aborted.user`，A 会把这次停止
+  误读成「用户接管了这一单」；
+- 停止成功返回 `status: "paused"`，这单按「未交付」结清；目标不会再自动开新轮；
+- 最多等 30 秒。超时返回 `status: "stopping"`，**不是 paused**：目标已经不会自动推进，
+  但当前回合还没确认收尾；这单保留在后台，稍后再 stop 一次确认，或用 `dispatch_task`
+  取结果。不要拿 `stopping` 当「已停止」；
+- 停止晚了一步、目标已经完成时返回 `complete`，这单留给 `dispatch_task` 取结果；
+- 只停本会话派出去的任务（`pending` 里有票，或 goal 带 `[任务分派]` 前缀）；不会杀后台
+  进程或目标自己派出的子代理。
+
+**resume**：
+
+- 走 `goals.resume` 恢复**原来的 goal**，不重发任务正文、不新建目标；目标从原 objective
+  继续，历史还在；
+- 成功后重新开一张派单票，之后用 `dispatch_task`（不带 `task`）等结果；
+- 拒绝：`complete`（先取结果并审核）、`blocked`（策略性停住）、用户手动停止的目标
+  （先问用户）、不是任务分派创建的目标、还在停止收尾（agent 仍 running）的目标。
+
+状态词：`paused` / `stopping` / `resumed` / `running` / `complete` / `blocked` / `failed`。
+`deliverable` 恒为 false —— 控制不是交付。
 
 ### 交付之后：不审核，不能再派
 
@@ -691,7 +729,7 @@ A 的模型多了一个 `dispatch_task` 工具：
   平铺面板的半透明渐变、所有会话的站酷快乐体与消息浮现动画也在这里（末尾的科幻覆盖段）。
 - `client.dicts.js` —— 中英文案。
 - `index.js` —— **Host 半边的入口**：装配 `paneDispatch` 服务与 `dispatch_task` /
-  `report_task` 工具、维护生命周期，并把公共符号原样转出。实现按职责放在同目录的
+  `report_task` / `control_task` 工具、维护生命周期，并把公共符号原样转出。实现按职责放在同目录的
   `host.*.js`：
   - `host.constants.js` —— 服务键、远端方法清单、超时与长度上限；
   - `host.store.js` —— 绑定表的落盘与读回（唯一的目标形状构造点）；
@@ -703,6 +741,8 @@ A 的模型多了一个 `dispatch_task` 工具：
   - `host.reviews.js` —— 审核闸：人工审核后的释放、`reviews` 落账、complete goal 补账；
   - `host.report.js` —— `report_task` 的只读旁注请求：历史裁剪、汇报提示词、
     单目标超时与并行；
+  - `host.control.js` —— 停止与唤醒：`disarm → cancel(hook) → 等真正 idle → pause`
+    的顺序、超时返回 `stopping`、唤醒原 goal 并重新开票；
   - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取助手文本）；
   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路，含取消联动）；
   - `host.batch.js` —— 一批目标的调度与收尾：预检、并发等待、`all`/`any`/`none` 三种收尾、
@@ -712,7 +752,9 @@ A 的模型多了一个 `dispatch_task` 工具：
   - `host.watch.js` —— 派出去之后的「盯」与「认」：`wait: none` 用的后台监视（单订阅长听），
     以及 Host 重启后凭 goal 前缀把孤儿单子认回来（`adoptOrphanGoals`）；
   - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` 工具描述与执行
-    （参数解析、结果整形）。
+    （参数解析、结果整形）；
+  - `host.tool.control.js` —— 面向模型的 `control_task` 工具描述与执行
+    （stop / resume 的参数校验与结果整形）。
   「打开目录」那条路仍然不需要 Host 支持 ——
   它调用的是已经装好的 Session 远端命名空间。
 - `client.dispatch.js` —— 把设计模式下画出来的箭头换算成绑定，并**只把变了的那几个
@@ -791,6 +833,11 @@ A 的模型多了一个 `dispatch_task` 工具：
   （`node test/report-contract.mjs`）：最多 8 个目标、8 个目标真的并行、单目标失败/超时
   不影响其他目标、请求里带 ask 与 goal objective、只读（不碰 pending/reviews/goal）、
   历史截断标记、没有 LLM 服务时逐目标报错，以及实现文件不引用外部旁注插件。
+- `test/control-contract.mjs` —— `control_task` 的离线契约测试
+  （`node test/control-contract.mjs`）：停止正在跑 / 空闲 / 超时 / 已完成 / 越权的目标，
+  断言 hook 停止与「先等 idle 再 pause」的顺序；唤醒 paused 与 active+disarmed，拒绝
+  complete / blocked / 用户手停 / 非本插件目标 / 还在收尾；以及一批里部分未确认停止时
+  顶层状态是 `stopping`。
 - `test/fx-contract.mjs` —— 派单光效的离线契约测试（`node test/fx-contract.mjs`）：
   Host 视觉事件队列的增量、水位、容量与「只在新派单时记录」，以及贝塞尔路径、
   窗格边缘取点、棋盘边缘取点和客户端轮询接线。
@@ -873,6 +920,7 @@ node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs
 node test/dispatch-restart-contract.mjs
 node test/report-contract.mjs
+node test/control-contract.mjs
 ```
 
 改到「光标归属」那块时，另外跑一遍真浏览器探针（需要 `google-chrome`，约十秒）：

@@ -39,6 +39,21 @@ export const TOOL_NAME = 'dispatch_task';
 export const REPORT_TOOL_NAME = 'report_task';
 
 /**
+ * 停止 / 唤醒工具名。
+ *
+ * 单独一只工具，而不是给 `dispatch_task` 加 `action`：`dispatch_task` 已经有
+ * 「新派 / 续等 / 审核 / 纠正」四种含义，再混进控制语义，模型很容易把「停止」
+ * 当成「派一个新任务」。控制工具的描述只讲停止与唤醒，短而明确。
+ */
+export const CONTROL_TOOL_NAME = 'control_task';
+
+/** 控制动作：停止当前任务。 */
+export const ACTION_STOP = 'stop';
+
+/** 控制动作：唤醒暂停的原目标。 */
+export const ACTION_RESUME = 'resume';
+
+/**
  * 一次最多向几个目标要汇报。
  *
  * 每个目标都是一次独立的模型请求；8 个已经是一次工具调用能接受的上限。再多就分批，
@@ -127,6 +142,47 @@ export const REDIRECT_CANCEL_REASON = 'pane-dispatch-redirect';
  * 个别目标轮的 disarm 竞争会留给后续事件处理。
  */
 export const REDIRECT_STOP_TIMEOUT_MS = 3000;
+
+/**
+ * 插件停止目标当前轮时写进 `turn/end` 的取消原因。
+ *
+ * 与纠正分开一个理由：纠正的停止紧接着要重发一条消息，停止的停止要留在暂停态。
+ * 分开之后，测试和日志都能一眼看出这次停轮是哪种操作；两边都不冒充 `user`，
+ * 所以 A 的后台监视不会把插件自己的动作读成「用户抢单」。
+ */
+export const STOP_CANCEL_REASON = 'pane-dispatch-stop';
+
+/**
+ * 「停止」等目标真正停下来的上限。
+ *
+ * 比纠正的 3 秒长得多：纠正只是把「停轮 → 重发」的交接等完，3 秒是防挂死的兜底；
+ * 停止要等目标把正在跑的工具真的收尾，一次长命令、一次网络请求都可能超过 3 秒。
+ * 30 秒足够大多数工具收尾，又不至于把主会话的回合挂太久。
+ *
+ * 超时**不是失败**，而是「还没确认停下」：目标已经 disarm，不会再自动开新轮，
+ * 后台监视会接着等它真正 idle。
+ */
+export const STOP_TIMEOUT_MS = 30 * 1000;
+
+/**
+ * 停止成功后的状态：目标已暂停，不会自动推进。
+ *
+ * 沿用 `paused` 这个词，与 `classifyGoal`、DSH 目标栏的「已暂停的目标」保持同一套
+ * 语义。它**不是交付**：`deliverable` 必须为 false。
+ */
+export const STATUS_PAUSED = 'paused';
+
+/**
+ * 停止请求已经发出，但时限内没确认目标真的停下。
+ *
+ * 这是独立的词，不能并进 `paused`：主会话必须知道「还没停」，否则它会以为可以
+ * 立刻派新任务或把当前文本当结论。目标此时已经不会再自动开新轮，只是当前回合
+ * 还在收尾（或者卡在某个不响应中止的工具里）。
+ */
+export const STATUS_STOPPING = 'stopping';
+
+/** 已经唤醒一个暂停的原目标，它会从原 objective 继续。 */
+export const STATUS_RESUMED = 'resumed';
 
 /** `wait` 的三档：等全部、等第一个、或者根本不等。 */
 export const WAIT_ALL = 'all';

@@ -39,7 +39,8 @@
  */
 export const RESTART_STOPPED_REASON = 'Host 重启后这一轮已经中止：目标仍是 active，'
   + '但自动推进已被 disarm，当前没有回合在跑。'
-  + '可以点目标栏的「继续执行目标」，或用 dispatch_task 带 task 发纠正重新启动。';
+  + '可以点目标栏的「继续执行目标」，用 control_task 的 resume 唤醒，'
+  + '或用 dispatch_task 带 task 发纠正重新启动。';
 
 /**
  * 这个 agent 是不是真的有一个回合在跑。

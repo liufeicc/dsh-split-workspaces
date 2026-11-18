@@ -77,7 +77,7 @@ export function explainNoTarget(service, ownerId, bindings) {
  * @param verb - 错误文案里的动作（默认「派给」，汇报时传「汇报」）。
  * @returns 去重后的绑定数组（保持模型给的顺序）。
  */
-function pickTargets(bindings, rawTargets, verb = '派给') {
+export function pickTargets(bindings, rawTargets, verb = '派给') {
   const out = [];
   const seen = new Set();
   for (const raw of rawTargets) {
@@ -203,13 +203,16 @@ export function dispatchDescription(service, ownerId) {
     '过程稿可以用来判断方向。方向不对时，用 dispatch_task 带 task、targets 指向同一个目标发纠正：',
     '纠正会先停止目标的当前轮，再把纠正作为一条新消息重新提交，并重新启动目标（若它因此暂停）；',
     '不新建目标；返回 status: redirected。',
+    '如果只是想先停住、或让暂停的目标继续原目标，用 control_task 的 stop / resume，'
+      + '不要用「带 task 的空纠正」代替停止。',
     '一次调用里不要把「纠正正在跑的目标」和「给空闲目标派新任务」混在一起 —— 同一个 task 会有',
     '两种语义，请分成两次调用。',
     '',
     '## 用户手动停止目标',
     '用户可能在界面上按停止，把目标接管过去。这时结果里的 status 是 interrupted，',
     'interruptedBy 是 user，这一单**没有交付**：不要拿过程稿当结论，也不要越过用户去纠正它。',
-    '你可以继续做不依赖它的部分；等用户处理完，再按用户的指示重新派或续等。',
+    '你可以继续做不依赖它的部分；等用户处理完。只有用户明确要求继续时，'
+      + '才可以用 control_task 的 resume 唤醒；否则不要越过用户。',
     '',
     '## 一次派给多个目标',
     'targets 可以给多个（最多 ' + MAX_BATCH_TARGETS + ' 个）：这些目标**同时**开工，不是排队。',

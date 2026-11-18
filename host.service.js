@@ -18,6 +18,7 @@ import {
   REPORT_HISTORY_MESSAGES,
   REPORT_MAX_CHARS,
   REPORT_TIMEOUT_MS,
+  STOP_TIMEOUT_MS,
 } from './host.constants.js';
 import { loadReviews, loadStore, makeTarget, saveReviews, saveStore } from './host.store.js';
 import { clearLayoutFile, loadLayoutFile, saveLayoutFile } from './host.layout.js';
@@ -80,6 +81,18 @@ export class PaneDispatchService {
      */
     this.redirecting = new Set();
     /**
+     * 用户手动停止过的目标：`ownerId\u0000targetId`。
+     *
+     * `interruptedBy: 'user'` 的证据原先只活在 `pending` 里。A 取走中断结果之后
+     * pending 被删掉，之后再调 `control_task resume` 就查不到「这是用户停的」——
+     * 用户明确要求「不能越过用户自动唤醒」，所以这里把证据留到目标重新运行或
+     * 接到新任务为止。
+     *
+     * 只活在内存里：Host 重启后 pending 也没了，这一轮就不再知道是谁停的；
+     * 这种情况下由工具描述约束模型先问用户。
+     */
+    this.humanStopped = new Set();
+    /**
      * 已经交付、还没审核的单子：`「owner\u0000target」 → { target, status, excerpt, at }`。
      *
      * 为什么要单独存：结论一旦被取走，`pending` 里那条记录就删了；而「验收」是交付之后
@@ -109,6 +122,13 @@ export class PaneDispatchService {
     this.adopting = new Map();
     /** 一段等多久。测试里会把它压到几十毫秒。 */
     this.sliceMs = DISPATCH_SLICE_MS;
+    /**
+     * 停止时等目标真正 idle 的上限。
+     *
+     * 放在服务上而不是写死在 `host.control.js`：测试要把 30 秒压到几十毫秒，才能
+     * 在不真等半分钟的情况下验证「超时返回 stopping、且不谎报 paused」。
+     */
+    this.stopTimeoutMs = STOP_TIMEOUT_MS;
     /*
      * 只读汇报的默认参数。
      *
@@ -536,6 +556,7 @@ export class PaneDispatchService {
     this.concluded.clear();
     this.adopting.clear();
     this.redirecting.clear();
+    this.humanStopped.clear();
     this.reviews.clear();
   }
 }

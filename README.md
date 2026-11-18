@@ -187,11 +187,12 @@ that currently holds focus is marked by a brand-coloured title bar.
   when the skill plugin's client half is not mounted the button is **not rendered at all**.
 - **Design mode + task dispatch**: a second panel mode that draws each **session** as a card
   and connects them with arrows into a directed tree — the graph *is* the authorization. Sessions
-  with outgoing arrows get agent-scoped `dispatch_task` and `report_task` tools:
+  with outgoing arrows get agent-scoped `dispatch_task`, `report_task`, and `control_task` tools:
   `dispatch_task` hands work to another session, one target or several in parallel, with
   `wait: all | any | none`; `report_task` asks a target for a **read-only report** based on its
   own model-visible history, without changing the target, creating a goal, or producing a
-  delivery conclusion. Each result also lists the remaining idle targets as a reminder to keep
+  delivery conclusion; `control_task` stops a task in flight or wakes a paused goal, without
+  dispatching a new task. Each result also lists the remaining idle targets as a reminder to keep
   distributing, and a delivered task must be reviewed before that target can take a new one.
   See the dedicated section below.
 - The `Add workspace` dropdown lists "workspaces that are not tiled yet" and also supports
@@ -286,6 +287,46 @@ Limits: it only sees the **model-visible history** (tool output outside the wind
 committed to history is invisible), the report is another model's summary rather than ground
 truth, and it does not change dispatch state — it cannot replace `dispatch_task` for collecting
 results or `reviews` for reviewing.
+
+### Stop and wake: `control_task`
+
+`dispatch_task` hands work out; `control_task` stops a task in flight and wakes a paused one. It
+only controls — it never dispatches a new task or collects a result.
+
+| Parameter | Meaning |
+|---|---|
+| `action` | `stop` = abort the current task and pause; `resume` = wake the paused original goal |
+| `targets` | Targets to control, at most 8; index, full title, title fragment, or session id |
+
+**stop**:
+
+- the same low-level action as the pane's stop button: `agent.cancel({ kind: 'hook' })` aborts the
+  current turn, and `keepInbox: true` keeps the user's queued input;
+- the order is `disarm → cancel → wait for the agent to really go idle → pause`. **Do not pause
+  first**: when `goal-round-driver` sees a pause while the agent is still running, it cancels with
+  `aborted.user`, and A would misread the stop as a user takeover;
+- success returns `status: "paused"` and closes the ticket as "not delivered"; the goal will not
+  start another round;
+- it waits at most 30 seconds. On timeout it returns `status: "stopping"`, **not** `paused`: the
+  goal is already disarmed, but the current turn is not confirmed finished; the ticket stays with
+  the background watcher, and a later stop call can confirm (or collect with `dispatch_task`).
+  `stopping` must not be treated as stopped;
+- if the goal finished first, it returns `complete`; collect it with `dispatch_task`;
+- it only stops tasks this session dispatched (a `pending` ticket, or a goal prefixed with
+  `[任务分派]`); it does not kill background processes or subagents the target started.
+
+**resume**:
+
+- calls `goals.resume` on the **same goal**: no task text is re-sent and no new goal is created;
+  the target continues from the original objective with its history intact;
+- on success it opens a fresh dispatch ticket; use `dispatch_task` (no `task`) to wait for the
+  result;
+- it refuses `complete` (collect and review first), `blocked` (policy stop), user-stopped goals
+  (ask the user first), goals not created by dispatch, and targets still winding down (the agent
+  is still `running`).
+
+Status words: `paused` / `stopping` / `resumed` / `running` / `complete` / `blocked` / `failed`.
+`deliverable` is always false — control is not delivery.
 
 ### After delivery: review before the next dispatch
 
@@ -758,7 +799,7 @@ the whole implementation.
   conversation and the message-reveal animation also live here (appended sci-fi section).
 - `client.dicts.js` — Chinese and English strings.
 - `index.js` — the **Host entry**: mounts the `paneDispatch` service and the `dispatch_task` /
-  `report_task` tools, owns their lifecycle, serves the bundled fonts at
+  `report_task` / `control_task` tools, owns their lifecycle, serves the bundled fonts at
   `/split-workspaces-fonts`, and re-exports the public symbols. The implementation
   lives in sibling `host.*.js` modules:
   - `host.constants.js` — service key, remote method list, timeouts and size limits;
@@ -775,6 +816,8 @@ the whole implementation.
     backfill from a completed goal;
   - `host.report.js` — the read-only `report_task` side request: history selection, report prompt,
     per-target timeout, and parallel fan-out;
+  - `host.control.js` — stop and wake: the `disarm → cancel(hook) → wait for real idle → pause`
+    order, `stopping` on timeout, and resuming the original goal with a fresh ticket;
   - `host.message.js` — pure helpers (task wrapping, target matching, assistant text);
   - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
   - `host.batch.js` — batch scheduling: preflight, concurrent waiting, `all`/`any`/`none`
@@ -785,7 +828,9 @@ the whole implementation.
   - `host.watch.js` — what happens after dispatch: the background watcher behind `wait: none`
     (one long-lived subscription) and `adoptOrphanGoals`, which reclaims dispatched-but-lost
     work after a Host restart by matching the goal objective prefix;
-  - `host.tool.js` — the model-facing `dispatch_task` / `report_task` descriptions and execution.
+  - `host.tool.js` — the model-facing `dispatch_task` / `report_task` descriptions and execution;
+  - `host.tool.control.js` — the model-facing `control_task` description and execution
+    (stop / resume validation and result shaping).
 - `REVIEW-2026-11-01.md` / `REVIEW-2026-11-03.md` — the two code-review reports.
 - `test/dispatch-harness.mjs` — shared fixtures for the dispatch tests.
 - `test/dispatch-contract.mjs` / `test/dispatch-batch-contract.mjs` — the Host-side contract
@@ -802,6 +847,11 @@ the whole implementation.
   `ask` and goal objective, the tool is read-only, truncated history is flagged, a missing LLM
   service fails per target, and the implementation does not reference an external side-query
   plugin.
+- `test/control-contract.mjs` — the `control_task` contract: stop running / idle / timed-out /
+  already-complete / cross-owner targets, the `hook` cancellation and "wait for idle before
+  pause" order; wake `paused` and `active+disarmed`, refuse `complete` / `blocked` /
+  user-stopped / non-dispatch goals / still-winding-down targets; and a batch with one
+  unconfirmed target reports `stopping` at the top level.
 - `cordis.patch.yml` — inserts the single Host row.
 - `locale/{en,zh}.json` — the display name and description on the plugin management page.
 - `test/harness.mjs` — the offline test harness: simulates the browser module loader
@@ -965,6 +1015,7 @@ node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs
 node test/dispatch-restart-contract.mjs
 node test/report-contract.mjs
+node test/control-contract.mjs
 ```
 
 When you touch the "caret ownership" part, additionally run the real-browser probe (requires

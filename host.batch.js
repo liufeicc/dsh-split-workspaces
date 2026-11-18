@@ -541,6 +541,11 @@ export async function runBatch(options) {
       });
       continue;
     }
+    /*
+     * 新任务取代旧的「用户手停」记录：目标已经进入新的工作，再用旧标记拦截
+     * resume 只会让主会话困惑。标记只服务于「同一个目标上一次是用户停的」。
+     */
+    service.humanStopped?.delete(item.key);
     service.pending.set(item.key, {
       /** 建本单之前清掉过一个受阻/暂停的旧目标时会记在这里。 */
       replaced: created.replaced,
@@ -711,6 +716,11 @@ export async function runBatch(options) {
           outcome.interruptedBy = record.settled.interruptedBy;
         }
       }
+      /*
+       * 用户手停的证据要在结清 pending 之前留下：A 取走中断结果之后，pending 就没了，
+       * control_task 只能靠这个标记继续拒绝「自动唤醒用户停掉的目标」。
+       */
+      if (outcome.interruptedBy === 'user') service.humanStopped?.add(item.key);
       // 还在跑就留着 pending，下一轮接着等；有结论了就结清（并掐掉后台监视）。
       if (isTerminalStatus(outcome.status)) service.forget(item.key);
     }

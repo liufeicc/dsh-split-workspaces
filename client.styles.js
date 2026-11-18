@@ -62,7 +62,7 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_splitter:hover .dshSplitWs_splitterLine,.dshSplitWs_splitter:focus-visible .dshSplitWs_splitterLine,.dshSplitWs_splitterActive .dshSplitWs_splitterLine{background:var(--dsw-alias-brand-primary);transform:scale(1.08)}',
       '.dshSplitWs_splitter:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
       // 窗格本身永远是一圈细边框：焦点只用标题栏表达，不给整块窗格加高亮框。
-      '.dshSplitWs_pane{flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}',
+      '.dshSplitWs_pane{flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:.5px solid var(--dsw-alias-border-l1);border-radius:16px;background:var(--dsw-alias-bg-layer-1)}',
       // 标题栏是**拖动交换位置**的把手：光标是「抓住」，触摸拖动不被浏览器的滚动手势抢走。
       // 里面的文字不参与选择（见下面 wsName/wsPath 那条），否则拖动会顺手拖出一段选区。
       '.dshSplitWs_paneHead{flex:none;display:flex;align-items:center;gap:6px;padding:6px 6px 6px 12px;border-bottom:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);cursor:grab;touch-action:none}',
@@ -509,7 +509,7 @@ window.__ModuleLoader__.load({
   position:relative;
   counter-increment:dshSciNode;
   border:1px solid #24425f;
-  border-radius:5px;
+  border-radius:16px;
   background:
     radial-gradient(circle at 50% 0%,rgba(94,231,255,.035),transparent 62%),
     linear-gradient(180deg,rgba(12,22,38,.94),rgba(6,11,20,.97));

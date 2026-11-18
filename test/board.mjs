@@ -116,7 +116,7 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
     archivedSessionIds: [],
   });
   const sessions = source({
-    ids: ['s-a', 's-b', 's-blank', 's-c'],
+    ids: ['s-a', 's-b', 's-blank', 's-c', 's-orphan-blank'],
     phase: 'ready',
     byId: {
       's-a': { id: 's-a', displayTitle: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
@@ -126,6 +126,9 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
       // displayTitle 故意填项目目录名：平台对无标题会话的回退就是 cwd basename，
       // 任务分派必须按 blank 标志显示「未命名会话」，不能把这个目录名当标题。
       's-blank': { id: 's-blank', displayTitle: 'alpha', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
+      // 不属于任何工作区的空白会话：任务是「只列属于工作区的空白会话」，
+      // 这个空壳不能把左侧多撑出一个“未知工作区”分组。
+      's-orphan-blank': { id: 's-orphan-blank', displayTitle: 'orphan', blank: true, origin: 'user', cwd: '/tmp/orphan', updatedAt: 4, retainedBy: {}, projectionValues: {} },
     },
   });
   /** 记录 `workspaces.create` 收到的参数、`connectWorkspace` 的调用次数/参数与 `pickDirectory` 的次数。 */

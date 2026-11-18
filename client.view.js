@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
      * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
      * 正是「无法确认浏览器到底加载了哪一版」。
      */
-    const CLIENT_BUILD = '2026-11-18c';
+    const CLIENT_BUILD = '2026-11-18d';
 
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
@@ -825,11 +825,17 @@ window.__ModuleLoader__.load({
           /*
            * 不属于任何已注册工作区的会话也要算进来（比如工作区被删了、会话还留着）。
            * 它们只出现在会话表里，所以从 `sessionState` 补一遍。
+           *
+           * **空白会话除外**：没有归属工作区的空白会话只是误点「新建会话」留下的空壳，
+           * 没有内容可派；把它们放进兜底会让左侧凭空多出一个「未知工作区」分组，
+           * 里面全是同名「未命名会话」。空白会话只从上面按工作区遍历的那条路来 ——
+           * 属于某个工作区、且在该工作区的 `sessionIds` 里，才会出现在它那一组。
            */
           for (const id of sessionState.ids) {
             if (seen.has(id)) continue;
             const summary = sessionState.byId[id];
             if (summary === undefined || summary.origin === 'subagent') continue;
+            if (summary.blank === true) continue;
             if (archivedSessionIds.includes(id)) continue;
             seen.add(id);
             const owner = items.find((item) => item.path === summary.cwd);

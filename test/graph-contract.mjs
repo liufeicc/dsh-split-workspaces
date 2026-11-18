@@ -595,6 +595,16 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
   const blankPicker = mount(blankPickerNode.type, blankPickerNode.props);
   const blankGroups = findAll(blankPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerGroupHead'));
   check('空白会话所在的工作区在左侧仍然是一组', blankGroups.length === 3, String(blankGroups.length));
+  /*
+   * 不属于任何工作区的空白会话（s-orphan-blank）只是空壳：不能列进左侧，
+   * 更不能因此多出一个“未知工作区”分组。
+   */
+  const blankPickerKeys = blankPickerNode.props.groups.flatMap((group) => group.items).map((item) => item.key);
+  check('不属于任何工作区的空白会话不进入任务分派左侧',
+    !blankPickerKeys.includes('s-orphan-blank'), JSON.stringify(blankPickerKeys));
+  check('没有归属的空白会话不会造出「未知工作区」分组',
+    blankPickerNode.props.groups.every((group) => group.key !== ''),
+    JSON.stringify(blankPickerNode.props.groups.map((group) => group.key)));
   blankGroups[0].props.onClick();
   blankPicker.flush();
   const blankPickerItems = findAll(blankPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerItem'));

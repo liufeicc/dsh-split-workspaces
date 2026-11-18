@@ -223,8 +223,10 @@ permission.
   it. **Added sessions disappear from the left-hand list** and come back only after being removed
   from the canvas. A dragged card first waits in the canvas's left-hand "unwired" column with a
   dashed border; it joins the tree on the right only after an arrow is drawn, and drops back to
-  unwired when that arrow is deleted. Sessions that belong to no registered workspace go into an
-  "unknown workspace" group at the end.
+  unwired when that arrow is deleted. Sessions **with content** that belong to no registered
+  workspace go into an "unknown workspace" group at the end; blank sessions with no workspace
+  home are left out — they are just unused "New session" shells, and listing them would add a
+  phantom group of identically named "Untitled session" rows.
 - **Wire after dropping**: on the canvas, drag from a card's right-edge light dot onto another
   card to create a relation; the × at the top-right of an unwired card removes it from the canvas.
 - **Trees stack as whole blocks**: when several disconnected trees exist, each tree is laid out
@@ -507,7 +509,8 @@ visual only — delivery, waiting and reviews are unchanged.
   nothing. **The one exception is Design mode's left-hand session picker**: blank sessions are
   listed there (and can be wired into the graph) because "create the target first, wire it,
   then dispatch work into it" is a real workflow; a blank node is also kept when the graph is
-  saved and restored.
+  saved and restored. Only a blank session that belongs to a workspace is listed this way;
+  an orphaned blank shell is not.
 - **`New session` reuses a blank session first**: when this workspace already has a blank
   session that no other pane is pinned to, the pane switches to it right away (still applying
   the pane's staged mode) instead of asking the Host to create another empty record; only when

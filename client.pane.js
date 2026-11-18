@@ -13,9 +13,10 @@
  * 与交换后的光标安放也都跟着它，视图块只负责把共用的拖动状态（谁在被拖、指针在谁
  * 上面）传下来做视觉反馈。
  *
- * 「替换工作区」同样属于标题栏：每格一个图标，菜单里是「新建工作区…」与还没铺开的
- * 工作区（`replaceChoices` 由视图块算好传下来），选中后调 `replaceWorkspace` ——
- * 那一格的**位置**不动，只换里面的工作区与对话。
+ * 「替换工作区」同样属于标题栏：每格一个图标，两级菜单 —— 第一级选工作区
+ * （**全部**工作区，含已经铺在别的格子里的），第二级选这个工作区的会话
+ * （第一条永远是「新建会话」）。选中后工作区与会话在**同一次 publish** 里换掉，
+ * 那一格的**位置**、布局树与暂存模式都不动。
  *
  * 「切换会话」下拉里除了「新建会话」与会话列表，每一行末尾还有一个「删除会话」按钮。
  * 删除本身不在这里实现：入口块惰性解析 `@local/dsh-session-delete` 的客户端服务入口，
@@ -247,7 +248,7 @@ window.__ModuleLoader__.load({
        * 只有 `.dshSplitWs_paneBody` 用它和深色底混出内容区底色。这样「换背景色」
        * 和「换标题栏样式」是两件互不牵连的事，将来改任何一边都不会互相打脸。
        */
-      function PaneFrame({ pane, grow, tint, workspace, workspaceChoices = [], replaceChoices = [], workspaceCount = 0, rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
+      function PaneFrame({ pane, grow, tint, workspace, workspaceChoices = [], replaceChoices = [], workspaceSessions = new Map(), reusableBlankByWorkspace = new Map(), rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
@@ -263,6 +264,15 @@ window.__ModuleLoader__.load({
         const [workspaceBusy, setWorkspaceBusy] = useState(false);
         /** 「替换工作区 → 新建工作区…」是否正在等文件夹选择器 / 建工作区。 */
         const [replaceBusy, setReplaceBusy] = useState(false);
+        /**
+         * 「替换工作区」的两级菜单：`replaceOpen` 是受控开关，`replaceTarget` 是
+         * 第二级选中的工作区 id（`null` = 还停在第一级）。
+         *
+         * 关闭菜单时 `replaceTarget` 一起清掉，下次打开永远从第一级开始 —— 否则
+         * 上次停在某个工作区的会话列表里，用户会以为菜单“打不开”。
+         */
+        const [replaceOpen, setReplaceOpen] = useState(false);
+        const [replaceTarget, setReplaceTarget] = useState(null);
         const reference = useSessionReference(sessions, sessionId);
         const current = summary;
         /**
@@ -303,6 +313,23 @@ window.__ModuleLoader__.load({
         }, [summary, paneActions, pane.key, agentPresets, t]);
 
         /**
+         * 把这一格暂存的 Agent 模式应用到目标会话上；没有暂存值就什么都不做。
+         *
+         * 抽成独立的回调，「切换会话」里的新建与「替换工作区」里的新建共用同一份，
+         * 免得两条路对「新会话该用什么模式」给出不同答案。
+         * 包一层 `Promise.resolve()`：`selectPreset` 同步抛错时也能走同一条 `.catch`。
+         */
+        const applyStagedPreset = useCallback((targetId) => {
+          const staged = pane.preset;
+          if (staged === null || staged === undefined || staged === '') return Promise.resolve();
+          return Promise.resolve()
+            .then(() => presets.selectPreset(agentPresets, targetId, staged))
+            .then((result) => {
+              if (!result.ok) setError(t('pane.presetFailed') + ': ' + result.reason);
+            });
+        }, [pane.preset, agentPresets, presets, t]);
+
+        /**
          * 在这个窗格里新建一个会话，并把暂存的模式带上。
          *
          * 「新建」分两种情况，关键差别是**要不要让 Host 真的创建一条记录**：
@@ -316,19 +343,6 @@ window.__ModuleLoader__.load({
          */
         const createSession = useCallback(() => {
           if (workspace === undefined || busy) return;
-          const staged = pane.preset;
-          /**
-           * 把暂存的模式应用到目标会话上；没有暂存值就什么都不做。
-           * 包一层 `Promise.resolve()`：`selectPreset` 同步抛错时也能走同一条 `.catch`。
-           */
-          const applyStagedPreset = (targetId) => {
-            if (staged === null || staged === undefined || staged === '') return Promise.resolve();
-            return Promise.resolve()
-              .then(() => presets.selectPreset(agentPresets, targetId, staged))
-              .then((result) => {
-                if (!result.ok) setError(t('pane.presetFailed') + ': ' + result.reason);
-              });
-          };
           const reusable = reusableBlankId;
           if (reusable !== undefined && reusable !== null) {
             if (reusable === sessionId) return;
@@ -359,7 +373,61 @@ window.__ModuleLoader__.load({
             .finally(() => {
               setBusy(false);
             });
-        }, [workspace, busy, uiWorkspace, paneActions, pane.key, pane.preset, agentPresets, t, reusableBlankId, sessionId]);
+        }, [workspace, busy, uiWorkspace, paneActions, pane.key, applyStagedPreset, t, reusableBlankId, sessionId]);
+
+        /**
+         * 把这一格换成「目标工作区 + 目标会话」。
+         *
+         * 选的是当前工作区时只 `setSession`，不动工作区（避免一次无意义的
+         * workspace 变更）；选的是别的工作区时用一次 publish 同时改两者，
+         * 中间不会闪出「新工作区的最新会话」。
+         */
+        const replaceWithSession = useCallback((workspaceId, targetSessionId) => {
+          if (workspace !== undefined && workspace.workspaceId === workspaceId) {
+            paneActions.setSession(pane.key, targetSessionId);
+            return;
+          }
+          paneActions.replaceWorkspaceWithSession(pane.key, workspaceId, targetSessionId);
+        }, [workspace, paneActions, pane.key]);
+
+        /**
+         * 在目标工作区里新建一个会话，然后把这一格换过去。
+         *
+         * 目标就是当前工作区时直接复用 `createSession`（那里已经处理了「复用空白
+         * 会话」与「应用暂存模式」）。目标在别的工作区时：
+         *   1. 先看 `reusableBlankByWorkspace` 里有没有没被别的窗格钉住的空白会话；
+         *   2. 没有才 `uiWorkspace.connectWorkspace(workspaceId)` 真正新建；
+         *   3. 应用暂存模式后，一次 publish 同时换工作区与会话。
+         *
+         * 会话创建期间菜单已经关闭，失败时在窗格错误行里说清；这一格保持原样。
+         */
+        const createSessionInWorkspace = useCallback((workspaceId) => {
+          if (replaceBusy) return;
+          if (workspace !== undefined && workspace.workspaceId === workspaceId) {
+            createSession();
+            return;
+          }
+          setReplaceBusy(true);
+          setError(null);
+          const reusable = reusableBlankByWorkspace.get(workspaceId);
+          const created = reusable !== undefined && reusable !== null
+            ? Promise.resolve(reusable)
+            : Promise.resolve().then(() => uiWorkspace.connectWorkspace(workspaceId));
+          created
+            .then(async (createdId) => {
+              if (createdId === undefined || createdId === null || createdId === '') {
+                throw new Error('目标工作区没有返回新会话');
+              }
+              await applyStagedPreset(createdId);
+              paneActions.replaceWorkspaceWithSession(pane.key, workspaceId, createdId);
+            })
+            .catch((reason) => {
+              setError(t('pane.failed') + ': ' + errorText(reason));
+            })
+            .finally(() => {
+              setReplaceBusy(false);
+            });
+        }, [replaceBusy, workspace, createSession, reusableBlankByWorkspace, uiWorkspace, applyStagedPreset, paneActions, pane.key, t]);
 
         /**
          * 删除会话列表里的某一项 —— 不必是当前显示的那一个。
@@ -490,12 +558,18 @@ window.__ModuleLoader__.load({
         }, [replaceBusy, createWorkspaceFromDirectory, paneActions, pane.key, describeReplaceError]);
 
         /**
-         * 「替换工作区」菜单的内容：与面板顶部的「添加工作区」**同一份候选** ——
-         * `新建工作区…`，外加还没铺开的工作区（`replaceChoices` 由视图块用
-         * `model.unopenedWorkspaces` 算好传下来）。
+         * 「替换工作区」菜单：两级。
          *
-         * 已经铺开的工作区刻意不在候选里：它已经在别的格子上，真要对调用「拖动标题栏
-         * 交换位置」那条路 —— 那条路不重开对话，而「替换」必然要换一个会话。
+         * 第一级 ——「新建工作区…」+ **全部**工作区（`replaceChoices` 由视图块算好
+         * 传下来，已铺开的带 `open: true`，只用来显示「已打开」，不参与过滤）。
+         * 选中一个工作区不立刻替换，而是记住它、切到第二级。
+         *
+         * 第二级 ——「返回」+ 第一行「新建会话」+ 这个工作区的会话。选已有会话时，
+         * 工作区与会话在同一次 publish 里换掉；选「新建会话」时优先复用该工作区里
+         * 没被别的窗格钉住的空白会话，没有才真的新建。
+         *
+         * 关菜单（点别处 / Esc）时由 Popover 的 `onOpenChange` 把 `replaceTarget`
+         * 清掉，下次打开从第一级开始。
          *
          * @param close - Popover 给的关闭函数；选中后先关菜单再替换。
          */
@@ -509,23 +583,72 @@ window.__ModuleLoader__.load({
               replaceWithNewWorkspace();
             },
           });
-          if (replaceChoices.length === 0) {
-            /*
-             * 两种「没得选」要分开说：一个工作区都没注册过（棋盘是靠文件夹选择器刚长出来的
-             * 那一格），与「别的工作区都铺在棋盘上了」——用户面对的是完全不同的情况。
-             */
-            const note = workspaceCount === 0 ? t('panel.noWorkspace') : t('pane.replaceAllOpen');
-            return [createNew, h('div', { key: 'note', className: css.menuNote }, note)];
+
+          /* 第一级：选工作区。 */
+          if (replaceTarget === null) {
+            if (replaceChoices.length === 0) {
+              return [createNew, h('div', { key: 'none', className: css.menuNote }, t('panel.noWorkspace'))];
+            }
+            return [
+              createNew,
+              h('div', { key: 'note', className: css.menuNote }, t('pane.replacePickWorkspace')),
+              ...replaceChoices.map((choice) => h(MenuItem, {
+                key: choice.workspaceId,
+                label: choice.title,
+                hint: choice.open ? t('pane.workspaceOpen') : choice.path,
+                onClick: () => setReplaceTarget(choice.workspaceId),
+              })),
+            ];
           }
-          return [createNew, ...replaceChoices.map((choice) => h(MenuItem, {
-            key: choice.workspaceId,
-            label: choice.title,
-            hint: choice.path,
+
+          /* 第二级：选这个工作区的会话。 */
+          const target = replaceChoices.find((choice) => choice.workspaceId === replaceTarget);
+          const targetTitle = target === undefined ? replaceTarget : target.title;
+          const sameWorkspace = workspace !== undefined && workspace.workspaceId === replaceTarget;
+          const sessions = workspaceSessions.get(replaceTarget) ?? [];
+          const back = h(MenuItem, {
+            key: 'back',
+            label: t('pane.replaceBack'),
+            hint: targetTitle,
+            onClick: () => setReplaceTarget(null),
+          });
+          const newSession = h(MenuItem, {
+            key: 'new-session',
+            label: replaceBusy ? t('pane.creating') : t('pane.createSession'),
+            hint: targetTitle,
             onClick: () => {
+              const workspaceId = replaceTarget;
               close();
-              paneActions.replaceWorkspace(pane.key, choice.workspaceId);
+              setReplaceTarget(null);
+              createSessionInWorkspace(workspaceId);
             },
-          }))];
+          });
+          const rows = sessions.map((row) => {
+            const label = row.displayTitle === undefined || row.displayTitle === ''
+              ? t('pane.untitled')
+              : row.displayTitle;
+            return h(MenuItem, {
+              key: row.id,
+              label,
+              hint: row.running === true ? t('pane.running') : undefined,
+              active: sameWorkspace && row.id === sessionId,
+              onClick: () => {
+                const workspaceId = replaceTarget;
+                close();
+                setReplaceTarget(null);
+                replaceWithSession(workspaceId, row.id);
+              },
+            });
+          });
+          return [
+            h('div', { key: 'note', className: css.menuNote }, t('pane.replacePickSession')),
+            back,
+            newSession,
+            ...rows,
+            ...(sessions.length === 0
+              ? [h('div', { key: 'no-session', className: css.menuNote }, t('pane.noSession'))]
+              : []),
+          ];
         };
 
         /**
@@ -775,7 +898,7 @@ window.__ModuleLoader__.load({
             onClick: openWorkspace,
           }, h(FolderGlyph, null)),
           /*
-           * 替换工作区：把**这一格**换成另一个还没铺开的工作区。
+           * 替换工作区：两级菜单（先选工作区，再选这个工作区的会话）。
            *
            * 为什么做成「每格一个图标」而不是面板顶部的一个按钮：替换是一格自己的事，
            * 按钮就在那一格身上，于是永远不必再回答「替哪一格」——省掉一层
@@ -786,6 +909,17 @@ window.__ModuleLoader__.load({
             icon: h(ReplaceGlyph, null),
             title: t('pane.replaceHint'),
             align: 'end',
+            /*
+             * 新建会话/新建工作区是异步的：在它跑完之前不能再开这个菜单，否则用户
+             * 可能先选了别的会话，等旧请求回来又把这一格覆盖回旧目标。
+             */
+            disabled: replaceBusy || busy,
+            open: replaceOpen,
+            onOpenChange: (next) => {
+              setReplaceOpen(next);
+              // 关闭时回到第一级；下次打开不会停在上次那个工作区的会话列表里。
+              if (next !== true) setReplaceTarget(null);
+            },
           }, renderReplaceMenu),
           /*
            * 分屏：一个图标按钮弹出两段菜单（方向 → 工作区）。

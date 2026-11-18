@@ -53,17 +53,20 @@ that currently holds focus is marked by a brand-coloured title bar.
   service, or no graphical environment at all are each spelled out in the pane's own error
   line (the localised reason first, the Host's original text appended as detail).
 - **The `Replace workspace` icon** (one per pane title bar, between `Open directory` and
-  `Split`): puts another workspace into **that pane**. The menu is the same shape as the
-  panel's `Add workspace` — a `New workspace…` row (reusing the very same folder picker and
-  registration) followed by the workspaces that are **not tiled yet**; a workspace already
-  tiled on the board is not a candidate (it is already in another pane — to exchange the two
-  places, drag a title bar, which does not reopen any conversation). After choosing one, the
-  **place stays**: the layout tree, the splitter ratios and the pane's neighbours do not move
-  by a single byte; only the workspace and the conversation inside are swapped. The old
-  workspace's session reference is therefore released, and the pane goes back to following the
-  new workspace's most recently updated session; the pane's staged Agent mode is kept (that is
-  a choice about the pane, not about the workspace). It is one icon per pane rather than one
-  button in the panel header so that "which pane?" never has to be asked.
+  `Split`): puts another workspace, or another session of the same workspace, into **that
+  pane**. The menu has two steps: the first is `New workspace…` (reusing the very same folder
+  picker and registration) plus **all** workspaces (including those already tiled in other
+  panes; tiled ones are marked `open`), in sidebar order. The second step lists that
+  workspace's sessions; the first row is always `New session`, followed by its existing
+  sessions. Choosing an existing session keeps the **place**: the layout tree, splitter ratios
+  and neighbours do not move by a single byte, and the pane is switched atomically to "new
+  workspace + that session" with the session pinned (the same session may be open in another
+  pane too). `New session` reuses a blank session in that workspace that no other pane has
+  pinned, or creates one; the pane's staged Agent mode is kept. Already-tiled workspaces are
+  candidates because "another session of the same workspace" is a legitimate use; to exchange
+  two panes' places, drag a title bar, which does not reopen any conversation. It is one icon
+  per pane rather than one button in the panel header so that "which pane?" never has to be
+  asked.
 - **Every row of the `Switch session` dropdown carries its own delete button** (the trash
   icon at the end of the row): it permanently deletes **that row's** session, which need not
   be the one this pane is currently showing. That is exactly why it is per row instead of one
@@ -515,15 +518,16 @@ visual only — delivery, waiting and reviews are unchanged.
   use, and after all workspaces are tiled there is still some workspace left to choose for
   splitting. The `Back` row shows the currently selected direction on its right, so the
   second step also shows which way this split is going.
-- **`Replace workspace` uses the very same candidates as `Add workspace`** (the model's
-  `unopenedWorkspaces`: the workspace list minus everything already tiled on the board), so the
-  ordering and the two "there is nothing to pick" sentences are identical in both places. Those
-  two cases are different situations: no workspace has ever been registered (that pane was just
-  grown by the folder picker) versus "every other workspace is tiled on the board" — what the
-  user can do about them differs. Already-tiled workspaces are deliberately absent from the
-  candidates: choosing one would mean "the same workspace occupies two panes", whereas the
-  intent here is "bring a different workspace in"; to exchange two panes use the title-bar
-  drag, which does not reopen conversations.
+- **`Replace workspace` uses `workspaceCandidates`** (all workspaces, sidebar order, with an
+  `open` flag), while the panel's `Add workspace` keeps `unopenedWorkspaces` (only the
+  not-yet-tiled ones). They are deliberately no longer the same list: replace must support
+  "another session of the same workspace", so already-tiled workspaces must appear; adding a
+  workspace to the board has no reason to add one that is already there. When no workspace
+  exists at all, the first step still says "no workspaces yet". After choosing a workspace,
+  the second step's first row is always `New session`; choosing an existing session calls
+  `replaceWorkspaceWithSession`, which swaps workspace and session in one publish (with no
+  flash of the new workspace's latest session). To exchange two panes' places, use the
+  title-bar drag; it does not reopen conversations.
 - **`New workspace…` in the second step**: it is present even when no workspace has ever been
   registered, so the board can still grow its first pane. Clicking it opens the folder picker,
   and the chosen directory is registered as a workspace and switched into the new pane
@@ -784,12 +788,13 @@ the whole implementation.
 - `client.model.js` — the pure model: the layout tree (split, collapse, balance, ratio
   clamping, **swapping the key of two leaves**), **pane geometry** (`layoutRects` converts
   the layout tree into rectangles, `neighborPane` finds the neighbour at "the corresponding
-  position" by rectangle), the pane store (including **`replaceWorkspace`**, `swapPanes` and
-  **`forgetSession`** — releasing every pane pinned to a session id in one step),
-  the drag threshold, the "which session should be shown" decision, and the candidate
-  workspaces for the split menu's second step (`splitCandidates`) and the "not tiled yet"
-  list both places share (`unopenedWorkspaces`); it does not depend on React and can be
-  tested directly in Node.
+  position" by rectangle), the pane store (including **`replaceWorkspace` /
+  `replaceWorkspaceWithSession`**, `swapPanes` and **`forgetSession`** — releasing every pane
+  pinned to a session id in one step), the drag threshold, the "which session should be
+  shown" decision, the candidate workspaces for the split menu's second step
+  (`splitCandidates`), the replace menu's all workspaces (`workspaceCandidates`), and the
+  "not tiled yet" list used by the panel's add menu (`unopenedWorkspaces`); it does not
+  depend on React and can be tested directly in Node.
 - `client.presets.js` — Agent modes: read the Host roster, apply a mode, share a snapshot.
 - `client.mcp.js` — the per-workspace MCP switch: read the Host roster, write the selection,
   share a snapshot (optimistic update with rollback; the remote namespace belongs to another
@@ -871,10 +876,12 @@ the whole implementation.
   (`check` / `report`), installing the plugin as a "board with two panes", colour contrast
   (WCAG), and small helpers for finding panes and menus in the render output.
 - `test/layout-contract.mjs` — offline contract tests for tiling / focus highlight / the
-  two-step split menu (including `New workspace…`) / **replace workspace** (the store changes
-  only that pane, the layout tree and the other panes are the same objects; the menu
-  candidates and the two "nothing to pick" sentences; both the `New workspace…` path and a
-  picker that will not open) (`node test/layout-contract.mjs`).
+  two-step split menu (including `New workspace…`) / **replace workspace** (two-level menu:
+  all workspaces including already-tiled ones, the first session row is `New session`,
+  choosing an existing session swaps workspace and session atomically, choosing a new session
+  in another workspace reuses a blank or creates one, closing returns to step 1; the store
+  changes only that pane, the layout tree and the other panes are the same objects; both the
+  `New workspace…` path and picker failures) (`node test/layout-contract.mjs`).
 - `fonts/` — the ZCOOL KuaiLe simplified-Chinese subset (710 KB) and Latin subset (5 KB),
   served by the Host's `/split-workspaces-fonts` prefix route (not a browser code block).
 - `test/font-contract.mjs` — the font route and message-reveal contract
@@ -954,11 +961,12 @@ the whole implementation.
   (`node tools/browser-probe.mjs`).
 - `tools/replace-probe.mjs` — a **real-browser** probe: on **its own** separate `dsh web`
   (it does not touch the window you have open) it clicks through "Replace workspace" and
-  measures the three things the offline tests cannot answer — the icon button really opens the
-  menu, the menu really lists no already-tiled workspace, and after picking one the pane is
-  **still in place** (neither its rectangle nor its DOM node changed, meaning the contents
-  were replaced rather than the pane closed and reopened) — and leaves screenshots of the open
-  menu and of the result (`node tools/replace-probe.mjs`, about a minute;
+  measures what the offline tests cannot answer — the icon button really opens the menu, the
+  first level really lists all workspaces (the current one marked `open`), the second level's
+  first row is `New session`, and after picking an existing session the pane is **still in
+  place** (neither its rectangle nor its DOM node changed, meaning the contents were replaced
+  rather than the pane closed and reopened) — and leaves screenshots of the open menu and of
+  the result (`node tools/replace-probe.mjs`, about a minute;
   `DSH_REPLACE_PROBE_URL` reuses a running service).
 - `tools/swap-probe.mjs` — a **real-browser** probe: it starts its own separate `dsh web`
   (without touching the window you have open) plus a headless Chrome, and really drags twice
@@ -1052,9 +1060,10 @@ pane that takes its place should take over the caret on the next frame ⑥ press
 pane's title bar, drag it onto another pane and release → the two panes swap positions and
 **neither conversation is reopened** (look before and after at whether the messages in the
 panes are still there and whether "Opening session…" flashes) ⑦ with a spare workspace
-available, click the "Replace workspace" icon on one pane's title bar → the menu's first row
-is `New workspace…` and the rest are the workspaces that are not tiled yet; pick one → **that
-pane's place and size do not change**, only what is inside becomes the new workspace's
+available, click the "Replace workspace" icon on one pane's title bar → the first step is
+`New workspace…` plus all workspaces (tiled ones are marked `open`); pick a workspace → the
+second step's first row is `New session`, followed by its sessions; pick an existing session →
+**that pane's place and size do not change**, only what is inside becomes that session's
 conversation (the old conversation is gone and leaves nothing behind), and not a pixel of the
 other panes moves.
 

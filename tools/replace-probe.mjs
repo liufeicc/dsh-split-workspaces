@@ -37,7 +37,7 @@ const PANEL_LABEL = process.env.DSH_REPLACE_PROBE_PANEL ?? '多工作区平铺';
  * 替换按钮的可访问名 —— 就是词典里 `pane.replaceHint` 那句话。
  * 图标按钮没有可见文字，只能靠它认（离线测试走的是元素的 key，不看文案）。
  */
-const REPLACE_LABEL = process.env.DSH_REPLACE_PROBE_LABEL ?? '把这一格换成另一个工作区（位置不变）';
+const REPLACE_LABEL = process.env.DSH_REPLACE_PROBE_LABEL ?? '把这一格换成另一个工作区或会话（位置不变）';
 /** 弹出菜单里「新建工作区…」那一行（词典 `panel.newWorkspace`）。 */
 const NEW_WORKSPACE = '新建工作区…';
 
@@ -295,65 +295,83 @@ try {
   check('替换前每格都打上了 DOM 标记（下面用它分辨「同一个节点」与「重建」）',
     tagged.every((row) => row.tagged === row.key), JSON.stringify(tagged.map((row) => row.tagged)));
 
-  // --- 打开菜单 -----------------------------------------------------------------------
+  // --- 打开菜单（第一级：选工作区） ---------------------------------------------------
   const opened = await cdp.eval(replaceTrigger(victim.key));
   check('点这一格的「替换工作区」按钮能打开菜单', opened === 'clicked', opened);
   await sleep(300);
   await screenshot('replace-menu');
   const menu = await cdp.eval(READ_MENU);
-  check('菜单第一行是「新建工作区…」，右边提示「选择文件夹」',
+  check('第一级第一行是「新建工作区…」，右边提示「选择文件夹」',
     menu.length > 0 && menu[0].label === NEW_WORKSPACE && menu[0].hint === '选择文件夹',
     JSON.stringify(menu));
-  check('菜单里不再列出已经铺开的工作区（候选的提示是路径，不是「已打开」）',
-    menu.slice(1).every((row) => row.hint !== '已打开'),
-    JSON.stringify(menu));
+  const workspaceRows = menu.slice(1);
+  check('第一级列出全部工作区（含已经铺开的）', workspaceRows.length > 0, JSON.stringify(menu));
+  const currentRow = workspaceRows.find((row) => row.label === victim.name);
+  check('当前这一格的工作区也在候选里，并标「已打开」',
+    currentRow !== undefined && currentRow.hint === '已打开',
+    JSON.stringify(currentRow));
 
-  const candidates = menu.slice(1);
-  if (candidates.length === 0) {
-    note('这一节跳过：棋盘外的空闲工作区一个都没有（菜单只显示「没有别的工作区可换了」）', JSON.stringify(menu));
+  const chosenWorkspace = workspaceRows.find((row) => row.label !== victim.name);
+  if (chosenWorkspace === undefined) {
+    note('这一节跳过：棋盘上只有这一个工作区，没有别的可换', JSON.stringify(menu));
   } else {
-    const chosen = candidates[0];
-    note('选中的候选', chosen.label + ' / ' + chosen.hint);
+    note('选中的工作区', chosenWorkspace.label + ' / ' + chosenWorkspace.hint);
 
-    const clicked = await cdp.eval(clickMenuRow(chosen.label));
-    check('能点中候选那一行', clicked === 'clicked', clicked);
+    const clickedWorkspace = await cdp.eval(clickMenuRow(chosenWorkspace.label));
+    check('能点中工作区那一行，进入第二级', clickedWorkspace === 'clicked', clickedWorkspace);
+    await sleep(300);
+    const sessionMenu = await cdp.eval(READ_MENU);
+    check('第二级第一行是「返回」，第二行是「新建会话」',
+      sessionMenu[0]?.label === '返回' && sessionMenu[1]?.label === '新建会话',
+      JSON.stringify(sessionMenu));
+    if (sessionMenu.length < 2) {
+      note('这一节跳过：第二级没有可点的行', JSON.stringify(sessionMenu));
+    } else {
+      const sessionRows = sessionMenu.slice(2);
+      const chosenSession = sessionRows[0] ?? sessionMenu[1];
+      note('选中的会话', chosenSession.label);
 
-    // 等这一格换过来（标题变成新工作区名），最多 15 秒。
-    let after;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      await sleep(500);
-      after = await panes();
-      if (rowOf(after, victim.key)?.name === chosen.label) break;
+      const clickedSession = await cdp.eval(clickMenuRow(chosenSession.label));
+      check('能点中会话那一行', clickedSession === 'clicked', clickedSession);
+
+      // 等这一格换过来（标题变成新工作区名），最多 15 秒。
+      let after;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await sleep(500);
+        after = await panes();
+        if (rowOf(after, victim.key)?.name === chosenWorkspace.label) break;
+      }
+      const replaced = rowOf(after, victim.key);
+      check('这一格的标题变成了选中的工作区',
+        replaced !== undefined && replaced.name === chosenWorkspace.label,
+        replaced === undefined ? '窗格不见了' : replaced.name);
+      check('也不是原来那个工作区了', replaced !== undefined && replaced.name !== victim.name,
+        String(replaced?.name));
+      check('窗格数量不变（替换的是位置，不是关掉再加一格）', after.length === start.length,
+        String(after.length) + ' vs ' + String(start.length));
+      check('**位置不变**：这一格的矩形与替换前逐像素一致',
+        sameRect(replaced?.rect, victim.rect), JSON.stringify([victim.rect, replaced?.rect]));
+      check('别的窗格的矩形也一个像素都没动',
+        others.every((row) => sameRect(rowOf(after, row.key)?.rect, row.rect)),
+        JSON.stringify(after.map((row) => [row.key, row.rect])));
+      check('这一格是**同一个 DOM 节点**（没有被卸载重建，输入框草稿与滚动位置都还在）',
+        replaced !== undefined && replaced.tagged === victim.key, String(replaced?.tagged));
+      check('菜单已经关掉了', await cdp.eval("document.querySelectorAll('[role=\"menu\"]').length") === 0);
+      check('这一格不再显示原来那段对话', replaced !== undefined && replaced.body !== victim.body,
+        String(replaced?.body).slice(0, 80));
+      /*
+       * 新工作区的会话可能正被读一遍（第一格换到别的工作区时，它的最新会话要重新持有）。
+       * 这不是错误，给它 15 秒读完，再断言没有**永远**卡在「正在打开会话…」上。
+       */
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (after.every((row) => row.loading === false)) break;
+        await sleep(500);
+        after = await panes();
+      }
+      check('替换之后没有卡在「正在打开会话…」上', after.every((row) => row.loading === false),
+        JSON.stringify(after.map((row) => [row.key, row.loading, row.hasComposer])));
+      await screenshot('replace-after');
     }
-    const replaced = rowOf(after, victim.key);
-    check('这一格的标题变成了选中的工作区', replaced !== undefined && replaced.name === chosen.label,
-      replaced === undefined ? '窗格不见了' : replaced.name);
-    check('也不是原来那个工作区了', replaced !== undefined && replaced.name !== victim.name,
-      String(replaced?.name));
-    check('窗格数量不变（替换的是位置，不是关掉再加一格）', after.length === start.length,
-      String(after.length) + ' vs ' + String(start.length));
-    check('**位置不变**：这一格的矩形与替换前逐像素一致',
-      sameRect(replaced?.rect, victim.rect), JSON.stringify([victim.rect, replaced?.rect]));
-    check('别的窗格的矩形也一个像素都没动',
-      others.every((row) => sameRect(rowOf(after, row.key)?.rect, row.rect)),
-      JSON.stringify(after.map((row) => [row.key, row.rect])));
-    check('这一格是**同一个 DOM 节点**（没有被卸载重建，输入框草稿与滚动位置都还在）',
-      replaced !== undefined && replaced.tagged === victim.key, String(replaced?.tagged));
-    check('菜单已经关掉了', await cdp.eval("document.querySelectorAll('[role=\"menu\"]').length") === 0);
-    check('这一格不再显示原来那段对话', replaced !== undefined && replaced.body !== victim.body,
-      String(replaced?.body).slice(0, 80));
-    /*
-     * 新工作区的会话可能正被读一遍（第一格换到别的工作区时，它的最新会话要重新持有）。
-     * 这不是错误，给它 15 秒读完，再断言没有**永远**卡在「正在打开会话…」上。
-     */
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      if (after.every((row) => row.loading === false)) break;
-      await sleep(500);
-      after = await panes();
-    }
-    check('替换之后没有卡在「正在打开会话…」上', after.every((row) => row.loading === false),
-      JSON.stringify(after.map((row) => [row.key, row.loading, row.hasComposer])));
-    await screenshot('replace-after');
   }
 
   // --- 换回来：菜单里应当又能看见原来那个工作区 -----------------------------------------
@@ -368,19 +386,27 @@ try {
     } else {
       await sleep(300);
       const backMenu = await cdp.eval(READ_MENU);
-      check('替换掉的那个工作区回到了候选里（同一格再换回去可行）',
+      check('原来那个工作区仍在第一级候选里（同一格再换回去可行）',
         backMenu.slice(1).some((row) => row.label === victim.name), JSON.stringify(backMenu));
-      const restored = await cdp.eval(clickMenuRow(victim.name));
-      let final;
-      for (let attempt = 0; attempt < 30; attempt += 1) {
-        await sleep(500);
-        final = await panes();
-        if (rowOf(final, victim.key)?.name === victim.name) break;
+      const backWorkspace = await cdp.eval(clickMenuRow(victim.name));
+      await sleep(300);
+      const backSessionMenu = await cdp.eval(READ_MENU);
+      const backSession = backSessionMenu.slice(2)[0] ?? backSessionMenu[1];
+      if (backWorkspace !== 'clicked' || backSession === undefined) {
+        note('回程这一节跳过：第二级没有可点的行', JSON.stringify(backSessionMenu));
+      } else {
+        const restored = await cdp.eval(clickMenuRow(backSession.label));
+        let final;
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          await sleep(500);
+          final = await panes();
+          if (rowOf(final, victim.key)?.name === victim.name) break;
+        }
+        check('换回去之后标题回到原来的工作区', rowOf(final, victim.key)?.name === victim.name, restored);
+        check('换回去也没动布局', sameRect(rowOf(final, victim.key)?.rect, victim.rect)
+          && others.every((row) => sameRect(rowOf(final, row.key)?.rect, row.rect)),
+          JSON.stringify(final.map((row) => [row.key, row.rect])));
       }
-      check('换回去之后标题回到原来的工作区', rowOf(final, victim.key)?.name === victim.name, restored);
-      check('换回去也没动布局', sameRect(rowOf(final, victim.key)?.rect, victim.rect)
-        && others.every((row) => sameRect(rowOf(final, row.key)?.rect, row.rect)),
-        JSON.stringify(final.map((row) => [row.key, row.rect])));
     }
   }
 } finally {

@@ -126,10 +126,11 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
       's-blank': { id: 's-blank', displayTitle: '', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
     },
   });
-  /** 记录 `workspaces.create` 收到的参数、`connectWorkspace` 的调用次数与 `pickDirectory` 的次数。 */
+  /** 记录 `workspaces.create` 收到的参数、`connectWorkspace` 的调用次数/参数与 `pickDirectory` 的次数。 */
   const createdWith = [];
   let pickCount = 0;
   let connectCount = 0;
+  const connectCalls = [];
   const render = () => mount(main.component, {
     ...injected,
     t: stub.ctx.locale.bind('split-workspaces'),
@@ -144,8 +145,9 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
       },
     },
     uiWorkspace: {
-      connectWorkspace: () => {
+      connectWorkspace: (workspaceId) => {
         connectCount += 1;
+        connectCalls.push(workspaceId);
         return Promise.resolve('s-new');
       },
       pickDirectory: () => {
@@ -158,7 +160,7 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
     // 这样「窗格空白时提示先选会话」这类断言检查的就是真实渲染结果。
     SessionProvider: function SessionProvider(props) { return props.session === undefined ? props.empty() : null; },
   });
-  return { stub, paneStore: injected.paneStore, injected, render, createdWith, pickCount: () => pickCount, connectCount: () => connectCount };
+  return { stub, paneStore: injected.paneStore, injected, render, createdWith, pickCount: () => pickCount, connectCount: () => connectCount, connectCalls: () => connectCalls };
 }
 
 /** 打开某个窗格的分屏菜单并点掉第一步的方向，返回停在第二步的窗格挂载。 */

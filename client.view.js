@@ -522,13 +522,57 @@ window.__ModuleLoader__.load({
 
         const openWorkspaceIds = useMemo(() => panes.map((pane) => pane.workspaceId), [panes]);
         /*
-         * 「还没铺开的工作区」：面板顶部的「添加工作区」与每个窗格标题栏的「替换工作区」
-         * 用的是同一份候选（`model.unopenedWorkspaces`），因此两处菜单的排序与措辞天然一致。
+         * 「还没铺开的工作区」：面板顶部的「添加工作区」仍然只用这一份 —— 它是
+         * 「往棋盘上加一个工作区」，已经铺开的工作区没必要再加一次。
          */
         const addable = useMemo(() => model.unopenedWorkspaces(items, openWorkspaceIds), [items, openWorkspaceIds]);
 
         /** 分屏菜单第二步的候选：未铺开的在前，已铺开的标「已打开」。 */
         const splitChoices = useMemo(() => model.splitCandidates(items, openWorkspaceIds), [items, openWorkspaceIds]);
+
+        /*
+         * 「替换工作区」的候选：**全部**工作区，按侧边栏顺序。已经铺在别的格子里
+         * 的工作区也必须出现 —— 同一个工作区换一个会话是合理用法，第一级选中它之后
+         * 到第二级选会话。标记 `open` 只用于「已打开」提示，不参与过滤。
+         */
+        const replaceChoices = useMemo(
+          () => model.workspaceCandidates(items, openWorkspaceIds),
+          [items, openWorkspaceIds],
+        );
+
+        /*
+         * 每个工作区可选的会话列表。替换菜单第二级直接用它；每个窗格自己的 `rows`
+         * 仍然由 `panePlan` 单独算（那份只关心这一格当前的工作区）。
+         */
+        const workspaceSessions = useMemo(() => {
+          const map = new Map();
+          for (const item of items) {
+            map.set(item.workspaceId, model.selectableSessions(item, sessionState, archivedSessionIds));
+          }
+          return map;
+        }, [items, sessionState, archivedSessionIds]);
+
+        /*
+         * 每个工作区里「可复用的空白会话」：加新窗格/换工作区后点「新建会话」时用。
+         * 与 `panePlan` 里那份的差别是这里按**全部**窗格占用来排除 —— 这一格自己
+         * 的会话如果在别的窗格里，也不该被抢。
+         */
+        const occupiedSessionIds = useMemo(
+          () => panes.map((pane) => pane.sessionId).filter((id) => id !== null && id !== undefined),
+          [panes],
+        );
+        const reusableBlankByWorkspace = useMemo(() => {
+          const map = new Map();
+          for (const item of items) {
+            map.set(item.workspaceId, model.reusableBlankSession(
+              item,
+              sessionState,
+              archivedSessionIds,
+              occupiedSessionIds,
+            ));
+          }
+          return map;
+        }, [items, sessionState, archivedSessionIds, occupiedSessionIds]);
 
         const [addBusy, setAddBusy] = useState(false);
         const [addError, setAddError] = useState(null);
@@ -957,11 +1001,13 @@ window.__ModuleLoader__.load({
             workspace: workspaceById.get(pane.workspaceId),
             workspaceChoices: splitChoices,
             /*
-             * 替换菜单的候选：还没铺开的工作区（`addable`），加上「一共注册了几个工作区」
-             * 这个数 —— 菜单要分开说「还没有工作区」与「别的工作区都铺开了」。
+             * 替换菜单的候选：**全部**工作区（含已经铺开的），按侧边栏顺序，带
+             * `open` 标记。第二级要用目标工作区的会话列表，所以把
+             * `workspaceSessions` 与会话复用表也一起传下去。
              */
-            replaceChoices: addable,
-            workspaceCount: items.length,
+            replaceChoices,
+            workspaceSessions,
+            reusableBlankByWorkspace,
             rows: plan === undefined ? [] : plan.rows,
             sessionId: plan === undefined ? undefined : plan.sessionId,
             summary: plan === undefined ? undefined : plan.summary,

@@ -390,6 +390,9 @@ window.__ModuleLoader__.load({
         addPane: (workspaceId, sessionId) => paneStore.addPane(workspaceId, sessionId),
         splitPane: (key, dir, workspaceId) => paneStore.splitPane(key, dir, workspaceId),
         replaceWorkspace: (key, workspaceId) => paneStore.replaceWorkspace(key, workspaceId),
+        replaceWorkspaceWithSession: (key, workspaceId, sessionId) => (
+          paneStore.replaceWorkspaceWithSession(key, workspaceId, sessionId)
+        ),
         swapPanes: (keyA, keyB) => paneStore.swapPanes(keyA, keyB),
         /*
          * 关窗格**不动箭头**。

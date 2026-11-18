@@ -132,6 +132,27 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 工作区候选：按 Host 给的顺序（与侧边栏一致）列出全部工作区，并标出哪些已经
+     * 铺在棋盘上。
+     *
+     * 「替换工作区」用它：同一个工作区开两格看两个会话是合理用法，因此已经铺开的
+     * 工作区也必须在候选里（选中后到第二级选会话）。分屏菜单也复用这份数据，只是
+     * 额外把未铺开的排在前面。
+     *
+     * @param items - 工作区列表（`workspaces.list` 快照的 `items`）。
+     * @param openWorkspaceIds - 已经铺在棋盘上的工作区 id。
+     */
+    function workspaceCandidates(items, openWorkspaceIds) {
+      const open = new Set(openWorkspaceIds ?? []);
+      return items.map((item) => ({
+        workspaceId: item.workspaceId,
+        title: item.title,
+        path: item.path,
+        open: open.has(item.workspaceId),
+      }));
+    }
+
+    /**
      * 分屏菜单第二步的候选工作区 —— 「先选方向，再选往新窗格里放哪个工作区」。
      *
      * 返回**全部**工作区，但把「还没铺开」的排在前面（分屏的第一意图就是再摊开
@@ -145,24 +166,17 @@ window.__ModuleLoader__.load({
      * @param openWorkspaceIds - 已经铺在棋盘上的工作区 id。
      */
     function splitCandidates(items, openWorkspaceIds) {
-      const open = new Set(openWorkspaceIds ?? []);
-      return items
-        .map((item) => ({
-          workspaceId: item.workspaceId,
-          title: item.title,
-          path: item.path,
-          open: open.has(item.workspaceId),
-        }))
+      return workspaceCandidates(items, openWorkspaceIds)
         .sort((left, right) => Number(left.open) - Number(right.open));
     }
 
     /**
-     * 「还没铺在棋盘上」的工作区 —— 面板顶部「添加工作区」与窗格标题栏「替换工作区」
-     * 共用同一份候选。
+     * 「还没铺在棋盘上」的工作区 —— 面板顶部「添加工作区」的候选。
      *
-     * 两处刻意用同一份：这两个动作的意图都是「让一个**新**工作区出现在棋盘上」，
-     * 只是一个接在右边、一个替掉现有的一格。已经铺开的工作区因此都不在候选里 ——
-     * 想把已经铺开的两个工作区对调，用「拖动标题栏交换位置」那条路（它不重开对话）。
+     * 这个动作的意图是「往棋盘上**加**一个工作区」，已经铺开的没有必要再加一次
+     * （加了也只会落到同一个工作区上），所以这里只返回未铺开的部分。
+     * 窗格标题栏的「替换工作区」不走这条 —— 它要支持「同一个工作区换一个会话」，
+     * 候选是 `workspaceCandidates`（全量，带 `open` 标记）。
      *
      * 保持 Host 给的顺序（`filter` 是稳定的），于是菜单里的排列与侧边栏一致。
      *
@@ -600,6 +614,39 @@ window.__ModuleLoader__.load({
         },
 
         /**
+         * 把某个窗格换成「指定工作区 + 指定会话」—— 替换菜单第二层选已有会话。
+         *
+         * 与 `replaceWorkspace` 的区别只有一处：工作区与会话在**同一次 publish**
+         * 里改完。分两次改（先换工作区再 setSession）会让中间那一拍按新工作区的
+         * 最新会话渲染一次，用户会看到一格闪过去的别的对话；`resolvePaneSessionId`
+         * 也会在那拍把「跟随」解析成另一个会话。
+         *
+         * `follow` 置 false：用户已经亲手选了会话，这一格就该钉在它上面；那个会话
+         * 被删掉时回到空态，而不是悄悄换成同工作区的另一段对话（与「切换会话」
+         * 里点一个具体会话的语义一致）。暂存的 Agent 模式照旧保留。
+         *
+         * 同一个工作区再开一格是允许的：`workspaceId` 只用来选数据源，不要求全局
+         * 唯一。同一个会话同时出现在两格也允许（本插件本来就这样）。
+         *
+         * @param key - 窗格 key。
+         * @param workspaceId - 目标工作区。
+         * @param sessionId - 要钉住的会话。
+         * @returns 真的改了返回 true；窗格不存在、或已经是这个组合时返回 false。
+         */
+        replaceWorkspaceWithSession(key, workspaceId, sessionId) {
+          const pane = snapshot.panes.find((candidate) => candidate.key === key);
+          if (pane === undefined) return false;
+          if (pane.workspaceId === workspaceId && pane.sessionId === sessionId) return false;
+          publish({
+            ...snapshot,
+            panes: snapshot.panes.map((candidate) => (candidate.key === key
+              ? { ...candidate, workspaceId, sessionId, follow: false }
+              : candidate)),
+          });
+          return true;
+        },
+
+        /**
          * 交换两个窗格的**位置**：布局树里两个叶子的 key 互换，其余一切（工作区、
          * 会话、暂存模式、跟随标记）都跟着各自的窗格走。
          *
@@ -884,6 +931,7 @@ window.__ModuleLoader__.load({
       SPLIT_DIRECTIONS,
       SPLIT_PLACEMENTS,
       splitPlacement,
+      workspaceCandidates,
       splitCandidates,
       unopenedWorkspaces,
       leafNode,

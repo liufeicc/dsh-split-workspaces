@@ -21,7 +21,7 @@ import {
   STOP_TIMEOUT_MS,
 } from './host.constants.js';
 import { loadReviews, loadStore, makeTarget, saveReviews, saveStore } from './host.store.js';
-import { clearLayoutFile, loadLayoutFile, saveLayoutFile } from './host.layout.js';
+import { loadLayoutFile, saveLayoutFile } from './host.layout.js';
 
 /**
  * 绑定关系与工具执行的全部状态。
@@ -417,20 +417,6 @@ export class PaneDispatchService {
     }
     // 返回对象而不是裸 true：Typert 的 src-json 结果路径对原始布尔值不保证
     // 能原样回传，客户端会拿不到“写入成功”的确认。
-    return { ok: true };
-  }
-
-  /**
-   * 删除 Host 上的布局记录。
-   *
-   * @param request - Typert 网关要求保留的形参。
-   * @returns `{ ok: true }`；删除失败时抛错。
-   */
-  clearLayout(request) {
-    void request;
-    if (!clearLayoutFile()) {
-      throw new Error('paneDispatch.clearLayout: layout could not be cleared');
-    }
     return { ok: true };
   }
 

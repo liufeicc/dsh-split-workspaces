@@ -25,15 +25,16 @@ that currently holds focus is marked by a brand-coloured title bar.
   Git renders the Git plugin's own panel. Each pane picks independently and defaults to Chat;
   **with no extra view plugins (or only Chat) the strip is not rendered at all**, so the pane
   behaves exactly as before.
-- **Save layout / auto-restore**: the save icon in the top-right (with a tooltip) writes the current
-  board (split directions, ratios, pane order, focus), each pane's session and Agent preset,
-  the **dispatch graph (edges + notes)**, and the current panel mode to the Host's
-  `$DSH_HOME/storages/pane_layout.json`.
+- **Save layout / auto-restore**: the save icon in the top-right saves **only the current panel
+  mode's part**: tile mode writes the board (split directions, ratios, pane order, focus) and
+  each pane's session/Agent preset; dispatch mode writes the **dispatch graph (edges + notes)**.
+  The other part keeps its last save and is never cleared by this action. The record does not
+  store the panel mode: a page reload always starts in tile mode.
+  The saved record lives in the Host's `$DSH_HOME/storages/pane_layout.json`.
   The first time the tiled panel is opened after a page reload — or after the desktop app
   restarts on a different port — it restores that snapshot;
   switching panels within the same page keeps the live layout. Missing workspaces, sessions,
-  presets, or graph endpoints are dropped or cleared silently — never an error. The small
-  trash icon clears only the saved record and leaves the current board alone. The model itself
+  presets, or graph endpoints are dropped or cleared silently — never an error. The model itself
   is persisted per session by DSH, so restoring the session restores the model; no second
   model snapshot is forced onto it.
 - **The `Open directory` icon** (the folder to the right of the workspace name): clicking it
@@ -503,7 +504,10 @@ visual only — delivery, waiting and reviews are unchanged.
   would pile up a row of identically named "New session" entries. This follows the same idea
   as the native DSH sidebar ("only the currently selected blank session is visible"), just
   taken further: the menu's first item already is `New session`, so a placeholder row adds
-  nothing.
+  nothing. **The one exception is Design mode's left-hand session picker**: blank sessions are
+  listed there (and can be wired into the graph) because "create the target first, wire it,
+  then dispatch work into it" is a real workflow; a blank node is also kept when the graph is
+  saved and restored.
 - **`New session` reuses a blank session first**: when this workspace already has a blank
   session that no other pane is pinned to, the pane switches to it right away (still applying
   the pane's staged mode) instead of asking the Host to create another empty record; only when
@@ -766,10 +770,11 @@ the whole implementation.
   `conversation.view` entries (Chat / Git, always skipping `trajectory`), passes the selected
   view id as the owner prop of the shared `conversation.content` Factory, and renders no strip
   at all when no extra view plugin is installed (behaviour identical to before).
-- `client.layout.js` — pure save/restore logic for the board: serializes the layout, pane
-  sessions/presets, dispatch graph, and panel mode; on restore it validates workspaces
-  (id → path fallback), sessions, and presets, prunes invalid layout branches and dead graph
-  edges, and treats corrupt JSON/version as "never saved".
+- `client.layout.js` — pure save/restore logic for the board: serializes only the current
+  panel mode's part (board or dispatch graph, carrying the other part's last save; the panel
+  mode is not stored); on restore it validates workspaces (id → path fallback), sessions, and
+  presets, prunes invalid layout branches and dead graph edges, and treats corrupt
+  JSON/version as "never saved".
 - `client.pane.js` — pane layer: `PaneFrame` (workspace title, the **open-directory button**,
   the **replace-workspace icon** — its menu contents and the `New workspace…` path — split
   menu, mode, session (**every row ends with a delete button**), close) and the session
@@ -911,13 +916,15 @@ the whole implementation.
   hands it over, a drag-selection is given way to, closing a pane waits one frame)
   (`node test/focus-contract.mjs`).
 - `test/save-contract.mjs` — offline contract tests for layout save/restore
-  (`node test/save-contract.mjs`): serialization, missing sessions/workspaces/presets,
-  layout pruning and focus fallback, corrupt JSON/version, graph sanitizing (missing nodes,
-  self-edges, cycles, multiple parents), Host persistence/read-back/clear, and automatic
-  restore of the board, graph, and mode when the panel mounts.
+  (`node test/save-contract.mjs`): serialization, scoped saving (tile-only layout /
+  graph-only dispatch, each carrying the other part's last save), missing
+  sessions/workspaces/presets, layout pruning and focus fallback, corrupt JSON/version,
+  graph sanitizing (missing nodes, self-edges, cycles, multiple parents), Host
+  persistence/read-back, and automatic restore of the board and graph in tile mode when
+  the panel mounts.
 - `test/host-layout-contract.mjs` — offline contract tests for the Host layout file
   (`node test/host-layout-contract.mjs`): missing file, atomic save/read-back, storage path,
-  invalid root rejection, clear, and repeated clear.
+  and invalid root rejection.
 - `test/preset-contract.mjs` — offline contract tests for the mode selector
   (`node test/preset-contract.mjs`).
 - `test/fx-contract.mjs` — the dispatch-FX contract (`node test/fx-contract.mjs`): the

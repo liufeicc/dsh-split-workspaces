@@ -368,6 +368,12 @@ check('会话菜单不列空白会话，子代理与归档照旧过滤', (() => 
   const rows = selectableSessions(blankWorkspace, blankState, ['s-arch']);
   return rows.length === 1 && rows[0].id === 's-real';
 })());
+check('任务分派传 includeBlank 时空白会话也进来（子代理/归档仍过滤）', (() => {
+  const rows = selectableSessions(blankWorkspace, blankState, ['s-arch'], { includeBlank: true });
+  return rows.length === 2
+    && rows.some((row) => row.id === 's-empty')
+    && rows.some((row) => row.id === 's-real');
+})());
 check('「新建会话」优先复用本工作区最近更新的空白会话', reusableBlankSession(blankWorkspace, blankState, [], []) === 's-empty');
 check('被别的窗格占用的空白会话不会被抢走', reusableBlankSession(blankWorkspace, blankState, [], ['s-empty']) === undefined);
 check('归档的空白会话不复用', reusableBlankSession(blankWorkspace, blankState, ['s-empty'], []) === undefined);

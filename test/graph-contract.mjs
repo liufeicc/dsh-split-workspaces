@@ -249,8 +249,8 @@ await settle();
 const mounted = stubForRemote.mounted ?? [];
 check('插件把 paneDispatch 命名空间挂到了远端网关上', mounted.length === 1 && mounted[0].package === '@local/dsh-split-workspaces', JSON.stringify(mounted.map((item) => item.package)));
 const descriptors = mounted.length === 0 ? [] : mounted[0].descriptors;
-check('命名空间暴露绑定 list/set、派单视觉 pullVisual 与布局 read/write/clear 六个方法',
-  descriptors.map((item) => item.method).sort().join(',') === 'clearLayout,list,pullVisual,readLayout,set,writeLayout',
+check('命名空间暴露绑定 list/set、派单视觉 pullVisual 与布局 read/write 五个方法',
+  descriptors.map((item) => item.method).sort().join(',') === 'list,pullVisual,readLayout,set,writeLayout',
   descriptors.map((item) => item.method).join(','));
 check('每个输入 codec 都是 strict（网关的硬要求）', descriptors.every((item) => item.parameters.every((param) => param.codec.mode === 'strict')));
 check('每个 strict codec 都带 create() schema 工厂（注册表的硬要求）',
@@ -443,7 +443,11 @@ check('选择器默认折叠，先让用户选工作区', findPickerItems(picker
 groupHeads[0].props.onClick();
 picker.flush();
 const pickerItems = findPickerItems(picker);
-check('点开工作区后才列出它的会话', pickerItems.length === 1 && pickerItems[0].props['data-session'] === 's-a',
+check('点开工作区后才列出它的会话', pickerItems.length === 2
+  && pickerItems.every((item) => item.props['data-session'] === 's-a' || item.props['data-session'] === 's-blank'),
+  JSON.stringify(pickerItems.map((item) => item.props['data-session'])));
+check('新建但还没输入内容的空白会话也出现在左侧列表里',
+  pickerItems.some((item) => item.props['data-session'] === 's-blank'),
   JSON.stringify(pickerItems.map((item) => item.props['data-session'])));
 
 /*
@@ -493,11 +497,15 @@ check('基础线与箭头按源会话取同一种霓虹色（不是写死的青�
   && edgePaths[0].props.stroke.startsWith('#')
   && edgePaths[0].props.stroke.slice(0, 7) === findAll(mixedBoard.tree, (node) => node.type === 'polygon')[0].props.fill,
   String(edgePaths[0].props.stroke));
+const pickerGroupsAfterJoin = findAll(mixedBoard.tree, byName('GraphPicker'))[0].props.groups;
+const pickerKeysAfterJoin = pickerGroupsAfterJoin.flatMap((group) => group.items).map((item) => item.key);
 check('已加入画布的会话从左侧选择器消失',
-  (() => {
-    const groups = findAll(mixedBoard.tree, byName('GraphPicker'))[0].props.groups;
-    return groups.length === 0;
-  })());
+  !pickerKeysAfterJoin.includes('s-a')
+  && !pickerKeysAfterJoin.includes('s-b')
+  && !pickerKeysAfterJoin.includes('s-c'),
+  JSON.stringify(pickerKeysAfterJoin));
+check('还没加入画布的空白会话仍留在左侧选择器',
+  pickerKeysAfterJoin.includes('s-blank'), JSON.stringify(pickerKeysAfterJoin));
 
 // 待连线卡片右上角的 × 能把它移出画布，并让它重新出现在左侧选择器。
 const removeStaged = findAll(mixedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCardRemove'))[0];
@@ -569,5 +577,63 @@ injected.paneActions.removePane('pane-2');
 check('关掉窗格不会清掉委派箭头', injected.graphStore.getSnapshot().edges.length === 1);
 injected.paneActions.forgetSession('s-b');
 check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSnapshot().edges.length === 0);
+
+/*
+ * 空白会话（新建、还没输入内容）也要能作为任务分派节点：
+ * 出现在左侧列表 → 拖入画布 → 连出箭头。
+ *
+ * 用独立实例，避免和上面的「树 + 待连线」断言互相污染。
+ */
+{
+  const blankBoard = await renderBoard(mod, {});
+  const blankInjected = blankBoard.stub.registered.find((definition) => definition.name === 'main').inject();
+  const blankModes = findAll(blankBoard.render().tree, (node) => node.props?.['aria-pressed'] !== undefined && typeof node.props.className === 'string' && node.props.className.includes('dshSplitWs_mode'));
+  blankModes[1].props.onClick();
+  const blankPanel = blankBoard.render();
+  const blankGraphDom = graphBoardOf(blankPanel.tree);
+  const blankPickerNode = findAll(blankGraphDom.tree, byName('GraphPicker'))[0];
+  const blankPicker = mount(blankPickerNode.type, blankPickerNode.props);
+  const blankGroups = findAll(blankPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerGroupHead'));
+  check('空白会话所在的工作区在左侧仍然是一组', blankGroups.length === 3, String(blankGroups.length));
+  blankGroups[0].props.onClick();
+  blankPicker.flush();
+  const blankPickerItems = findAll(blankPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerItem'));
+  check('空白会话出现在左侧列表，可以做拖拽起点',
+    blankPickerItems.some((item) => item.props['data-session'] === 's-blank' && item.props.draggable === true),
+    JSON.stringify(blankPickerItems.map((item) => item.props['data-session'])));
+  /*
+   * 平台的 displayTitle 对无标题会话会回退成项目目录名（测试台里是 `alpha`）。
+   * 任务分派必须按 blank 标志显示「未命名会话」，不能把目录名当成标题。
+   */
+  const blankPickerItem = blankPickerItems.find((item) => item.props['data-session'] === 's-blank');
+  check('左侧列表把空白会话显示为「未命名会话」，不拿目录名当标题',
+    JSON.stringify(blankPickerItem).includes('未命名会话'),
+    JSON.stringify(blankPickerItem?.children ?? null));
+  // 走真实链路：画布的 onDrop 读取私有 MIME，交给 stageSession。
+  const blankScroll = findAll(blankGraphDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphScroll'))[0];
+  blankScroll.props.onDrop({ preventDefault: () => {}, dataTransfer: transferFor('s-blank') });
+  blankPanel.flush();
+  const blankStagedBoard = graphBoardOf(blankPanel.tree);
+  const blankStagedCards = findCards(blankStagedBoard);
+  check('空白会话可以被拖进画布成为待连线卡片',
+    blankStagedCards.length === 1
+    && blankStagedCards[0].props['data-session'] === 's-blank'
+    && blankStagedCards[0].props['data-staged'] === 'true',
+    JSON.stringify(blankStagedCards.map((card) => card.props['data-session'])));
+  const blankCardTitle = findAll(blankStagedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCardTitle'))[0];
+  check('画布卡片把空白会话显示为「未命名会话」',
+    blankCardTitle !== undefined && blankCardTitle.children[0] === '未命名会话',
+    blankCardTitle === undefined ? 'no title node' : JSON.stringify(blankCardTitle.children));
+  // 再拖入一个目标并连一条边：空白会话既能当派出方，也能当接收方。
+  blankStagedBoard.props.actions.stageSession('s-a');
+  blankPanel.flush();
+  blankInjected.graphActions.addEdge('s-blank', 's-a');
+  blankPanel.render();
+  const blankWired = graphBoardOf(blankPanel.tree);
+  check('空白会话能连出委派箭头',
+    blankInjected.graphStore.getSnapshot().edges.some((edge) => edge.from === 's-blank' && edge.to === 's-a')
+    && findAll(blankWired.tree, (node) => node.type === 'polygon').length === 1,
+    JSON.stringify(blankInjected.graphStore.getSnapshot().edges));
+}
 
 report();

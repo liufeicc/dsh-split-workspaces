@@ -835,10 +835,10 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 某个工作区里「可以选」的会话：非归档、非子代理、**已经聊过内容**，
+     * 某个工作区里「可以选」的会话：非归档、非子代理，默认还要求**已经聊过内容**，
      * 最近更新的排前面。
      *
-     * 空白会话（`summary.blank === true`，用户建了会话但一条消息都没发过）刻意不列：
+     * 空白会话（`summary.blank === true`，用户建了会话但一条消息都没发过）默认不列：
      * 它在 Host 里只是一条「新会话占位」，没有历史可回看。DSH 原生侧边栏对空白会话的
      * 规则是「只显示当前选中的那一个」，但平铺面板的会话菜单第一项本来就是「新建会话」，
      * 再列一堆同名占位行只会让菜单变成一长串「新会话」—— 用户要的是历史对话，不是
@@ -847,17 +847,23 @@ window.__ModuleLoader__.load({
      * 跟随型窗格也吃这条规则：它显示的「本工作区最新会话」只会在真实对话里挑，
      * 于是新铺开一格时看到的是上一段对话，而不是一个空的「新会话」。
      *
+     * **任务分派是唯一的例外**：目标是「先建好一个空会话，再把活派进去」，所以它把
+     * `options.includeBlank` 打开，让新建但还没输入内容的会话也能作为可连线的节点。
+     * 这只影响左侧选择器，不会把空白会话塞进 `切换会话` 菜单或跟随型窗格的选择。
+     *
      * @param workspace - 工作区行（含 `sessionIds`）。
      * @param sessionState - 会话快照（`sessions.list` 的 `byId`）。
      * @param archivedSessionIds - 归档会话 id。
+     * @param options - 可选：`{ includeBlank: true }` 时也返回空白会话（任务分派用）。
      */
-    function selectableSessions(workspace, sessionState, archivedSessionIds) {
+    function selectableSessions(workspace, sessionState, archivedSessionIds, options) {
       if (workspace === undefined) return [];
+      const includeBlank = options?.includeBlank === true;
       const rows = [];
       for (const id of workspace.sessionIds) {
         const summary = sessionState.byId[id];
         if (summary === undefined || summary.origin === 'subagent') continue;
-        if (summary.blank === true) continue;
+        if (includeBlank !== true && summary.blank === true) continue;
         if (archivedSessionIds.includes(id)) continue;
         rows.push(summary);
       }

@@ -295,14 +295,24 @@ window.__ModuleLoader__.load({
         return remoteLayoutLoading;
       };
       /**
-       * 保存当前界面。图/会话/模式都放在同一份 JSON 里，版本号由 layout 块决定。
+       * 保存当前面板模式对应的那一部分。
+       *
+       * 平铺模式只写棋盘布局，任务分派模式只写分派图；另一部分沿用 Host 上**上一次**
+       * 保存的值，不会被这次保存清空。因此保存前必须先读回完整记录，读不回来就不写，
+       * 免得把另一部分覆盖掉。
        *
        * 等 Host 写盘确认后才返回成功；失败时把原因交给按钮旁边那行错误提示。
        *
+       * @param scope - `tiles` / `graph`：这次保存哪一部分。
        * @returns `{ ok: true }` 或 `{ ok: false, reason }`。
        */
-      const persistLayout = async (snapshot, workspaceById, graph, mode) => {
-        const payload = mods.layout.serialize(snapshot, workspaceById, graph, mode);
+      const persistLayout = async (snapshot, workspaceById, graph, scope) => {
+        const loaded = await loadSavedLayout();
+        if (loaded === undefined) return { ok: false, reason: 'could not read the saved layout' };
+        const payload = mods.layout.serialize(snapshot, workspaceById, graph, {
+          scope: scope === 'graph' ? 'graph' : 'tiles',
+          previous: readSavedLayout(),
+        });
         if (payload === null) return { ok: false, reason: 'nothing to save' };
         const saved = await dispatchSync.saveLayout(payload);
         if (!saved.ok) return { ok: false, reason: saved.reason };
@@ -310,16 +320,12 @@ window.__ModuleLoader__.load({
         remoteLayoutLoaded = true;
         return { ok: true };
       };
-      const clearSavedLayout = async () => {
-        const cleared = await dispatchSync.clearLayout();
-        if (!cleared.ok) return false;
-        remoteSavedLayout = null;
-        remoteLayoutLoaded = true;
-        return true;
-      };
       /**
-       * 恢复保存的界面。窗格、任务分派图、面板模式分别落位；任何一部分坏掉都只是
+       * 恢复保存的界面。窗格与任务分派图分别落位；任何一部分坏掉都只是
        * 不恢复那一部分，不抛异常。
+       *
+       * 面板模式**不跟随保存记录**：刷新后固定从平铺模式开始（模式 store 的默认值），
+       * 保存时是平铺还是任务分派，只影响这次写了哪一部分。
        *
        * @returns `{ panes: boolean, graph: boolean }`：panes 表示棋盘是否被替换；
        *   graph 表示保存结构里是否有图（即使边被清空也算“这份保存拥有图”，
@@ -335,12 +341,6 @@ window.__ModuleLoader__.load({
           return { panes: false, graph: false };
         }
         if (restored === null) return { panes: false, graph: false };
-        // 面板模式跟着保存时的界面走；图是否存在不影响模式恢复。
-        try {
-          viewModeStore.setMode(restored.mode);
-        } catch {
-          /* 非法模式由 store 自己忽略，这里不需要额外处理 */
-        }
         let panes = false;
         if (restored.paneState !== null) {
           try {
@@ -414,11 +414,10 @@ window.__ModuleLoader__.load({
         setActive: (key) => paneStore.setActive(key),
         setRatio: (splitId, ratio) => paneStore.setRatio(splitId, ratio),
         ensureInitialized: (currentWorkspaceId, workspaceIds) => paneStore.ensureInitialized(currentWorkspaceId, workspaceIds),
-        saveLayout: (snapshot, workspaceById, graph, mode) => persistLayout(snapshot, workspaceById, graph, mode),
+        saveLayout: (snapshot, workspaceById, graph, scope) => persistLayout(snapshot, workspaceById, graph, scope),
         restoreSavedLayout: (context) => restorePersistedLayout(context),
         hasSavedLayout: () => readSavedLayout() !== null,
         loadSavedLayout: () => loadSavedLayout(),
-        clearSavedLayout: () => clearSavedLayout(),
         loadPresets: () => presetStore.load(),
         loadMcp: () => mcpStore.load(),
         setMcpSelection: (workspacePath, selected) => mcpStore.setSelection(workspacePath, selected),

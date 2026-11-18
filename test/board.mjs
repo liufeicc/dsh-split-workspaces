@@ -123,7 +123,9 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
       's-b': { id: 's-b', displayTitle: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
       's-c': { id: 's-c', displayTitle: 'c', blank: false, origin: 'user', updatedAt: 0, retainedBy: {}, projectionValues: {} },
       // 没发过消息的空白会话：会话菜单不该列它，但「新建会话」应当优先复用它。
-      's-blank': { id: 's-blank', displayTitle: '', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
+      // displayTitle 故意填项目目录名：平台对无标题会话的回退就是 cwd basename，
+      // 任务分派必须按 blank 标志显示「未命名会话」，不能把这个目录名当标题。
+      's-blank': { id: 's-blank', displayTitle: 'alpha', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
     },
   });
   /** 记录 `workspaces.create` 收到的参数、`connectWorkspace` 的调用次数/参数与 `pickDirectory` 的次数。 */

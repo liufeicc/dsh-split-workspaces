@@ -21,7 +21,7 @@
  * @module @local/dsh-split-workspaces/host-layout
  */
 
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -82,22 +82,5 @@ export function saveLayoutFile(payload) {
     return true;
   } catch {
     return false;
-  }
-}
-
-/**
- * 删除磁盘上的布局。
- *
- * 文件本来就不存在也算成功：用户点“清除保存记录”的语义是“之后不要再恢复”，
- * 不是“必须删掉一个文件”。
- *
- * @returns {boolean}
- */
-export function clearLayoutFile() {
-  try {
-    unlinkSync(layoutPath());
-    return true;
-  } catch (error) {
-    return error !== null && typeof error === 'object' && error.code === 'ENOENT';
   }
 }

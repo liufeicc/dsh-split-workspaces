@@ -28,7 +28,6 @@ export const REMOTE_MARKERS = Object.freeze({
     // 所以布局必须跟着 profile 落到 Host 的 storages 下。
     Object.freeze({ method: 'readLayout', invocation: Object.freeze({ kind: 'direct' }) }),
     Object.freeze({ method: 'writeLayout', invocation: Object.freeze({ kind: 'direct' }) }),
-    Object.freeze({ method: 'clearLayout', invocation: Object.freeze({ kind: 'direct' }) }),
   ]),
 });
 

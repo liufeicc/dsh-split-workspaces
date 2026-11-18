@@ -1,15 +1,18 @@
 /**
  * 平铺面板的「布局持久化」纯逻辑块。
  *
- * 这一块只处理普通 JavaScript 数据：把 paneStore / graphStore / viewModeStore 的
- * 快照整理成可 JSON 化的保存结构，再在恢复时做校验、剪枝与回退。它不碰 React、
- * DOM 和 localStorage，因此可以在 Node 里直接测。
+ * 这一块只处理普通 JavaScript 数据：把 paneStore / graphStore 的快照整理成可
+ * JSON 化的保存结构，再在恢复时做校验、剪枝与回退。它不碰 React、DOM 和
+ * localStorage，因此可以在 Node 里直接测。
  *
  * ## 保存什么
  *
  *   - 平铺棋盘：布局树（分屏方向、层级、分隔条比例）、窗格顺序、当前焦点；
  *   - 每个窗格：工作区 id + 路径、会话 id、是否跟随最新会话、Agent 模式；
- *   - 任务分派：当时的边（含说明）和面板模式（平铺 / 设计）。
+ *   - 任务分派：当时的边（含说明）。
+ *
+ * 保存动作按当前面板模式只写自己那一部分，另一部分沿用上一次保存的内容；
+ * 保存结构不记录面板模式，刷新后固定从平铺模式开始。
  *
  * ## 恢复时的降级
  *
@@ -158,25 +161,9 @@ window.__ModuleLoader__.load({
       return true;
     }
 
-    /**
-     * 把当前界面整理成保存结构。
-     *
-     * @param snapshot - paneStore 快照。
-     * @param workspaceById - `Map<workspaceId, workspace>`。
-     * @param graph - `{ edges }` 快照；传 null 表示本次没有拿到可靠的分派图，不写入 graph 字段。
-     * @param mode - `tiles` / `graph`。
-     * @returns 可 JSON 化的对象；什么都没有时返回 null。
-     */
-    function serialize(snapshot, workspaceById, graph, mode) {
+    /** 把当前窗格快照整理成保存结构里的棋盘部分；快照形状不对时返回 null。 */
+    function serializeTiles(snapshot, workspaceById) {
       if (snapshot === null || snapshot === undefined || !Array.isArray(snapshot.panes)) return null;
-      /*
-       * `graph === null` 表示“这次调用没有拿到可靠的分派图”（例如 Host 绑定表还没
-       * 读回来）。这时**不写 graph 字段**：恢复时就不会用一份空图去覆盖 Host 上可能
-       * 还存在的旧绑定。只有确实拿到了图对象（哪怕边为空）才把图纳入快照。
-       */
-      const hasGraph = graph !== null && graph !== undefined && Array.isArray(graph.edges);
-      const edges = hasGraph ? graph.edges : [];
-      if (snapshot.panes.length === 0 && (!hasGraph || edges.length === 0)) return null;
       const panes = [];
       for (const pane of snapshot.panes) {
         if (pane === null || typeof pane !== 'object') continue;
@@ -194,25 +181,102 @@ window.__ModuleLoader__.load({
           follow: pane.follow === true,
         });
       }
-      const payload = {
-        version: LAYOUT_VERSION,
-        savedAt: new Date().toISOString(),
-        mode: mode === 'graph' ? 'graph' : 'tiles',
+      return {
         activeKey: typeof snapshot.activeKey === 'string' ? snapshot.activeKey : null,
         panes,
         layout: snapshot.layout ?? null,
       };
-      if (hasGraph) {
-        payload.graph = {
-          edges: edges.map((edge) => {
-            if (edge === null || typeof edge !== 'object') return null;
-            if (typeof edge.from !== 'string' || typeof edge.to !== 'string') return null;
-            const item = { from: edge.from, to: edge.to };
-            if (typeof edge.note === 'string' && edge.note !== '') item.note = edge.note;
-            return item;
-          }).filter((edge) => edge !== null),
-        };
+    }
+
+    /**
+     * 把当前图快照整理成保存结构里的 `graph` 字段。
+     * 传 null / 形状不对表示这次没有可靠的分派图，返回 null（调用方据此不写 graph）。
+     */
+    function serializeGraph(graph) {
+      if (graph === null || graph === undefined || !Array.isArray(graph.edges)) return null;
+      return {
+        edges: graph.edges.map((edge) => {
+          if (edge === null || typeof edge !== 'object') return null;
+          if (typeof edge.from !== 'string' || typeof edge.to !== 'string') return null;
+          const item = { from: edge.from, to: edge.to };
+          if (typeof edge.note === 'string' && edge.note !== '') item.note = edge.note;
+          return item;
+        }).filter((edge) => edge !== null),
+      };
+    }
+
+    /**
+     * 把当前界面整理成保存结构。
+     *
+     * 保存按当前面板模式**只写自己那一部分**：
+     *   - `scope: 'tiles'`：写棋盘；分派图沿用 `options.previous.graph`（上一次在
+     *     任务分派模式保存的那份），不再把当前的图一起写进去；
+     *   - `scope: 'graph'`：写分派图；棋盘沿用 `options.previous` 的
+     *     panes/layout/activeKey（上一次在平铺模式保存的那份）；
+     *   - `scope: 'all'`：两者都写当前值（旧调用/测试用的全量导出）。
+     *
+     * “另一部分”只会沿用上一次保存的值，**不会因为这次保存被清空**。保存结构
+     * 不记录面板模式：刷新后固定从平铺模式开始。
+     *
+     * @param snapshot - paneStore 快照。
+     * @param workspaceById - `Map<workspaceId, workspace>`。
+     * @param graph - `{ edges }` 快照；null 表示本次没有拿到可靠的分派图。
+     * @param options - `{ scope, previous }`：
+     *   - `scope`：`tiles` / `graph` / `all`（默认）；
+     *   - `previous`：上一次的完整保存结构，用来带上另一部分。
+     * @returns 可 JSON 化的对象；没有可保存内容时返回 null。
+     */
+    function serialize(snapshot, workspaceById, graph, options = {}) {
+      const scope = options.scope === 'tiles' || options.scope === 'graph' ? options.scope : 'all';
+      const previous = isSavedPayload(options.previous) ? options.previous : null;
+      const tiles = scope === 'tiles' || scope === 'all' ? serializeTiles(snapshot, workspaceById) : null;
+      const graphPart = scope === 'graph' || scope === 'all' ? serializeGraph(graph) : null;
+
+      if (scope === 'tiles') {
+        if (tiles === null || tiles.panes.length === 0) return null;
+      } else if (scope === 'graph') {
+        if (graphPart === null) return null;
+      } else {
+        // 旧的全量行为：至少要有窗格，或者一张确实读回来的图（空图也算“拥有图”）。
+        if (tiles === null) return null;
+        if (tiles.panes.length === 0 && (graphPart === null || graphPart.edges.length === 0)) return null;
       }
+
+      /*
+       * 图模式只写图：棋盘沿用上一次保存的值，没有就留空（恢复时按默认布局播种）。
+       * 平铺模式反过来，图沿用上一次保存的值；没有旧图就不写 graph 字段，
+       * 恢复时交给 Host 的绑定表。
+       */
+      let panes;
+      let layout;
+      let activeKey;
+      if (scope === 'graph') {
+        panes = previous === null ? [] : previous.panes;
+        layout = previous === null ? null : (previous.layout ?? null);
+        activeKey = previous === null || typeof previous.activeKey !== 'string' ? null : previous.activeKey;
+      } else {
+        panes = tiles.panes;
+        layout = tiles.layout;
+        activeKey = tiles.activeKey;
+      }
+
+      let carriedGraph = graphPart;
+      if (scope === 'tiles') {
+        carriedGraph = previous !== null
+          && previous.graph !== undefined && previous.graph !== null
+          && Array.isArray(previous.graph.edges)
+          ? { edges: previous.graph.edges }
+          : null;
+      }
+
+      const payload = {
+        version: LAYOUT_VERSION,
+        savedAt: new Date().toISOString(),
+        activeKey,
+        panes,
+        layout,
+      };
+      if (carriedGraph !== null) payload.graph = carriedGraph;
       return payload;
     }
 
@@ -225,10 +289,10 @@ window.__ModuleLoader__.load({
      *   - `isValidPaneSession(id)`：这个会话能不能放进窗格；
      *   - `isValidGraphSession(id)`：这个会话能不能作为分派图节点；
      *   - `presetIds`：当前存在的 Agent 模式 id 数组。
-     * @returns `{ paneState, graph, mode }`；窗格和图都不可用时返回 null。
+     * @returns `{ paneState, graph }`；窗格和图都不可用时返回 null。
      *   `paneState` 为 null 表示没有可用窗格（调用方应播种默认布局）；
-     *   `graph` 为 null 表示这份保存结构没有任务分派图（旧格式或保存时图还没就绪）；
-     *   `mode` 是保存时的面板模式，单独恢复，不依赖图是否存在。
+     *   `graph` 为 null 表示这份保存结构没有任务分派图（旧格式或保存时图还没就绪）。
+     *   面板模式**不在这里恢复**：刷新后固定从平铺模式开始，由模式 store 的默认值决定。
      */
     function restore(saved, context) {
       if (!isSavedPayload(saved)) return null;
@@ -321,7 +385,6 @@ window.__ModuleLoader__.load({
       return {
         paneState,
         graph,
-        mode: saved.mode === 'graph' ? 'graph' : 'tiles',
       };
     }
 

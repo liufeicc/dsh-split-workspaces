@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
      * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
      * 正是「无法确认浏览器到底加载了哪一版」。
      */
-    const CLIENT_BUILD = '2026-11-13h';
+    const CLIENT_BUILD = '2026-11-18c';
 
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
@@ -296,8 +296,12 @@ window.__ModuleLoader__.load({
          * ready）。保存按钮靠它避免一个很窄的竞态：状态已经 ready、但“把绑定反推成边”
          * 的那段 `.then` 还没跑完时，graphStore 仍是空的；这时若把空图写进保存结构，
          * 下次恢复就会把 Host 上原本存在的箭头清掉。
+         *
+         * 用 state 而不是 ref：任务分派模式下保存按钮的可用性直接依赖它。空图时
+         * graphStore 不会发布新快照，如果只用 ref，标记置真后没有重渲染，按钮会一直
+         * 停在禁用状态。
          */
-        const graphReadyForSave = useRef(false);
+        const [graphReadyForSave, setGraphReadyForSave] = useState(false);
         const [savedLayoutAvailable, setSavedLayoutAvailable] = useState(false);
         /*
          * Host 布局是唯一的持久化来源，所以每次挂载都必须先异步问一次 Host；
@@ -422,7 +426,11 @@ window.__ModuleLoader__.load({
             result = paneActions.restoreSavedLayout({
               workspaces: items.map((item) => ({ workspaceId: item.workspaceId, path: item.path })),
               isValidPaneSession: (id) => validSession(id, true),
-              isValidGraphSession: (id) => validSession(id, false),
+              /*
+               * 图节点也允许空白会话：用户可以先建一个空会话、把它连成目标，再让上级
+               * 往里派活。保存/恢复若把空白节点筛掉，刷新一次箭头就没了。
+               */
+              isValidGraphSession: (id) => validSession(id, true),
               presetIds: validPresetIds,
             });
           } catch {
@@ -435,7 +443,7 @@ window.__ModuleLoader__.load({
            */
           savedGraphOwned.current = result?.graph === true;
           // 保存结构里真的有图时，它本身就是可靠快照；不必再等 Host 绑定表。
-          if (result?.graph === true) graphReadyForSave.current = true;
+          if (result?.graph === true) setGraphReadyForSave(true);
           // 没有可用窗格（例如保存的工作区全被删了）时，仍按原有规则播种默认布局。
           if (result?.panes !== true) paneActions.ensureInitialized(currentWorkspaceId, workspaceIds);
         }, [
@@ -501,7 +509,7 @@ window.__ModuleLoader__.load({
                   return;
                 }
                 // 绑定表已经读回来并处理完，之后保存的图才是可靠快照。
-                graphReadyForSave.current = true;
+                setGraphReadyForSave(true);
                 /*
                  * 保存的布局里带了图：这份快照就是权威，即使它是空图也不让 Host 的旧绑定
                  * 填回来。保存的图会在同步效果里重新推给 Host。
@@ -778,8 +786,8 @@ window.__ModuleLoader__.load({
         /**
          * 任务分派里的卡片 = **会话**，不是窗格。
          *
-         * 候选范围是「当前铺开在棋盘上的那些工作区里的全部真实会话」（空白会话、归档、
-         * 子代理会话都不算）。这样：
+         * 候选范围是「全部已存在的会话」（归档、子代理会话不算；新建但没输入内容的
+         * 空白会话**算**，方便先建好目标再连线派活）。这样：
          *   - 同一个会话开在两格里只出现一张卡片；
          *   - 关掉窗格、换掉某格的会话，卡片与箭头都不受影响；
          *   - **没在棋盘上打开的会话也能被连上** —— 第一版把卡片绑在窗格上时，
@@ -802,11 +810,13 @@ window.__ModuleLoader__.load({
            * 「A 在 dsh 目录、B 在 rea 目录，两个工作区都只开了其中一个会话」—— 按铺开的
            * 工作区过滤时，同目录下别的会话根本选不到。
            *
-           * 仍然排除三类：空白会话（没有内容可派）、归档会话（用户已经收起来了）、
-           * 子代理会话（不是给人用的对话）。
+           * 仍然排除两类：归档会话（用户已经收起来了）、子代理会话（不是给人用的对话）。
+           * **空白会话要收**：用户可能先新建一个空会话、把它连成目标，再让上级往里派活；
+           * 这时左侧列表和画布都得能选中它。空白会话只影响任务分派，`selectableSessions`
+           * 的默认行为（会话菜单、跟随型窗格）仍然把它排除在外。
            */
           for (const workspace of items) {
-            for (const row of model.selectableSessions(workspace, sessionState, archivedSessionIds)) {
+            for (const row of model.selectableSessions(workspace, sessionState, archivedSessionIds, { includeBlank: true })) {
               if (seen.has(row.id)) continue;
               seen.add(row.id);
               rows.push({ row, workspace });
@@ -820,7 +830,6 @@ window.__ModuleLoader__.load({
             if (seen.has(id)) continue;
             const summary = sessionState.byId[id];
             if (summary === undefined || summary.origin === 'subagent') continue;
-            if (summary.blank === true) continue;
             if (archivedSessionIds.includes(id)) continue;
             seen.add(id);
             const owner = items.find((item) => item.path === summary.cwd);
@@ -836,9 +845,16 @@ window.__ModuleLoader__.load({
           rows.sort((left, right) => (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0));
           return rows.map(({ row, workspace }) => {
             const title = row.displayTitle;
+            /*
+             * 空白会话的 `displayTitle` 不能直接用：平台对没有标题的会话会回退成
+             * **项目目录名**（`displayTitleOf`: title → cwd basename → id），所以
+             * 一个刚建、还没输入内容的会话会显示成 `new_gemfire` 这类目录名，看起来
+             * 与工作区名一模一样。任务分派要的是「这是个还没开始的空会话」，因此
+             * 按 `blank` 标志统一显示成「未命名会话」。
+             */
             return {
               key: row.id,
-              label: title === undefined || title === '' ? t('pane.untitled') : title,
+              label: row.blank === true || title === undefined || title === '' ? t('pane.untitled') : title,
               // 分组用：同一个工作区的候选卡片聚在一起。会话不属于任何工作区时留空，
               // 由模型把它归入「未归属工作区」并固定排在最后。
               workspaceKey: workspace === undefined ? '' : workspace.workspaceId,
@@ -1167,15 +1183,17 @@ window.__ModuleLoader__.load({
          *   - 或者 Host 绑定表已经成功读回、并且“反推成边”的处理已经跑完。
          */
         const graphSnapshotReady = savedGraphOwned.current
-          || (dispatchState.status === 'ready' && graphReadyForSave.current);
+          || (dispatchState.status === 'ready' && graphReadyForSave);
+        /** 这次保存写哪一部分：当前面板模式就是作用域。 */
+        const saveScope = modeState.mode === 'graph' ? 'graph' : 'tiles';
         /**
-         * 当前界面有没有值得保存的东西：至少一个窗格，或一条已经读回来的分派边。
+         * 当前模式有没有值得保存的东西。
          *
-         * 图还在 loading 时不能只凭“暂时没有边”就判断没东西可存；相反，那时应该
-         * 允许先保存棋盘，只是不要把不可靠的空图写进快照。
+         *   - 平铺模式：至少一个窗格（只保存棋盘布局，不再顺手写当前的图）；
+         *   - 任务分派模式：图已经读回来。空图也可以保存 —— 它表示“当时确实没有
+         *     箭头”，恢复时据此阻止 Host 的旧绑定把箭头填回来。
          */
-        const canSaveLayout = panes.length > 0
-          || (graphSnapshotReady && graphState.edges.length > 0);
+        const canSaveLayout = saveScope === 'graph' ? graphSnapshotReady : panes.length > 0;
         /**
          * 有保存的布局、但还在等会话/模式清单就绪时，棋盘会暂时为空。
          * 这时显示“正在恢复…”而不是误导性的“还没有打开的工作区”。
@@ -1186,8 +1204,12 @@ window.__ModuleLoader__.load({
           && workspaceIds.length > 0;
 
         /**
-         * 保存当前界面：棋盘 + 窗格会话/模式 + 任务分派图 + 当前面板模式。
-         * 保存失败只在这条通用错误行里说一句，不弹窗、不阻塞界面。
+         * 保存当前模式对应的那一部分：
+         *   - 平铺模式：棋盘 + 窗格会话/模式；分派图沿用上一次保存的；
+         *   - 任务分派模式：分派图；棋盘沿用上一次保存的。
+         *
+         * 另一部分不会被这次保存清空；保存结构不记录面板模式，刷新后固定从平铺
+         * 模式开始。保存失败只在这条通用错误行里说一句，不弹窗、不阻塞界面。
          */
         const handleSaveLayout = async () => {
           if (!canSaveLayout || saveState === 'saving') return;
@@ -1196,11 +1218,10 @@ window.__ModuleLoader__.load({
             saveTimer.current = null;
           }
           /*
-           * 图只有在 Host 绑定表确实读回来、并且已经处理完（或保存的图本身就是权威）
-           * 时才是可靠快照。还在 loading / unavailable / error 时传 null：保存结构里
-           * 不写 graph 字段，下次加载就不会拿一份空图去覆盖 Host 上可能还存在的旧绑定。
+           * 只有任务分派模式才需要当前图；平铺模式不写图（另一部分由保存块从
+           * Host 的旧记录里带上），因此这里传 null，避免误把当前图写进去。
            */
-          const graphSnapshot = graphSnapshotReady ? graphState : null;
+          const graphSnapshot = saveScope === 'graph' ? graphState : null;
           /*
            * “跟随最新会话”的窗格记录里 `sessionId` 往往是 null，真正显示的是
            * `panePlan` 现场解析出来的那一条。保存时必须把**眼前这一段对话**的 id
@@ -1216,7 +1237,7 @@ window.__ModuleLoader__.load({
           });
           const snapshotForSave = { ...paneState, panes: resolvedPanes };
           setSaveState('saving');
-          const result = await paneActions.saveLayout(snapshotForSave, workspaceById, graphSnapshot, modeState.mode);
+          const result = await paneActions.saveLayout(snapshotForSave, workspaceById, graphSnapshot, saveScope);
           if (result?.ok === true) {
             setSavedLayoutAvailable(true);
             setAddError(null);
@@ -1230,17 +1251,6 @@ window.__ModuleLoader__.load({
           }
           setSaveState('idle');
           setAddError(t('panel.saveFailed') + (typeof result?.reason === 'string' && result.reason !== '' ? ': ' + result.reason : ''));
-        };
-
-        /** 清除保存记录：当前界面保持不变，下次页面加载回到默认播种。 */
-        const handleClearSavedLayout = async () => {
-          const cleared = await paneActions.clearSavedLayout();
-          if (cleared === true) {
-            setSavedLayoutAvailable(false);
-            setAddError(null);
-            return;
-          }
-          setAddError(t('panel.clearFailed'));
         };
 
         return h('div', { className: css.root, [BOARD_MARKER]: 'true' },
@@ -1299,23 +1309,6 @@ window.__ModuleLoader__.load({
                       strokeWidth: 1.3,
                       strokeLinejoin: 'round',
                     }))),
-              // 只有确实保存过时才出现；点它只删保存记录，当前界面一个窗格都不动。
-              savedLayoutAvailable
-                ? h('button', {
-                    type: 'button',
-                    className: css.iconButton,
-                    title: t('panel.clearSavedHint'),
-                    'aria-label': t('panel.clearSaved'),
-                    onClick: () => { void handleClearSavedLayout(); },
-                  }, h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
-                    h('path', {
-                      d: 'M3 4.5h10M6.5 4.5V3h3v1.5M5 4.5l.5 8h5l.5-8',
-                      stroke: 'currentColor',
-                      strokeWidth: 1.3,
-                      strokeLinecap: 'round',
-                      strokeLinejoin: 'round',
-                    })))
-                : null,
               h(Popover, {
                 label: addBusy ? t('panel.adding') : t('panel.add'),
                 title: t('panel.add'),

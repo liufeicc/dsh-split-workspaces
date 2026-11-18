@@ -71,14 +71,13 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 本包暴露的方法：绑定 list/set，以及 Host 侧布局的 read/write/clear。 */
+    /** 本包暴露的方法：绑定 list/set/pullVisual，以及 Host 侧布局的 read/write。 */
     const REMOTE_DESCRIPTORS = [
       descriptorFor('list', 'PaneDispatchListRequest'),
       descriptorFor('set', 'PaneDispatchSetRequest'),
       descriptorFor('pullVisual', 'PaneDispatchVisualRequest'),
       descriptorFor('readLayout', 'PaneLayoutReadRequest'),
       descriptorFor('writeLayout', 'PaneLayoutWriteRequest'),
-      descriptorFor('clearLayout', 'PaneLayoutClearRequest'),
     ];
 
     /** 把任意抛出物转成一句人能读的话。 */
@@ -440,31 +439,6 @@ window.__ModuleLoader__.load({
             // 不再额外要求 value 必须是某个具体形状：Typert 的 src-json 对原始
             // 布尔值/对象包装的返回不完全一致，按 value 判断会把已经写成功的保存
             // 误报成失败。
-            return { ok: true };
-          } catch (reason) {
-            return { ok: false, reason: errorText(reason) };
-          }
-        },
-
-        /**
-         * 删除 Host 上的布局记录。
-         *
-         * @returns {{ok: boolean, reason?: string}}
-         */
-        async clearLayout() {
-          let service;
-          try {
-            service = await waitForService(getService);
-          } catch (reason) {
-            return { ok: false, reason: errorText(reason) };
-          }
-          if (service === undefined || service === null) return { ok: false, reason: 'notMounted' };
-          try {
-            const result = await service.clearLayout({});
-            if (result === undefined || result === null) return { ok: false, reason: 'notMounted' };
-            if (!result.ok) {
-              return { ok: false, reason: result.error === undefined || result.error === null ? 'clearLayout failed' : result.error.message };
-            }
             return { ok: true };
           } catch (reason) {
             return { ok: false, reason: errorText(reason) };

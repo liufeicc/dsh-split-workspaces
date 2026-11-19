@@ -140,6 +140,7 @@ window.__ModuleLoader__.load({
       './client.mcp.js',
       './client.skill.js',
       './client.dispatch.js',
+      './client.targets.js',
       './client.graph.model.js',
       './client.graph.view.js',
       './client.menu.js',
@@ -161,8 +162,8 @@ window.__ModuleLoader__.load({
         return Promise.reject(new Error('client module loader 不支持包内代码块（require.async 缺失）'));
       }
       return Promise.all(CHUNK_FILES.map((file) => require.async(file)))
-        .then(([styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, fx, view]) => ({
-          styles, dicts, model, layout, presets, mcp, skill, dispatch, graphModel, graphView, menu, pane, views, fx, view,
+        .then(([styles, dicts, model, layout, presets, mcp, skill, dispatch, targets, graphModel, graphView, menu, pane, views, fx, view]) => ({
+          styles, dicts, model, layout, presets, mcp, skill, dispatch, targets, graphModel, graphView, menu, pane, views, fx, view,
         }));
     }
 
@@ -256,6 +257,16 @@ window.__ModuleLoader__.load({
       const viewModeStore = mods.graphModel.createViewModeStore();
       const graphStore = mods.graphModel.createGraphStore();
       const dispatchSync = mods.dispatch.createDispatchSync(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY));
+      /*
+       * 派单目标记录：Host 落盘、客户端镜像。目标创建即存在，不靠保存画布；
+       * 空白目标因此能在任务分派和平铺菜单里显示为「未命名目标」。
+       */
+      const targetStore = mods.targets.createTargetStore({
+        load: () => dispatchSync.loadTargets(),
+        add: (sessionId, workspaceId) => dispatchSync.addTarget(sessionId, workspaceId),
+        remove: (sessionId) => dispatchSync.removeTarget(sessionId),
+      });
+      Promise.resolve(targetStore.load()).catch(() => {});
 
       /*
        * 布局保存/恢复的存储层。
@@ -350,16 +361,20 @@ window.__ModuleLoader__.load({
           }
         }
         let graph = false;
+        let staged = [];
         if (restored.graph !== null) {
           try {
             const edges = mods.graphModel.sanitizeEdges(restored.graph.edges, context?.isValidGraphSession);
             graphStore.setEdges(edges);
             graph = true;
+            // 恢复「已拖入画布、还没连线」的节点；没有这个字段的旧布局按空处理。
+            staged = Array.isArray(restored.graph.staged) ? restored.graph.staged : [];
           } catch {
             graph = false;
+            staged = [];
           }
         }
-        return { panes, graph };
+        return { panes, graph, staged };
       };
 
       /*
@@ -428,6 +443,57 @@ window.__ModuleLoader__.load({
         loadDispatch: () => dispatchSync.load(),
         pullDispatchVisual: (since) => mods.dispatch.pullDispatchVisual(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY), since),
         readDispatchStates: (sessionIds) => mods.dispatch.readDispatchStates(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY), sessionIds),
+        loadTargets: () => targetStore.load(),
+        /**
+         * 新建一个派单目标：强制创建一个新的空白会话，再登记目标记录。
+         *
+         * 不走平铺的「复用空白会话」逻辑 —— 每次点「新建目标」都必须得到一个新的
+         * 会话 id，否则 B/C/D 会指向同一个会话，派单无法区分。
+         *
+         * 创建成功后不切换当前窗格/模式：调用方（窗格）只负责提示一句。
+         *
+         * @param workspaceId - 目标所属工作区。
+         * @returns `{ ok, sessionId?, reason? }`。
+         */
+        createTarget: async (workspaceId, workspaceApi) => {
+          if (typeof workspaceId !== 'string' || workspaceId === '') {
+            return { ok: false, reason: 'no workspace' };
+          }
+          const api = workspaceApi !== undefined && workspaceApi !== null ? workspaceApi : ctx.uiWorkspace;
+          if (api === undefined || api === null || typeof api.connectWorkspace !== 'function') {
+            return { ok: false, reason: 'workspace service unavailable' };
+          }
+          try {
+            /*
+             * 必须绕过平台的「复用空白会话」：`connectWorkspace` 的 options 默认是 `{}`，
+             * 会走 `createInWorkspace` 的复用分支，同一个工作区连点多次只会得到同一个
+             * 空会话。`connectBlank(workspaceId, undefined)` 才是无复用地真正
+             * `sessions.create`。它是平台服务的运行时方法（类型里标了 private），
+             * 所以先探测，再退回公开的 connectWorkspace。
+             */
+            const createdId = typeof api.connectBlank === 'function'
+              ? await api.connectBlank(workspaceId, undefined)
+              : await api.connectWorkspace(workspaceId);
+            if (typeof createdId !== 'string' || createdId === '') {
+              return { ok: false, reason: 'empty session id' };
+            }
+            const registered = await targetStore.addTarget(createdId, workspaceId);
+            if (registered.ok !== true) {
+              return { ok: false, sessionId: createdId, reason: registered.reason };
+            }
+            /*
+             * 会话表可能还没收到新会话；主动刷一次，让平铺菜单/任务分派立即看到它。
+             * 刷新失败不影响目标本身，界面最多晚一个事件周期。
+             */
+            if (ctx.sessions !== undefined && ctx.sessions !== null && typeof ctx.sessions.refresh === 'function') {
+              Promise.resolve(ctx.sessions.refresh()).catch(() => {});
+            }
+            return { ok: true, sessionId: createdId };
+          } catch (reason) {
+            return { ok: false, reason: reason instanceof Error ? reason.message : String(reason) };
+          }
+        },
+        removeTarget: (sessionId) => targetStore.removeTarget(sessionId),
       };
 
       /**
@@ -451,6 +517,7 @@ window.__ModuleLoader__.load({
         mcpStore.load();
         skillStore.load();
         dispatchSync.load();
+        targetStore.load();
       }), 'split-workspaces: preset roster refresh');
 
       /**
@@ -537,7 +604,12 @@ window.__ModuleLoader__.load({
            * 的悬空节点。
            */
           onDeleted: (deletedId) => {
-            paneActions.forgetSession(deletedId === undefined ? sessionId : deletedId);
+            const id = deletedId === undefined ? sessionId : deletedId;
+            paneActions.forgetSession(id);
+            // 目标记录也要跟着删，否则任务分派会一直留着一张指向已删会话的空卡。
+            if (targetStore.isTarget(id)) {
+              Promise.resolve(targetStore.removeTarget(id)).catch(() => {});
+            }
           },
         }) === true;
       };
@@ -617,6 +689,7 @@ window.__ModuleLoader__.load({
           graphStore,
           graphModel: mods.graphModel,
           dispatchStore: dispatchSync,
+          targetStore,
           graphActions,
         }),
       }, view.SplitPanel)), 'split-workspaces: main panel');

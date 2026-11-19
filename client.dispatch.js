@@ -71,12 +71,15 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** 本包暴露的方法：绑定 list/set/pullVisual、卡片状态 readStates，以及布局 read/write。 */
+    /** 本包暴露的方法：绑定 list/set/pullVisual、卡片状态 readStates、目标记录，以及布局 read/write。 */
     const REMOTE_DESCRIPTORS = [
       descriptorFor('list', 'PaneDispatchListRequest'),
       descriptorFor('set', 'PaneDispatchSetRequest'),
       descriptorFor('pullVisual', 'PaneDispatchVisualRequest'),
       descriptorFor('readStates', 'PaneDispatchStatesRequest'),
+      descriptorFor('listTargets', 'PaneTargetsListRequest'),
+      descriptorFor('addTarget', 'PaneTargetAddRequest'),
+      descriptorFor('removeTarget', 'PaneTargetRemoveRequest'),
       descriptorFor('readLayout', 'PaneLayoutReadRequest'),
       descriptorFor('writeLayout', 'PaneLayoutWriteRequest'),
     ];
@@ -425,6 +428,86 @@ window.__ModuleLoader__.load({
          * @returns 保存结构；没有保存过时是 null；远端还没挂上时是 undefined
          *   （调用方可以重试，不能把 undefined 当成“没有保存”而直接清掉布局）。
          */
+        /**
+         * 读回全部派单目标记录。
+         *
+         * @returns 目标数组；远端未挂上或读取失败时返回 undefined（调用方保留现状，
+         *   不能把 undefined 当成“没有目标”而把界面上的目标清掉）。
+         */
+        async loadTargets() {
+          let service;
+          try {
+            service = await waitForService(getService, 6, 100);
+          } catch {
+            return undefined;
+          }
+          if (service === undefined || service === null) return undefined;
+          try {
+            const result = await service.listTargets({});
+            if (result === undefined || result === null) return undefined;
+            if (!result.ok) return undefined;
+            const value = result.value === undefined || result.value === null ? {} : result.value;
+            return Array.isArray(value.targets) ? value.targets : [];
+          } catch {
+            return undefined;
+          }
+        },
+
+        /**
+         * 登记一个派单目标（Host 落盘）。
+         *
+         * @param sessionId - 目标会话 id。
+         * @param workspaceId - 所属工作区 id。
+         * @returns `{ ok, reason? }`。
+         */
+        async addTarget(sessionId, workspaceId) {
+          let service;
+          try {
+            service = await waitForService(getService);
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
+          if (service === undefined || service === null) return { ok: false, reason: 'notMounted' };
+          try {
+            const result = await service.addTarget({ sessionId, workspaceId });
+            if (result === undefined || result === null) return { ok: false, reason: 'notMounted' };
+            if (!result.ok) {
+              const message = result.error === undefined || result.error === null ? 'addTarget failed' : result.error.message;
+              return { ok: false, reason: message };
+            }
+            return { ok: true };
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
+        },
+
+        /**
+         * 删除一个派单目标记录（只删记录，不删会话）。
+         *
+         * @param sessionId - 目标会话 id。
+         * @returns `{ ok, reason? }`。
+         */
+        async removeTarget(sessionId) {
+          let service;
+          try {
+            service = await waitForService(getService);
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
+          if (service === undefined || service === null) return { ok: false, reason: 'notMounted' };
+          try {
+            const result = await service.removeTarget({ sessionId });
+            if (result === undefined || result === null) return { ok: false, reason: 'notMounted' };
+            if (!result.ok) {
+              const message = result.error === undefined || result.error === null ? 'removeTarget failed' : result.error.message;
+              return { ok: false, reason: message };
+            }
+            return { ok: true };
+          } catch (reason) {
+            return { ok: false, reason: errorText(reason) };
+          }
+        },
+
         async loadLayout() {
           let service;
           try {

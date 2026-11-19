@@ -204,6 +204,19 @@ function sessionMenu(pane) {
   return findAll(childrenRender(popover)(() => {}), byName('MenuItem'));
 }
 
+/**
+ * 点「新建会话」后，在弹出选择框里选「新建会话」（第一个选项）。
+ * 普通新建与「新建目标」共用这个选择框，测试默认选普通会话。
+ */
+function pickNewSession(pane) {
+  pane.flush();
+  const options = findAll(pane.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_newSessionOption'));
+  const option = options[0];
+  if (option === undefined) throw new Error('new-session choice is not open');
+  option.props.onClick();
+  pane.flush();
+}
+
 /** 一个窗格上显示的错误行。 */
 function paneErrors(pane) {
   return findAll(pane.tree, (node) => typeof node.type === 'string' && typeof node.props.className === 'string' && node.props.className.includes('paneError'))
@@ -243,6 +256,7 @@ check('the staged mode is labelled as pending for that pane', paneParts(mountPan
 const fresh = mountPane(board, 'beta');
 const newSession = sessionMenu(fresh).find((item) => item.props.label === '新建会话');
 newSession.props.onClick();
+pickNewSession(fresh);
 await settle();
 const created = board.stub.calls.filter((call) => call.method === 'select' && call.sessionId.startsWith('s-new-'));
 check('a new pane Session is created with the staged mode', created.length === 1 && created[0].presetId === 'standard', JSON.stringify(created));
@@ -272,6 +286,7 @@ paneParts(failingPane).items.find((item) => item.props.label === '创造模式')
 await settle();
 const failingFresh = mountPane(failingNew, 'beta');
 sessionMenu(failingFresh).find((item) => item.props.label === '新建会话').props.onClick();
+pickNewSession(failingFresh);
 await settle();
 failingFresh.flush();
 check('a refused new-session mode still opens the Session', failingNew.paneStore.getSnapshot().panes.find((pane) => pane.workspaceId === 'ws-b').sessionId === 's-new-ws-b');

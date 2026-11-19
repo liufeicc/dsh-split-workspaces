@@ -368,6 +368,10 @@ export function createStubContext({ presets = [], respond } = {}) {
                   return { ok: true, value: { ok: true } };
                 }
                 if (descriptor.method === 'readStates') return { ok: true, value: { states: {} } };
+                if (descriptor.method === 'listTargets') return { ok: true, value: { targets: [] } };
+                if (descriptor.method === 'addTarget' || descriptor.method === 'removeTarget') {
+                  return { ok: true, value: { ok: true } };
+                }
                 return { ok: false, error: { code: 'gateway/invocation-unavailable', message: 'no handler' } };
               }
               return handler(request);

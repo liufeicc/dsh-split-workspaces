@@ -108,7 +108,7 @@ window.__ModuleLoader__.load({
      * @param props.dragMime - 拖拽时写入的私有 MIME。
      */
     function GraphPicker(props) {
-      const { groups, onStage, t, css, cx, dragMime, states } = props;
+      const { groups, onStage, t, css, cx, dragMime, states, onCollapse, onDeleteTarget } = props;
       /** 展开的工作区 key 集合；默认全折叠，先让用户选工作区。 */
       const [open, setOpen] = useState(() => new Set());
       const toggle = (key) => {
@@ -180,7 +180,12 @@ window.__ModuleLoader__.load({
                   onStage(item.key);
                 },
               },
-                h('div', { key: 'top', className: css.graphPickerCardTop },
+                h('div', {
+                  key: 'top',
+                  className: item.target === true && typeof onDeleteTarget === 'function'
+                    ? cx(css.graphPickerCardTop, css.graphPickerCardTopWithDelete)
+                    : css.graphPickerCardTop,
+                },
                   h('span', { key: 'ws', className: css.graphPickerCardWorkspace }, item.workspaceTitle),
                   badges.length > 0
                     ? h('span', {
@@ -209,14 +214,51 @@ window.__ModuleLoader__.load({
                     strokeWidth: 1.2,
                     strokeLinecap: 'round',
                     strokeLinejoin: 'round',
-                  }))));
+                  }))),
+                // 只有目标卡片提供删除：普通会话在平铺的切换菜单里已经有垃圾桶。
+                item.target === true && typeof onDeleteTarget === 'function'
+                  ? h('button', {
+                      key: 'delete-target',
+                      type: 'button',
+                      draggable: false,
+                      className: css.graphPickerDelete,
+                      title: t('graph.deleteTarget'),
+                      'aria-label': t('graph.deleteTarget'),
+                      onPointerDown: (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      },
+                      onClick: (event) => {
+                        event.stopPropagation();
+                        onDeleteTarget(item.key, item.label);
+                      },
+                    }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                      h('path', {
+                        d: 'M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8',
+                        stroke: 'currentColor',
+                        strokeWidth: 1.2,
+                        strokeLinecap: 'round',
+                        strokeLinejoin: 'round',
+                      })))
+                  : null);
               })
             ) : null));
       }
 
       return h('aside', { className: css.graphPicker },
         h('div', { key: 'head', className: css.graphPickerHead },
-          h('div', { key: 'title', className: css.graphPickerTitle }, t('graph.pickerTitle')),
+          h('div', { key: 'headTop', className: css.graphPickerHeadTop },
+            h('div', { key: 'title', className: css.graphPickerTitle }, t('graph.pickerTitle')),
+            typeof onCollapse === 'function'
+              ? h('button', {
+                  key: 'collapse',
+                  type: 'button',
+                  className: css.graphPickerCollapse,
+                  title: t('graph.pickerCollapse'),
+                  'aria-label': t('graph.pickerCollapse'),
+                  onClick: onCollapse,
+                }, '‹')
+              : null),
           h('div', { key: 'hint', className: css.graphPickerHint }, t('graph.pickerHint'))),
         h('div', { key: 'scroll', className: css.graphPickerScroll },
           groups.length === 0
@@ -279,6 +321,8 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState('');
       /** 左侧会话正被拖到画布上方；用来给画布加一圈高亮。 */
       const [dropActive, setDropActive] = useState(false);
+      /** 左侧「会话节点」栏是否收起；收起后画布占满，左上角保留一个展开按钮。 */
+      const [pickerCollapsed, setPickerCollapsed] = useState(false);
       const itemsByKey = useMemo(() => {
         const index = new Map();
         for (const item of layout.items) index.set(item.key, item);
@@ -460,6 +504,32 @@ window.__ModuleLoader__.load({
             },
           }, '×') : null,
           /*
+           * 目标卡片的删除入口。空目标不会出现在平台会话列表里，所以画布/左侧
+           * 必须给一个删除位置；已连线的目标也允许从这里删，边会随会话一起清掉。
+           * 待连线时右上角已经有「移出画布」，删除放到它下面一行，避免两个 × 叠住。
+           */
+          card.target === true && typeof actions.deleteTarget === 'function'
+            ? h('button', {
+                key: 'delete-target',
+                type: 'button',
+                className: css.graphCardDelete,
+                style: { top: isStaged ? '28px' : '5px' },
+                title: t('graph.deleteTarget'),
+                'aria-label': t('graph.deleteTarget'),
+                onPointerDown: (event) => event.stopPropagation(),
+                onClick: (event) => {
+                  event.stopPropagation();
+                  actions.deleteTarget(card.key, label);
+                },
+              }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                h('path', {
+                  d: 'M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8',
+                  stroke: 'currentColor',
+                  strokeWidth: 1.2,
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round',
+                }))) : null,
+          /*
            * 出线端口：拖动起点。用 `pointerdown` 而不是 `click`，因为这是一次拖动；
            * `stopPropagation` 保证它不会顺带把卡片自己的点击也点出去。
            */
@@ -630,15 +700,26 @@ window.__ModuleLoader__.load({
           rejectText === null ? null : h('span', { className: css.graphReject, role: 'alert' }, rejectText),
           degraded === true ? h('span', { className: css.graphDegraded }, t('pane.dispatchUnavailable')) : null),
         h('div', { className: css.graphBody },
-          h(GraphPicker, {
-            groups: pickerGroups,
-            states,
-            onStage: actions.stageSession,
-            t,
-            css,
-            cx,
-            dragMime: SESSION_DRAG_MIME,
-          }),
+          pickerCollapsed
+            ? h('button', {
+                key: 'picker-expand',
+                type: 'button',
+                className: css.graphPickerExpand,
+                title: t('graph.pickerExpand'),
+                'aria-label': t('graph.pickerExpand'),
+                onClick: () => setPickerCollapsed(false),
+              }, '›')
+            : h(GraphPicker, {
+                groups: pickerGroups,
+                states,
+                onStage: actions.stageSession,
+                onCollapse: () => setPickerCollapsed(true),
+                onDeleteTarget: actions.deleteTarget,
+                t,
+                css,
+                cx,
+                dragMime: SESSION_DRAG_MIME,
+              }),
           h('div', {
             className: css.graphScroll,
             'data-drop': dropActive ? 'true' : 'false',

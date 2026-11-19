@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
      * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
      * 正是「无法确认浏览器到底加载了哪一版」。
      */
-    const CLIENT_BUILD = '2026-11-18j';
+    const CLIENT_BUILD = '2026-11-19e';
 
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
@@ -261,7 +261,7 @@ window.__ModuleLoader__.load({
 
       /** 整块棋盘。 */
       function SplitPanel(props) {
-        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, skillStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets, viewModeStore, graphStore, graphModel, dispatchStore, graphActions } = props;
+        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, skillStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets, viewModeStore, graphStore, graphModel, dispatchStore, targetStore, graphActions } = props;
         const paneState = useSource(paneStore);
         const workspaceState = useSource(workspaces.list);
         const sessionState = useSource(sessionList);
@@ -271,9 +271,12 @@ window.__ModuleLoader__.load({
         const modeState = useSource(viewModeStore);
         const graphState = useSource(graphStore);
         const dispatchState = useSource(dispatchStore);
+        const targetState = useSource(targetStore);
         const items = workspaceState.items;
         const archivedSessionIds = workspaceState.archivedSessionIds;
         const panes = paneState.panes;
+        /** 目标 id 集合：决定哪些空白会话要显示成「未命名目标」。 */
+        const targetIds = useMemo(() => new Set(targetState.ids), [targetState.ids]);
         /*
          * 每个窗格内容区的背景色。`panes` 一变（加/关窗格、给窗格换会话）就重算：
          * 颜色跟着会话走、同一屏内不重复，规则见 `client.model.js` 的 `assignPaneTints`。
@@ -290,6 +293,14 @@ window.__ModuleLoader__.load({
          * Host 上的旧绑定在下面那个兜底效果里把它填回来。用 ref 而不是 state，是因为
          * 读取发生在异步 loadDispatch 的回调里，只需要“当前值”，不需要触发渲染。
          */
+        /**
+         * 用户从左侧选择器拖进画布、但还没连线的会话。
+         *
+         * 放在组件顶部（而不是图数据之后）是因为布局恢复的 effect 也要写它；
+         * 声明必须早于所有 effect 注册，否则测试环境同步执行 effect 时会撞上 TDZ。
+         * 这份状态会随「保存画布」写进 graph.staged，刷新后恢复。
+         */
+        const [stagedSessions, setStagedSessions] = useState(() => new Set());
         const savedGraphOwned = useRef(false);
         /*
          * Host 的绑定表是否已经真正读回来并处理完（不只是 dispatchStore 的状态变成
@@ -443,7 +454,11 @@ window.__ModuleLoader__.load({
            */
           savedGraphOwned.current = result?.graph === true;
           // 保存结构里真的有图时，它本身就是可靠快照；不必再等 Host 绑定表。
-          if (result?.graph === true) setGraphReadyForSave(true);
+          if (result?.graph === true) {
+            setGraphReadyForSave(true);
+            // 恢复「已拖入画布、还没连线」的节点；旧布局没有这个字段就是空集。
+            setStagedSessions(new Set(Array.isArray(result.staged) ? result.staged : []));
+          }
           // 没有可用窗格（例如保存的工作区全被删了）时，仍按原有规则播种默认布局。
           if (result?.panes !== true) paneActions.ensureInitialized(currentWorkspaceId, workspaceIds);
         }, [
@@ -555,10 +570,10 @@ window.__ModuleLoader__.load({
         const workspaceSessions = useMemo(() => {
           const map = new Map();
           for (const item of items) {
-            map.set(item.workspaceId, model.selectableSessions(item, sessionState, archivedSessionIds));
+            map.set(item.workspaceId, model.selectableSessions(item, sessionState, archivedSessionIds, { includeTargets: targetIds }));
           }
           return map;
-        }, [items, sessionState, archivedSessionIds]);
+        }, [items, sessionState, archivedSessionIds, targetIds]);
 
         /*
          * 每个工作区里「可复用的空白会话」：加新窗格/换工作区后点「新建会话」时用。
@@ -577,10 +592,11 @@ window.__ModuleLoader__.load({
               sessionState,
               archivedSessionIds,
               occupiedSessionIds,
+              targetIds,
             ));
           }
           return map;
-        }, [items, sessionState, archivedSessionIds, occupiedSessionIds]);
+        }, [items, sessionState, archivedSessionIds, occupiedSessionIds, targetIds]);
 
         const [addBusy, setAddBusy] = useState(false);
         const [addError, setAddError] = useState(null);
@@ -692,25 +708,27 @@ window.__ModuleLoader__.load({
           const index = new Map();
           for (const pane of panes) {
             const workspace = workspaceById.get(pane.workspaceId);
-            const rows = model.selectableSessions(workspace, sessionState, archivedSessionIds);
+            const rows = model.selectableSessions(workspace, sessionState, archivedSessionIds, { includeTargets: targetIds });
             const sessionId = model.resolvePaneSessionId(pane, rows, sessionState, archivedSessionIds);
             /*
              * 「可复用的空白会话」要把**别的**窗格钉住的会话排除掉：那些会话正在
              * 另一格里显示，抢过来会把它悄悄换掉。当前窗格自己钉住的不排除 ——
              * 那一格本来就是空会话时，再建一条毫无意义（见 reusableBlankSession）。
+             * 目标也不参与复用：它已经有用途，被切走会让任务分派的节点换会话。
              */
             const occupiedByOthers = panes
               .filter((other) => other.key !== pane.key && other.sessionId !== null && other.sessionId !== undefined)
               .map((other) => other.sessionId);
+            const summary = sessionId === undefined ? undefined : sessionState.byId[sessionId];
             index.set(pane.key, {
               rows,
               sessionId,
-              summary: sessionId === undefined ? undefined : sessionState.byId[sessionId],
-              reusableBlankId: model.reusableBlankSession(workspace, sessionState, archivedSessionIds, occupiedByOthers),
+              summary: summary === undefined ? undefined : (targetIds.has(sessionId) ? { ...summary, target: true } : summary),
+              reusableBlankId: model.reusableBlankSession(workspace, sessionState, archivedSessionIds, occupiedByOthers, targetIds),
             });
           }
           return index;
-        }, [panes, workspaceById, sessionState, archivedSessionIds]);
+        }, [panes, workspaceById, sessionState, archivedSessionIds, targetIds]);
 
         /*
          * 派单光效：每 300ms 取一次 Host 的派单视觉事件。
@@ -816,8 +834,10 @@ window.__ModuleLoader__.load({
            * 的默认行为（会话菜单、跟随型窗格）仍然把它排除在外。
            */
           for (const workspace of items) {
-            for (const row of model.selectableSessions(workspace, sessionState, archivedSessionIds, { includeBlank: true })) {
+            for (const row of model.selectableSessions(workspace, sessionState, archivedSessionIds, { includeBlank: true, includeTargets: targetIds })) {
               if (seen.has(row.id)) continue;
+              // 普通空白会话不显示；带目标记录的空会话才显示成「未命名目标」。
+              if (row.blank === true && !targetIds.has(row.id)) continue;
               seen.add(row.id);
               rows.push({ row, workspace });
             }
@@ -835,11 +855,41 @@ window.__ModuleLoader__.load({
             if (seen.has(id)) continue;
             const summary = sessionState.byId[id];
             if (summary === undefined || summary.origin === 'subagent') continue;
-            if (summary.blank === true) continue;
+            if (summary.blank === true && !targetIds.has(id)) continue;
             if (archivedSessionIds.includes(id)) continue;
             seen.add(id);
             const owner = items.find((item) => item.path === summary.cwd);
             rows.push({ row: summary, workspace: owner });
+          }
+          /*
+           * 目标记录可能先于会话表/工作区列表到达：新建目标后 Host 已经落盘，但本地
+           * `sessionState` 还没同步。先补一张「未命名目标」卡片，等真实 summary 到了
+           * 自然替换，避免用户以为没建成功。
+           */
+          const sessionsReady = sessionState.phase === 'ready';
+          for (const id of targetState.ids) {
+            if (seen.has(id)) continue;
+            const target = targetState.byId[id];
+            if (target === undefined) continue;
+            /*
+             * 目标记录可能比会话删除活得更久（比如从平台侧边栏删的）。会话表已经
+             * ready 且确实没有这个 id 时不再补幽灵卡；刚创建的目标给 10 秒宽限，
+             * 等平台把新会话同步进会话表。
+             */
+            if (sessionsReady && sessionState.byId[id] === undefined && Date.now() - (target.createdAt ?? 0) > 10000) continue;
+            seen.add(id);
+            const workspace = items.find((item) => item.workspaceId === target.workspaceId);
+            rows.push({
+              row: {
+                id,
+                displayTitle: '',
+                blank: true,
+                running: false,
+                updatedAt: target.createdAt ?? 0,
+                target: true,
+              },
+              workspace,
+            });
           }
           /*
            * 这个顺序只决定**树根**在布局里的先后（以及同一层无上级节点之间的次序）。
@@ -858,21 +908,28 @@ window.__ModuleLoader__.load({
              * 与工作区名一模一样。任务分派要的是「这是个还没开始的空会话」，因此
              * 按 `blank` 标志统一显示成「未命名会话」。
              */
+            const target = targetIds.has(row.id);
             return {
               key: row.id,
-              label: row.blank === true || title === undefined || title === '' ? t('pane.untitled') : title,
+              /*
+               * 目标空会话叫「未命名目标」；一旦有了内容/标题，就与普通会话一样用
+               * 真实标题（目标标记仍在，只影响「空会话是否显示」，不再影响命名）。
+               */
+              label: target && row.blank === true
+                ? t('pane.untitledTarget')
+                : (row.blank === true || title === undefined || title === '' ? t('pane.untitled') : title),
               // 分组用：同一个工作区的候选卡片聚在一起。会话不属于任何工作区时留空，
               // 由模型把它归入「未归属工作区」并固定排在最后。
               workspaceKey: workspace === undefined ? '' : workspace.workspaceId,
               workspaceTitle: workspace === undefined ? t('pane.unknownWorkspace') : workspace.title,
               running: row.running === true,
               inPane: inPane.has(row.id),
-              // 空白会话（建了但没输入内容）要区分“当前真的开在窗格里”与历史空壳，
-              // 见 `pickerGroups` 的过滤条件。
+              // 空白会话（建了但没输入内容）要区分「目标」与普通空壳。
               blank: row.blank === true,
+              target,
             };
           });
-        }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t]);
+        }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t, targetIds, targetState]);
 
         /** 卡片（按会话 id）的索引，换算绑定表时用它取显示名。 */
         const graphCardById = useMemo(() => {
@@ -881,14 +938,6 @@ window.__ModuleLoader__.load({
           return index;
         }, [graphCards]);
 
-        /**
-         * 用户从左侧选择器拖进画布、但还没连线的会话。
-         *
-         * 这份状态**不落盘**：箭头（绑定表）才是需要持久化的授权关系；待连线卡片只是
-         * 编辑过程中的暂存，刷新后重新从左侧拖一次即可。已连线的会话不在布局里用它
-         * （见 `graphLayout` 的过滤），删掉箭头后它会自动回到「待连线」。
-         */
-        const [stagedSessions, setStagedSessions] = useState(() => new Set());
 
         /** 把一个真实会话加入画布；未知 id 直接忽略，避免画出一张查不到内容的空卡。 */
         const stageSession = useCallback((sessionId) => {
@@ -941,11 +990,11 @@ window.__ModuleLoader__.load({
          * 分组与字母排序交给模型（`groupSessionsByWorkspace`）；没有任何可选项的工作区
          * 整组隐藏，避免展开一个空组。
          *
-         * **空白会话要额外过一道筛**：只列「当前确实开在平铺窗格里」的那一个。
-         * 平台每次新建会话都会立即落一个空白会话记录，历史上反复新建就会在每个工作区
-         * 攒下好几个「未命名会话」；它们没有内容、也没有用途，全列出来只会把左侧刷满。
-         * 当前打开的空白会话则是真实需求（先建目标再连线派活），必须留。已经连进图的
-         * 空白节点不受影响 —— 它本来就不在左侧列（被 connected 过滤），画布卡片照常渲染。
+         * **空白会话要额外过一道筛**：普通空白会话（包括当前窗格正打开的那个）一律
+         * 不列；只有带目标记录的空白会话才显示成「未命名目标」。平台每次新建会话都会
+         * 立即落一个空白记录，历史上反复新建会攒出很多没有用途的空壳，全列出来只会
+         * 把左侧刷满。已经连进图的目标不受影响 —— 它本来就不在左侧列（被 connected
+         * 过滤），画布卡片照常渲染。
          */
         const pickerGroups = useMemo(() => {
           const connected = new Set();
@@ -962,12 +1011,15 @@ window.__ModuleLoader__.load({
                 .filter((card) => card !== undefined
                   && !connected.has(card.key)
                   && !stagedSessions.has(card.key)
-                  && (card.blank !== true || card.inPane === true))
+                  && (card.blank !== true || card.target === true))
                 .map((card) => ({
                   key: card.key,
                   label: card.label,
                   workspaceTitle: card.workspaceTitle,
                   running: card.running === true,
+                  // 目标卡片在左侧带一个删除入口：空目标不会出现在平台侧边栏，
+                  // 用户否则没有地方删它。
+                  target: card.target === true,
                 })),
             }))
             .filter((group) => group.items.length > 0);
@@ -1272,6 +1324,9 @@ window.__ModuleLoader__.load({
           setFloatingPanes([]);
         }, [modeState.mode, floatingPanes, paneActions, graphModel]);
 
+        /** 当前最上层的浮窗 z；金色边框只给这一张。 */
+        const topFloatingZ = floatingPanes.reduce((top, entry) => Math.max(top, entry.z), -Infinity);
+
         /** 把浮窗列表渲染成绝对定位容器；pane 已被删除的条目直接跳过。 */
         const floatingNodes = floatingPanes.map((entry) => {
           const pane = panes.find((candidate) => candidate.key === entry.paneKey);
@@ -1281,12 +1336,16 @@ window.__ModuleLoader__.load({
           const plan = panePlan.get(pane.key);
           const summary = plan === undefined ? undefined : plan.summary;
           const rawTitle = summary === undefined ? undefined : summary.displayTitle;
-          const title = summary === undefined || summary.blank === true || rawTitle === undefined || rawTitle === ''
+          const title = summary === undefined
             ? t('pane.untitled')
-            : rawTitle;
+            : (summary.target === true && summary.blank === true
+                ? t('pane.untitledTarget')
+                : (summary.blank === true || rawTitle === undefined || rawTitle === ''
+                    ? t('pane.untitled')
+                    : rawTitle));
           return h('div', {
             key: entry.paneKey,
-            className: css.floatingPane,
+            className: cx(css.floatingPane, entry.z === topFloatingZ ? css.floatingPaneActive : null),
             style: {
               left: entry.x + 'px',
               top: entry.y + 'px',
@@ -1294,7 +1353,11 @@ window.__ModuleLoader__.load({
               height: entry.height + 'px',
               zIndex: entry.z,
             },
-            onPointerDown: () => bringFloatingToFront(entry.paneKey),
+            /*
+             * 捕获阶段置顶：标题栏自己的 pointerdown 会 stopPropagation（拖动窗口），
+             * 冒泡阶段收不到，所以这里必须在捕获阶段先把它提到最上层。
+             */
+            onPointerDownCapture: () => bringFloatingToFront(entry.paneKey),
           },
             h('div', {
               className: css.floatingBar,
@@ -1429,6 +1492,18 @@ window.__ModuleLoader__.load({
               const card = graphCardById.get(sessionId);
               openFloatingPane(sessionId, card === undefined ? '' : card.workspaceKey);
             },
+            /*
+             * 删除目标：走平台会话删除的确认弹窗；会话删掉后 client.js 的
+             * onDeleted 会同时清掉目标记录和牵涉的箭头。
+             */
+            deleteTarget: (sessionId, displayTitle) => {
+              if (typeof requestSessionDelete !== 'function') {
+                setAddError(t('graph.deleteUnavailable'));
+                return;
+              }
+              const accepted = requestSessionDelete(sessionId, displayTitle);
+              if (accepted === false) setAddError(t('graph.deleteUnavailable'));
+            },
             stageSession,
             unstageSession,
           },
@@ -1484,7 +1559,17 @@ window.__ModuleLoader__.load({
            * 只有任务分派模式才需要当前图；平铺模式不写图（另一部分由保存块从
            * Host 的旧记录里带上），因此这里传 null，避免误把当前图写进去。
            */
-          const graphSnapshot = saveScope === 'graph' ? graphState : null;
+          /*
+           * 画布保存：边 + 已拖入但还没连线的节点。后者不保存的话，用户把目标拖进
+           * 画布、点保存、刷新之后，节点会退回左侧，等于白拖。
+           */
+          const connectedIds = new Set();
+          for (const edge of graphState.edges) {
+            connectedIds.add(edge.from);
+            connectedIds.add(edge.to);
+          }
+          const stagedForSave = [...stagedSessions].filter((id) => graphCardById.has(id) && !connectedIds.has(id));
+          const graphSnapshot = saveScope === 'graph' ? { edges: graphState.edges, staged: stagedForSave } : null;
           /*
            * “跟随最新会话”的窗格记录里 `sessionId` 往往是 null，真正显示的是
            * `panePlan` 现场解析出来的那一条。保存时必须把**眼前这一段对话**的 id

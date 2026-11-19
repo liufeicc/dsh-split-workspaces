@@ -196,7 +196,7 @@ window.__ModuleLoader__.load({
      */
     function serializeGraph(graph) {
       if (graph === null || graph === undefined || !Array.isArray(graph.edges)) return null;
-      return {
+      const payload = {
         edges: graph.edges.map((edge) => {
           if (edge === null || typeof edge !== 'object') return null;
           if (typeof edge.from !== 'string' || typeof edge.to !== 'string') return null;
@@ -205,6 +205,22 @@ window.__ModuleLoader__.load({
           return item;
         }).filter((edge) => edge !== null),
       };
+      /*
+       * 已拖入画布、但还没连线的节点也要保存：用户把目标拖出来后点「保存画布」，
+       * 刷新应该回到同样的待连线状态。普通空白会话不会出现在 staged 里
+       * （它们根本不进画布），所以这里不再额外过滤。
+       */
+      if (Array.isArray(graph.staged)) {
+        const staged = [];
+        const seen = new Set();
+        for (const id of graph.staged) {
+          if (typeof id !== 'string' || id === '' || seen.has(id)) continue;
+          seen.add(id);
+          staged.push(id);
+        }
+        if (staged.length > 0) payload.staged = staged;
+      }
+      return payload;
     }
 
     /**
@@ -267,7 +283,10 @@ window.__ModuleLoader__.load({
         carriedGraph = previous !== null
           && previous.graph !== undefined && previous.graph !== null
           && Array.isArray(previous.graph.edges)
-          ? { edges: previous.graph.edges }
+          ? {
+              edges: previous.graph.edges,
+              ...(Array.isArray(previous.graph.staged) ? { staged: previous.graph.staged } : {}),
+            }
           : null;
       }
 
@@ -381,6 +400,20 @@ window.__ModuleLoader__.load({
           edges.push(item);
         }
         graph = { edges };
+        /*
+         * 待连线节点只保留仍在册的会话；已删除/归档的目标不再恢复成空卡。
+         */
+        if (Array.isArray(saved.graph.staged)) {
+          const staged = [];
+          const seen = new Set();
+          for (const id of saved.graph.staged) {
+            if (typeof id !== 'string' || id === '' || seen.has(id)) continue;
+            if (!validGraphSession(id)) continue;
+            seen.add(id);
+            staged.push(id);
+          }
+          if (staged.length > 0) graph.staged = staged;
+        }
       }
 
       if (paneState === null && graph === null) return null;

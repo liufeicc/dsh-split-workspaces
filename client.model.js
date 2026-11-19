@@ -907,13 +907,21 @@ window.__ModuleLoader__.load({
     function selectableSessions(workspace, sessionState, archivedSessionIds, options) {
       if (workspace === undefined) return [];
       const includeBlank = options?.includeBlank === true;
+      /*
+       * 目标会话是「有用途的空白会话」：普通空白会话默认不显示（避免空壳刷屏），
+       * 但带目标记录的空白会话必须显示，名字由视图层写成「未命名目标」。
+       * 传 Set 而不是布尔值，因为这里要逐条判断哪个 id 是目标。
+       */
+      const includeTargets = options?.includeTargets instanceof Set ? options.includeTargets : new Set();
       const rows = [];
       for (const id of workspace.sessionIds) {
         const summary = sessionState.byId[id];
         if (summary === undefined || summary.origin === 'subagent') continue;
-        if (includeBlank !== true && summary.blank === true) continue;
+        const target = includeTargets.has(id);
+        if (includeBlank !== true && summary.blank === true && !target) continue;
         if (archivedSessionIds.includes(id)) continue;
-        rows.push(summary);
+        // target 标记留在行上：窗格菜单与任务分派都靠它决定「未命名目标」/是否显示。
+        rows.push(target ? { ...summary, target: true } : summary);
       }
       rows.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
       return rows;
@@ -943,16 +951,21 @@ window.__ModuleLoader__.load({
      * @param occupiedSessionIds - 其它窗格钉住的会话 id（可以包含当前窗格自己）。
      * @returns 可复用的空白会话 id；没有时返回 undefined。
      */
-    function reusableBlankSession(workspace, sessionState, archivedSessionIds, occupiedSessionIds) {
+    function reusableBlankSession(workspace, sessionState, archivedSessionIds, occupiedSessionIds, excludedSessionIds) {
       if (workspace === undefined) return undefined;
       const occupied = new Set(occupiedSessionIds ?? []);
+      /*
+       * 目标不能被普通「新建会话」复用：目标已经有明确用途（等连线/等派单），
+       * 被切走会让用户在任务分派里画的节点悄悄换了会话。
+       */
+      const excluded = new Set(excludedSessionIds ?? []);
       let best;
       for (const id of workspace.sessionIds) {
         const summary = sessionState.byId[id];
         if (summary === undefined || summary.origin === 'subagent') continue;
         if (summary.blank !== true) continue;
         if (archivedSessionIds.includes(id)) continue;
-        if (occupied.has(id)) continue;
+        if (occupied.has(id) || excluded.has(id)) continue;
         if (best === undefined || (summary.updatedAt ?? 0) > (best.updatedAt ?? 0)) best = summary;
       }
       return best === undefined ? undefined : best.id;

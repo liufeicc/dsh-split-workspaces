@@ -22,6 +22,7 @@ import {
 } from './host.constants.js';
 import { loadReviews, loadStore, makeTarget, saveReviews, saveStore } from './host.store.js';
 import { loadLayoutFile, saveLayoutFile } from './host.layout.js';
+import { loadTargets, saveTargets } from './host.targets.js';
 import { classifyGoal } from './host.goal-state.js';
 
 /**
@@ -104,6 +105,17 @@ export class PaneDispatchService {
      * 结论本身留在目标会话的历史里，主会话重启后照样能回去复核，所以没有理由把闸放开。
      */
     this.reviews = new Map();
+    /**
+     * 派单目标：`targetSessionId → { id, workspaceId, createdAt }`。
+     *
+     * 目标是一个真实会话，只是额外多这条记录 —— 空白会话默认不显示，带记录的空会话
+     * 要在所有会话列表里显示成「未命名目标」。它**独立落盘**，创建即存在，不靠
+     * 「保存画布」；画布只保存节点、边和位置。
+     */
+    this.targets = new Map();
+    for (const target of loadTargets()) {
+      this.targets.set(target.id, target);
+    }
     /**
      * 已经结清过的派单（`ownerId\u0000targetId`）。
      *
@@ -453,6 +465,72 @@ export class PaneDispatchService {
       };
     }
     return { states };
+  }
+
+  /**
+   * 列出全部派单目标。
+   *
+   * 客户端启动时读一次，用来决定哪些空白会话要显示成「未命名目标」。
+   * 返回浅拷贝，调用方改字段不影响服务状态。
+   *
+   * @param request - Typert 网关要求保留的形参。
+   * @returns `{ targets: [{ id, workspaceId, createdAt }] }`。
+   */
+  listTargets(request) {
+    void request;
+    return { targets: [...this.targets.values()] };
+  }
+
+  /**
+   * 登记一个派单目标；已存在时只更新工作区，保留创建时间。
+   *
+   * 写盘失败会回滚内存并抛错，让客户端能明确提示；不会留下「界面有、磁盘没有」的
+   * 半截状态。
+   *
+   * @param request - `{ sessionId, workspaceId }`。
+   * @returns `{ ok: true, target }`。
+   */
+  addTarget(request) {
+    const id = typeof request?.sessionId === 'string' ? request.sessionId.trim() : '';
+    const workspaceId = typeof request?.workspaceId === 'string' ? request.workspaceId.trim() : '';
+    if (id === '' || workspaceId === '') {
+      throw new Error('paneDispatch.addTarget: sessionId and workspaceId are required');
+    }
+    const existing = this.targets.get(id);
+    const target = {
+      id,
+      workspaceId,
+      createdAt: existing === undefined ? Date.now() : existing.createdAt,
+    };
+    this.targets.set(id, target);
+    if (!saveTargets([...this.targets.values()])) {
+      if (existing === undefined) this.targets.delete(id);
+      else this.targets.set(id, existing);
+      throw new Error('paneDispatch.addTarget: targets could not be saved');
+    }
+    return { ok: true, target };
+  }
+
+  /**
+   * 删除一个派单目标记录。
+   *
+   * 只删记录，不删会话：会话由会话删除插件负责。没有这条记录时返回
+   * `removed: false`，让调用方可以安全地重复清理。
+   *
+   * @param request - `{ sessionId }`。
+   * @returns `{ ok: true, removed: boolean }`。
+   */
+  removeTarget(request) {
+    const id = typeof request?.sessionId === 'string' ? request.sessionId.trim() : '';
+    if (id === '') return { ok: true, removed: false };
+    const existing = this.targets.get(id);
+    if (existing === undefined) return { ok: true, removed: false };
+    this.targets.delete(id);
+    if (!saveTargets([...this.targets.values()])) {
+      this.targets.set(id, existing);
+      throw new Error('paneDispatch.removeTarget: targets could not be saved');
+    }
+    return { ok: true, removed: true };
   }
 
   /**

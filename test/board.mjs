@@ -189,6 +189,23 @@ export const paneDom = (tree, key) => {
   return mount(frame.type, frame.props);
 };
 
+/**
+ * 点「新建会话」后，在弹出选择框里选「新建会话」或「新建目标」。
+ *
+ * @param pane - 窗格的 mount 实例（`paneDom` 的返回值）。
+ * @param kind - `session` 或 `target`。
+ * @returns 被点中的选项节点。
+ */
+export function pickNewSession(pane, kind = 'session') {
+  pane.flush();
+  const options = findAll(pane.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_newSessionOption'));
+  const option = kind === 'target' ? options[1] : options[0];
+  if (option === undefined) throw new Error('new-session choice is not open');
+  option.props.onClick();
+  pane.flush();
+  return option;
+}
+
 /** 一个窗格的标题栏元素。 */
 export const paneHeadOf = (dom) => findAll(dom, (node) => typeof node.props.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_paneHead'))[0];
 

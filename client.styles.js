@@ -41,6 +41,10 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_root{--dshSplitWs-accent:var(--dsw-alias-brand-primary-new-colorprimary-new-color,var(--dsw-static-deepseek-500));--dsw-font-family:"SplitWorkspaceKuaile","ZCOOL KuaiLe","Noto Sans CJK SC","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;box-sizing:border-box;position:relative;display:flex;flex-direction:column;height:100%;min-width:0;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}',
       // 任务分派浮窗：绝对定位在面板内，拖动条负责移动，PaneFrame 负责全部会话交互。
       '.dshSplitWs_floatingPane{position:absolute;display:flex;flex-direction:column;border:1px solid rgba(94,231,255,.35);border-radius:14px;background:var(--dsw-alias-bg-layer-1,#0b1422);box-shadow:0 24px 60px rgba(0,0,0,.55),0 0 0 1px rgba(94,231,255,.08);overflow:hidden}',
+      // 最上层浮窗：很淡的香槟金细边框，不加外发光，避免抢对话内容的注意力。
+      '.dshSplitWs_floatingPaneActive{border-color:rgba(214,197,155,.55);box-shadow:0 0 0 1px rgba(214,197,155,.12),0 24px 60px rgba(0,0,0,.55)}',
+      '.dshSplitWs_floatingPaneActive .dshSplitWs_floatingBar{background:linear-gradient(90deg,rgba(214,197,155,.06),rgba(167,139,250,.06));border-bottom-color:rgba(214,197,155,.16)}',
+      '.dshSplitWs_floatingPaneActive .dshSplitWs_floatingTitle{color:#e3d8bf}',
       '.dshSplitWs_floatingBar{flex:none;display:flex;align-items:center;gap:8px;height:26px;padding:0 14px 0 12px;background:linear-gradient(90deg,rgba(94,231,255,.12),rgba(167,139,250,.08));border-bottom:1px solid rgba(94,231,255,.16);color:var(--dsw-alias-label-primary,#e7f7ff);font-size:11px;cursor:move;user-select:none;touch-action:none}',
       '.dshSplitWs_floatingTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.05em}',
       '.dshSplitWs_floatingClose{flex:none;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#8fa8bf);font:inherit;font-size:15px;line-height:18px;cursor:pointer}',
@@ -91,7 +95,19 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_splitter:hover .dshSplitWs_splitterLine,.dshSplitWs_splitter:focus-visible .dshSplitWs_splitterLine,.dshSplitWs_splitterActive .dshSplitWs_splitterLine{background:var(--dsw-alias-brand-primary);transform:scale(1.08)}',
       '.dshSplitWs_splitter:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
       // 窗格本身永远是一圈细边框：焦点只用标题栏表达，不给整块窗格加高亮框。
-      '.dshSplitWs_pane{flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:.5px solid var(--dsw-alias-border-l1);border-radius:16px;background:var(--dsw-alias-bg-layer-1)}',
+      '.dshSplitWs_pane{position:relative;flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0;overflow:hidden;border:.5px solid var(--dsw-alias-border-l1);border-radius:16px;background:var(--dsw-alias-bg-layer-1)}',
+      // 目标创建后的轻提示：只占一条，不抢对话区高度。
+      '.dshSplitWs_paneNotice{flex:none;padding:5px 12px;border-bottom:.5px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dshSplitWs-accent) 10%,transparent);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}',
+      // 「新建会话 / 新建目标」选择框：覆盖当前窗格，点击遮罩取消。
+      '.dshSplitWs_newSessionOverlay{position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(3,8,14,.58)}',
+      '.dshSplitWs_newSessionBox{width:min(340px,100%);display:flex;flex-direction:column;gap:8px;padding:14px;border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 18px 48px rgba(0,0,0,.42)}',
+      '.dshSplitWs_newSessionTitle{font-size:13px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-primary)}',
+      '.dshSplitWs_newSessionOption{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:9px 11px;border:.5px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;text-align:left;cursor:pointer}',
+      '.dshSplitWs_newSessionOption:hover{border-color:var(--dshSplitWs-accent);background:color-mix(in srgb,var(--dshSplitWs-accent) 8%,var(--dsw-alias-bg-layer-1))}',
+      '.dshSplitWs_newSessionOptionLabel{font-size:12.5px;font-weight:600;line-height:18px}',
+      '.dshSplitWs_newSessionOptionHint{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+      '.dshSplitWs_newSessionCancel{align-self:flex-end;padding:4px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}',
+      '.dshSplitWs_newSessionCancel:hover{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}',
       // 标题栏是**拖动交换位置**的把手：光标是「抓住」，触摸拖动不被浏览器的滚动手势抢走。
       // 里面的文字不参与选择（见下面 wsName/wsPath 那条），否则拖动会顺手拖出一段选区。
       '.dshSplitWs_paneHead{flex:none;display:flex;align-items:center;gap:6px;padding:6px 6px 6px 12px;border-bottom:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);cursor:grab;touch-action:none}',
@@ -239,10 +255,15 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphReject{flex:none;color:var(--dsw-alias-state-error-primary)}',
       '.dshSplitWs_graphDegraded{flex:none;color:var(--dsw-alias-state-warning-primary,#b8860b)}',
       // 左右两块：左边是二级会话选择器（固定宽），右边是画布（吃掉剩余宽度）。
-      '.dshSplitWs_graphBody{flex:1;min-height:0;display:flex}',
+      '.dshSplitWs_graphBody{position:relative;flex:1;min-height:0;display:flex}',
       '.dshSplitWs_graphPicker{flex:none;width:224px;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;border-right:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}',
       '.dshSplitWs_graphPickerHead{flex:none;display:flex;flex-direction:column;gap:2px;padding:10px 12px 8px;border-bottom:.5px solid var(--dsw-alias-border-l1)}',
+      '.dshSplitWs_graphPickerHeadTop{display:flex;align-items:center;justify-content:space-between;gap:8px}',
       '.dshSplitWs_graphPickerTitle{font-size:12px;line-height:18px;font-weight:600;color:var(--dsw-alias-label-primary)}',
+      '.dshSplitWs_graphPickerCollapse{flex:none;width:22px;height:22px;padding:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:14px;line-height:20px;cursor:pointer}',
+      '.dshSplitWs_graphPickerCollapse:hover{color:var(--dsw-alias-label-primary);border-color:var(--dshSplitWs-accent)}',
+      '.dshSplitWs_graphPickerExpand{position:absolute;left:8px;top:8px;z-index:5;width:26px;height:26px;padding:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:16px;line-height:24px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}',
+      '.dshSplitWs_graphPickerExpand:hover{color:var(--dsw-alias-label-primary);border-color:var(--dshSplitWs-accent)}',
       '.dshSplitWs_graphPickerHint{font-size:10.5px;line-height:15px;color:var(--dsw-alias-label-secondary)}',
       '.dshSplitWs_graphPickerScroll{flex:1;min-height:0;overflow:auto;padding:6px}',
       '.dshSplitWs_graphPickerEmpty{padding:16px 8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;text-align:center}',
@@ -310,6 +331,8 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphCardRemove{position:absolute;top:5px;right:5px;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;line-height:18px;text-align:center;cursor:pointer;opacity:.7}',
       '.dshSplitWs_graphCardRemove:hover{opacity:1;color:var(--dsw-alias-label-primary)}',
       '.dshSplitWs_graphCardRemove:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px;opacity:1}',
+      '.dshSplitWs_graphCardDelete{position:absolute;right:5px;z-index:2;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:center;cursor:pointer;opacity:.75}',
+      '.dshSplitWs_graphCardDelete:hover{opacity:1;color:var(--dsw-alias-state-error-primary);background:rgba(255,77,109,.15)}',
       // 出线端口：右边缘中点上那个圆点，拖动起点。命中区比看上去大（14px），
       // 因为 6px 的圆在触控板上很难一次按准。
       '.dshSplitWs_graphPort{position:absolute;right:-7px;top:50%;transform:translateY(-50%);width:14px;height:14px;padding:0;border:.5px solid var(--dsw-alias-border-l2);border-radius:50%;background:var(--dsw-alias-bg-base);cursor:crosshair;touch-action:none}',
@@ -345,6 +368,11 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphPickerItems{padding:4px 0 8px;animation:dshSplitWsFadeIn .24s ease both}',
       // 会话卡片：左侧一道霓虹竖线，悬停轻微上浮并扫过一道光。
       '.dshSplitWs_graphPickerItem{position:relative;display:flex;flex-direction:column;gap:3px;margin:0 0 6px 10px;padding:9px 10px 8px;border:1px solid rgba(94,231,255,.16);border-radius:10px;background:linear-gradient(150deg,rgba(18,32,52,.85),rgba(8,14,24,.9));box-shadow:0 4px 14px rgba(0,0,0,.3),inset 0 0 18px rgba(94,231,255,.04);align-items:stretch;cursor:grab;user-select:none;overflow:hidden;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;animation:dshSplitWsCardIn .26s cubic-bezier(.2,.8,.2,1) backwards}',
+      // 目标卡片右上角的删除入口：空目标不会出现在平台会话列表里，这里必须给一个。
+      '.dshSplitWs_graphPickerDelete{position:absolute;top:4px;right:4px;z-index:2;width:18px;height:18px;padding:0;border:0;border-radius:5px;background:rgba(255,77,109,.08);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;opacity:.65;transition:opacity .12s ease,color .12s ease,background .12s ease}',
+      '.dshSplitWs_graphPickerItem:hover .dshSplitWs_graphPickerDelete,.dshSplitWs_graphPickerDelete:focus-visible{opacity:1}',
+      '.dshSplitWs_graphPickerDelete:hover{background:rgba(255,77,109,.2);color:var(--dsw-alias-state-error-primary)}',
+      '.dshSplitWs_graphPickerCardTopWithDelete{padding-right:20px}',
       '.dshSplitWs_graphPickerItem::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--pick-accent,var(--sw-neon));opacity:.75;box-shadow:0 0 10px var(--pick-accent,var(--sw-glow))}',
       '.dshSplitWs_graphPickerItem::after{content:"";position:absolute;right:-30%;top:-60%;width:60%;height:220%;background:linear-gradient(90deg,transparent,rgba(94,231,255,.10),transparent);transform:rotate(18deg);opacity:0;transition:opacity .2s ease;pointer-events:none}',
       '.dshSplitWs_graphPickerItem:hover{transform:translateY(-1px);border-color:var(--pick-accent,var(--sw-neon));box-shadow:0 8px 22px rgba(0,0,0,.42),0 0 18px color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 25%,transparent),inset 0 0 20px color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 8%,transparent)}',
@@ -838,6 +866,7 @@ window.__ModuleLoader__.load({
     const css = {
       root: 'dshSplitWs_root',
       floatingPane: 'dshSplitWs_floatingPane',
+      floatingPaneActive: 'dshSplitWs_floatingPaneActive',
       floatingBar: 'dshSplitWs_floatingBar',
       floatingTitle: 'dshSplitWs_floatingTitle',
       floatingClose: 'dshSplitWs_floatingClose',
@@ -860,6 +889,14 @@ window.__ModuleLoader__.load({
       splitterLine: 'dshSplitWs_splitterLine',
       splitterActive: 'dshSplitWs_splitterActive',
       pane: 'dshSplitWs_pane',
+      paneNotice: 'dshSplitWs_paneNotice',
+      newSessionOverlay: 'dshSplitWs_newSessionOverlay',
+      newSessionBox: 'dshSplitWs_newSessionBox',
+      newSessionTitle: 'dshSplitWs_newSessionTitle',
+      newSessionOption: 'dshSplitWs_newSessionOption',
+      newSessionOptionLabel: 'dshSplitWs_newSessionOptionLabel',
+      newSessionOptionHint: 'dshSplitWs_newSessionOptionHint',
+      newSessionCancel: 'dshSplitWs_newSessionCancel',
       paneHead: 'dshSplitWs_paneHead',
       paneHeading: 'dshSplitWs_paneHeading',
       wsName: 'dshSplitWs_wsName',
@@ -927,6 +964,9 @@ window.__ModuleLoader__.load({
       graphPicker: 'dshSplitWs_graphPicker',
       graphPickerHead: 'dshSplitWs_graphPickerHead',
       graphPickerTitle: 'dshSplitWs_graphPickerTitle',
+      graphPickerHeadTop: 'dshSplitWs_graphPickerHeadTop',
+      graphPickerCollapse: 'dshSplitWs_graphPickerCollapse',
+      graphPickerExpand: 'dshSplitWs_graphPickerExpand',
       graphPickerHint: 'dshSplitWs_graphPickerHint',
       graphPickerScroll: 'dshSplitWs_graphPickerScroll',
       graphPickerEmpty: 'dshSplitWs_graphPickerEmpty',
@@ -954,7 +994,10 @@ window.__ModuleLoader__.load({
       graphCardStaged: 'dshSplitWs_graphCardStaged',
       graphCardState: 'dshSplitWs_graphCardState',
       graphPickerCardState: 'dshSplitWs_graphPickerCardState',
+      graphPickerDelete: 'dshSplitWs_graphPickerDelete',
+      graphPickerCardTopWithDelete: 'dshSplitWs_graphPickerCardTopWithDelete',
       graphCardRemove: 'dshSplitWs_graphCardRemove',
+      graphCardDelete: 'dshSplitWs_graphCardDelete',
       graphPort: 'dshSplitWs_graphPort',
       graphEmpty: 'dshSplitWs_graphEmpty',
     };

@@ -19,12 +19,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ReactStub, byData, byName, findAll, loadBundle, mount, settle } from './harness.mjs';
 // 断言记录、棋盘挂载、颜色对比度与元素查找的小工具；另外三个契约测试用的是同一份。
-import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, replaceMenuOf, sessionMenuOf, openWorkspaceStep, popoverRender, paneHeadOf, contrastRatio, mixWithBlack } from './board.mjs';
+import { check, report, renderBoard, paneDom, framesOf, frameOf, splitMenuOf, replaceMenuOf, sessionMenuOf, openWorkspaceStep, popoverRender, paneHeadOf, contrastRatio, mixWithBlack, pickNewSession } from './board.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 const mod = await loadBundle(join(here, '..', 'client.js'), { react: ReactStub });
-check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.layout.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.dispatch.js,./client.graph.model.js,./client.graph.view.js,./client.menu.js,./client.pane.js,./client.views.js,./client.fx.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
+check('入口把各个代码块都列了出来', mod.test.CHUNK_FILES.join(',') === './client.styles.js,./client.dicts.js,./client.model.js,./client.layout.js,./client.presets.js,./client.mcp.js,./client.skill.js,./client.dispatch.js,./client.targets.js,./client.graph.model.js,./client.graph.view.js,./client.menu.js,./client.pane.js,./client.views.js,./client.fx.js,./client.view.js', mod.test.CHUNK_FILES.join(','));
 
 /*
  * 清单与磁盘必须一一对应。
@@ -398,6 +398,12 @@ check('浮窗向上缩放有下限且不越出面板顶部', (() => {
   return shrink.height === 260 && shrink.y === 240
     && grow.height === 500 - 12 && grow.y === 12;
 })());
+check('最上层浮窗有金色焦点边框', (() => {
+  const css = mods.styles.CSS;
+  return /\.dshSplitWs_floatingPaneActive\{border-color:rgba\(214,197,155,\.55\)/.test(css)
+    && /\.dshSplitWs_floatingPaneActive \.dshSplitWs_floatingTitle\{color:#e3d8bf/.test(css);
+})());
+
 check('浮窗内容层与缩放热区的层叠顺序固定（底部热区不能被输入框盖住）', (() => {
   const css = mods.styles.CSS;
   return /\.dshSplitWs_floatingBody\{position:relative;z-index:0/.test(css)
@@ -930,6 +936,7 @@ const repBlankPane = paneDom(repBlankBoard.render().tree, 'pane-1');
 replaceMenuOf(repBlankPane.tree).items.find((item) => item.props.label === 'alpha').props.onClick();
 repBlankPane.flush();
 replaceMenuOf(repBlankPane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
+pickNewSession(repBlankPane);
 await settle();
 repBlankPane.flush();
 const repBlankState = repBlankBoard.paneStore.getSnapshot();
@@ -945,6 +952,7 @@ const repNewSessionLayout = repNewSessionBoard.paneStore.getSnapshot().layout;
 replaceMenuOf(repNewSessionPane.tree).items.find((item) => item.props.label === 'gamma').props.onClick();
 repNewSessionPane.flush();
 replaceMenuOf(repNewSessionPane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
+pickNewSession(repNewSessionPane);
 await settle();
 repNewSessionPane.flush();
 const repNewSessionState = repNewSessionBoard.paneStore.getSnapshot();
@@ -1018,6 +1026,7 @@ check('会话菜单只有「新建会话」与真实会话，不列空白会话'
  * 而不是让 Host 再建一条永远不用的空会话。
  */
 blankMenu.items.find((item) => item.props.label === '新建会话').props.onClick();
+pickNewSession(blankPane);
 await settle();
 const reused = blankBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1');
 check('「新建会话」复用本工作区已有的空白会话，不惊动 Host',
@@ -1027,6 +1036,7 @@ check('「新建会话」复用本工作区已有的空白会话，不惊动 Hos
 // 已经是空白会话时再点一次：什么都不用做，尤其不能再新建。
 const selfPane = paneDom(blankBoard.render().tree, 'pane-1');
 sessionMenuOf(selfPane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
+pickNewSession(selfPane);
 await settle();
 check('这一格本来就是空白会话时，再点「新建会话」不产生新会话',
   blankBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1').sessionId === 's-blank'
@@ -1040,10 +1050,81 @@ const occupiedBoard = await renderBoard(mod);
 occupiedBoard.paneStore.setSession('pane-2', 's-blank');
 const occupiedPane = paneDom(occupiedBoard.render().tree, 'pane-1');
 sessionMenuOf(occupiedPane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
+pickNewSession(occupiedPane);
 await settle();
 check('空白会话正被别的窗格占用时，才真正调用 Host 新建',
   occupiedBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1').sessionId === 's-new'
   && occupiedBoard.connectCount() === 1,
   'connect=' + String(occupiedBoard.connectCount()));
+
+// --- 目标记录、新建选择框与待连线保存 ---------------------------------------------
+
+{
+  const store = mods.targets.createTargetStore({
+    load: async () => [{ id: 's-target-1', workspaceId: 'ws-a', createdAt: 1 }],
+    add: async () => ({ ok: true }),
+    remove: async () => ({ ok: true }),
+  });
+  await store.load();
+  check('目标 store 读回记录',
+    store.isTarget('s-target-1') && store.getSnapshot().ids[0] === 's-target-1');
+  await store.addTarget('s-target-2', 'ws-a');
+  check('目标 store 添加目标', store.isTarget('s-target-2'));
+  await store.removeTarget('s-target-1');
+  check('目标 store 删除目标', !store.isTarget('s-target-1'));
+}
+
+{
+  const choiceBoard = await renderBoard(mod);
+  const choicePane = paneDom(choiceBoard.render().tree, 'pane-1');
+  sessionMenuOf(choicePane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
+  choicePane.flush();
+  const choices = findAll(choicePane.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_newSessionOption'));
+  check('点新建会话先弹出「会话 / 目标」选择框',
+    choices.length === 2
+    && JSON.stringify(choices[0]).includes('新建会话')
+    && JSON.stringify(choices[1]).includes('新建目标'),
+    JSON.stringify(choices.map((node) => node.children)));
+  choices[1].props.onClick();
+  await settle();
+  choicePane.flush();
+  check('选「新建目标」会创建会话、登记目标，并像新建会话一样进入当前窗格',
+    choiceBoard.connectCount() === 1
+    && choiceBoard.injected.targetStore.isTarget('s-new')
+    && choiceBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1').sessionId === 's-new',
+    JSON.stringify({
+      connect: choiceBoard.connectCount(),
+      target: choiceBoard.injected.targetStore.isTarget('s-new'),
+      pane: choiceBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1'),
+    }));
+  check('目标创建后给出一句提示',
+    JSON.stringify(choicePane.tree).includes('目标已创建'));
+}
+
+{
+  const targetMenuBoard = await renderBoard(mod);
+  await targetMenuBoard.injected.targetStore.addTarget('s-blank', 'ws-a');
+  await settle();
+  const targetMenuPane = paneDom(targetMenuBoard.render().tree, 'pane-1');
+  const labels = sessionMenuOf(targetMenuPane.tree).items.map((item) => item.props.label);
+  check('平铺会话菜单显示目标空会话，并叫「未命名目标」',
+    labels.includes('未命名目标'), JSON.stringify(labels));
+}
+
+{
+  const emptySnapshot = { panes: [], layout: null, activeKey: null };
+  const payload = mods.layout.serialize(emptySnapshot, new Map(), { edges: [], staged: ['s-a'] }, { scope: 'graph' });
+  check('保存画布会把待连线节点写进图',
+    payload !== null && Array.isArray(payload.graph?.staged) && payload.graph.staged[0] === 's-a',
+    JSON.stringify(payload));
+  const restored = mods.layout.restore(payload, {
+    workspaces: [],
+    isValidGraphSession: () => true,
+    isValidPaneSession: () => true,
+  });
+  check('恢复画布带回待连线节点',
+    restored !== null && Array.isArray(restored.graph?.staged) && restored.graph.staged[0] === 's-a',
+    JSON.stringify(restored));
+}
 
 report();

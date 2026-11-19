@@ -96,6 +96,33 @@ check('readStates 汇总目标阶段与待审核计数（不靠会话列表猜�
     && states['s-b'].goal === 'cleared'
     && states['s-b'].reviewWaiting === 1;
 })());
+check('目标记录独立落盘：新建服务实例后仍在', (() => {
+  freshHome();
+  const first = new host.PaneDispatchService({});
+  first.addTarget({ sessionId: 's-target-1', workspaceId: 'ws-a' });
+  const second = new host.PaneDispatchService({});
+  const targets = second.listTargets({}).targets;
+  return targets.length === 1
+    && targets[0].id === 's-target-1'
+    && targets[0].workspaceId === 'ws-a'
+    && Number.isFinite(targets[0].createdAt);
+})());
+check('删除目标只删记录，不碰会话；重复删除安全', (() => {
+  freshHome();
+  const first = new host.PaneDispatchService({});
+  first.addTarget({ sessionId: 's-target-1', workspaceId: 'ws-a' });
+  const removed = first.removeTarget({ sessionId: 's-target-1' });
+  const again = first.removeTarget({ sessionId: 's-target-1' });
+  const second = new host.PaneDispatchService({});
+  return removed.removed === true
+    && again.removed === false
+    && second.listTargets({}).targets.length === 0;
+})());
+check('目标远程方法都是单形参（网关校验 args 形状）',
+  host.PaneDispatchService.prototype.listTargets.length === 1
+  && host.PaneDispatchService.prototype.addTarget.length === 1
+  && host.PaneDispatchService.prototype.removeTarget.length === 1);
+
 check('readStates 是单形参远程方法（网关校验 args 形状）',
   host.PaneDispatchService.prototype.readStates.length === 1,
   String(host.PaneDispatchService.prototype.readStates.length));

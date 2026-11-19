@@ -251,6 +251,14 @@ window.__ModuleLoader__.load({
       function PaneFrame({ pane, grow, tint, workspace, workspaceChoices = [], replaceChoices = [], workspaceSessions = new Map(), reusableBlankByWorkspace = new Map(), rows, sessionId, summary, reusableBlankId, active, dragging = false, dropTarget = false, floating = false, t, paneActions, sessions, uiWorkspace, createWorkspaceFromDirectory, describeAddError, openWorkspaceDirectory, requestSessionDelete, agentPresets, presetOptions, presetDefaultId, mcpServers = [], mcpStatus, mcpError, mcpByWorkspace, skillStatus, skills = [], skillDir, skillErrors = [], skillError, skillByWorkspace, SessionProvider, renderSlot, onPaneDragStart, onPaneDragOver, onPaneDragEnd }) {
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
+        /**
+         * 「新建」选择框：`{ workspaceId, mode }`。`mode` 是 `pane`（当前窗格普通新建）
+         * 或 `replace`（替换工作区的第二步新建）。`null` 表示没打开。
+         */
+        const [newSessionChoice, setNewSessionChoice] = useState(null);
+        /** 目标创建后的轻提示；几秒后自动消失。 */
+        const [notice, setNotice] = useState(null);
+        const noticeTimerRef = useRef(null);
         /** 「打开工作区目录」正在等 Host 回话（按钮在这期间禁用，免得连点弹出两扇窗）。 */
         const [openBusy, setOpenBusy] = useState(false);
         /**
@@ -429,6 +437,84 @@ window.__ModuleLoader__.load({
             });
         }, [replaceBusy, workspace, createSession, reusableBlankByWorkspace, uiWorkspace, applyStagedPreset, paneActions, pane.key, t]);
 
+        /** 几秒后自动消失的轻提示；连续操作时重置计时器。 */
+        const showNotice = useCallback((text) => {
+          setNotice(text);
+          if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current);
+          noticeTimerRef.current = setTimeout(() => {
+            noticeTimerRef.current = null;
+            setNotice(null);
+          }, 4200);
+        }, []);
+
+        useEffect(() => () => {
+          if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current);
+        }, []);
+
+        /**
+         * 打开「新建会话 / 新建目标」选择框。
+         *
+         * @param workspaceId - 目标工作区；为空时用当前窗格的工作区。
+         * @param mode - `pane`（当前窗格普通新建）或 `replace`（替换工作区的第二步）。
+         */
+        const chooseNewSession = useCallback((workspaceId, mode) => {
+          setError(null);
+          setNewSessionChoice({
+            workspaceId: workspaceId === undefined || workspaceId === null ? pane.workspaceId : workspaceId,
+            mode: mode === 'replace' ? 'replace' : 'pane',
+          });
+        }, [pane.workspaceId]);
+
+        /**
+         * 选择框确认。
+         *
+         *   - `session`：原来的普通新建 —— 当前窗格走覆用逻辑，替换菜单走目标工作区；
+         *   - `target`：创建一个新的派单目标。目标不占用当前窗格，也不切换模式，
+         *     只给一句提示；它由 Host 目标记录持久化，刷新后仍在。
+         */
+        const confirmNewSession = useCallback((kind) => {
+          const choice = newSessionChoice;
+          if (choice === null) return;
+          setNewSessionChoice(null);
+          if (kind === 'target') {
+            if (typeof paneActions.createTarget !== 'function') {
+              setError(t('pane.targetFailed') + ': unavailable');
+              return;
+            }
+            Promise.resolve(paneActions.createTarget(choice.workspaceId, uiWorkspace))
+              .then(async (result) => {
+                /*
+                 * 目标也要像普通新建一样进入当前窗格：用户点「新建目标」的预期是
+                 * 眼前立刻出现输入框，而不是留一个空窗格去任务分派里找。
+                 */
+                const createdId = result !== undefined && result !== null && typeof result.sessionId === 'string'
+                  ? result.sessionId
+                  : '';
+                if (createdId !== '') {
+                  await applyStagedPreset(createdId);
+                  paneActions.setSession(pane.key, createdId);
+                }
+                if (result !== undefined && result !== null && result.ok === true) {
+                  showNotice(t('pane.targetCreated'));
+                  return;
+                }
+                const reason = result !== undefined && result !== null && typeof result.reason === 'string'
+                  ? result.reason
+                  : 'unknown error';
+                setError(t('pane.targetFailed') + ': ' + reason);
+              })
+              .catch((reason) => {
+                setError(t('pane.targetFailed') + ': ' + errorText(reason));
+              });
+            return;
+          }
+          if (choice.mode === 'replace') {
+            createSessionInWorkspace(choice.workspaceId);
+            return;
+          }
+          createSession();
+        }, [newSessionChoice, paneActions, showNotice, t, createSessionInWorkspace, createSession, applyStagedPreset, pane.key]);
+
         /**
          * 删除会话列表里的某一项 —— 不必是当前显示的那一个。
          *
@@ -478,7 +564,9 @@ window.__ModuleLoader__.load({
 
         const sessionLabel = current === undefined
           ? (sessionId === undefined ? t('pane.noSession') : String(sessionId))
-          : (current.displayTitle === undefined || current.displayTitle === '' ? t('pane.untitled') : current.displayTitle);
+          : (current.blank === true && current.target === true
+              ? t('pane.untitledTarget')
+              : (current.displayTitle === undefined || current.displayTitle === '' ? t('pane.untitled') : current.displayTitle));
 
         /** 没有会话时窗格里的兜底内容：跟随不到会话就给「新建」，分屏新开就提示先选。 */
         const emptyBody = sessionId !== undefined
@@ -489,7 +577,7 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 className: cx(css.button, css.primary),
                 disabled: busy || workspace === undefined,
-                onClick: createSession,
+                onClick: () => chooseNewSession(pane.workspaceId, 'pane'),
               }, busy ? t('pane.creating') : t('pane.createSession')));
 
         /**
@@ -620,13 +708,13 @@ window.__ModuleLoader__.load({
               const workspaceId = replaceTarget;
               close();
               setReplaceTarget(null);
-              createSessionInWorkspace(workspaceId);
+              chooseNewSession(workspaceId, 'replace');
             },
           });
           const rows = sessions.map((row) => {
-            const label = row.displayTitle === undefined || row.displayTitle === ''
-              ? t('pane.untitled')
-              : row.displayTitle;
+            const label = row.blank === true && row.target === true
+              ? t('pane.untitledTarget')
+              : (row.displayTitle === undefined || row.displayTitle === '' ? t('pane.untitled') : row.displayTitle);
             return h(MenuItem, {
               key: row.id,
               label,
@@ -1095,11 +1183,13 @@ window.__ModuleLoader__.load({
               label: busy ? t('pane.creating') : t('pane.createSession'),
               onClick: () => {
                 close();
-                createSession();
+                chooseNewSession(pane.workspaceId, 'pane');
               },
             }),
             ...rows.map((row) => {
-              const label = row.displayTitle === undefined || row.displayTitle === '' ? t('pane.untitled') : row.displayTitle;
+              const label = row.blank === true && row.target === true
+                ? t('pane.untitledTarget')
+                : (row.displayTitle === undefined || row.displayTitle === '' ? t('pane.untitled') : row.displayTitle);
               /*
                * 每个会话一行，行尾一个垃圾桶按钮：左边那半还是「切到这个会话」，
                * 右边那半是「永久删掉它」。
@@ -1181,6 +1271,45 @@ window.__ModuleLoader__.load({
           onPointerCancel: floating === true ? undefined : onHeadPointerCancel,
           onLostPointerCapture: floating === true ? undefined : onHeadPointerCancel,
         }, headChildren)];
+        if (notice !== null) {
+          paneChildren.push(h('div', { key: 'notice', className: css.paneNotice, role: 'status' }, notice));
+        }
+        if (newSessionChoice !== null) {
+          paneChildren.push(h('div', {
+            key: 'new-session-choice',
+            className: css.newSessionOverlay,
+            onPointerDown: () => setNewSessionChoice(null),
+          },
+            h('div', {
+              className: css.newSessionBox,
+              role: 'dialog',
+              'aria-label': t('pane.newSessionTitle'),
+              onPointerDown: (event) => event.stopPropagation(),
+            },
+              h('div', { key: 'title', className: css.newSessionTitle }, t('pane.newSessionTitle')),
+              h('button', {
+                key: 'session',
+                type: 'button',
+                className: css.newSessionOption,
+                onClick: () => confirmNewSession('session'),
+              },
+                h('span', { key: 'label', className: css.newSessionOptionLabel }, t('pane.createSession')),
+                h('span', { key: 'hint', className: css.newSessionOptionHint }, t('pane.createSessionHint'))),
+              h('button', {
+                key: 'target',
+                type: 'button',
+                className: css.newSessionOption,
+                onClick: () => confirmNewSession('target'),
+              },
+                h('span', { key: 'label', className: css.newSessionOptionLabel }, t('pane.createTarget')),
+                h('span', { key: 'hint', className: css.newSessionOptionHint }, t('pane.createTargetHint'))),
+              h('button', {
+                key: 'cancel',
+                type: 'button',
+                className: css.newSessionCancel,
+                onClick: () => setNewSessionChoice(null),
+              }, t('pane.cancel')))));
+        }
         if (error !== null) paneChildren.push(h('div', { key: 'error', className: css.paneError }, error));
         paneChildren.push(h('div', { key: 'body', className: css.paneBody },
           h(SessionProvider, {

@@ -27,7 +27,8 @@ that currently holds focus is marked by a brand-coloured title bar.
   behaves exactly as before.
 - **Save layout / auto-restore**: the save icon in the top-right saves **only the current panel
   mode's part**: tile mode writes the board (split directions, ratios, pane order, focus) and
-  each pane's session/Agent preset; dispatch mode writes the **dispatch graph (edges + notes)**.
+  each pane's session/Agent preset; dispatch mode writes the **dispatch graph (edges + notes +
+  nodes dragged onto the canvas but not yet wired)**.
   The other part keeps its last save and is never cleared by this action. The record does not
   store the panel mode: a page reload always starts in tile mode.
   The saved record lives in the Host's `$DSH_HOME/storages/pane_layout.json`.
@@ -62,8 +63,12 @@ that currently holds focus is marked by a brand-coloured title bar.
   sessions. Choosing an existing session keeps the **place**: the layout tree, splitter ratios
   and neighbours do not move by a single byte, and the pane is switched atomically to "new
   workspace + that session" with the session pinned (the same session may be open in another
-  pane too). `New session` reuses a blank session in that workspace that no other pane has
-  pinned, or creates one; the pane's staged Agent mode is kept. Already-tiled workspaces are
+  pane too). `New session` first opens a small choice: **New session** (reuses an ordinary
+  blank session in that workspace that no other pane has pinned, or creates one) or **New
+  target** (forces a **brand-new** blank target, bypassing the platform's blank-session
+  reuse; records it in the Host target list so it survives a refresh; and enters the current
+  pane immediately, composer and all, just like a normal New session). Both keep the pane's
+  staged Agent mode. Already-tiled workspaces are
   candidates because "another session of the same workspace" is a legitimate use; to exchange
   two panes' places, drag a title bar, which does not reopen any conversation. It is one icon
   per pane rather than one button in the panel header so that "which pane?" never has to be
@@ -226,12 +231,14 @@ permission.
   from the canvas. A dragged card first waits in the canvas's left-hand "unwired" column with a
   dashed border; it joins the tree on the right only after an arrow is drawn, and drops back to
   unwired when that arrow is deleted. Sessions **with content** that belong to no registered
-  workspace go into an "unknown workspace" group at the end; blank sessions with no workspace
-  home are left out — they are just unused "New session" shells, and listing them would add a
-  phantom group of identically named "Untitled session" rows. A blank session that *does* have
-  a workspace home is listed only **while it is open in a pane**: the platform persists a blank
-  session record the moment it is created, so older unused shells would otherwise fill the
-  picker with identical names.
+  workspace go into an "unknown workspace" group at the end. **Ordinary blank sessions are
+  never listed** — not even the one open in a pane: the platform persists a blank record the
+  moment it is created, so unused shells would otherwise fill the picker with identical names.
+  Only a blank session carrying a **target record** is listed, as "Untitled target"; once it
+  has content or a real title, that title is shown instead.
+- **Collapse the left column**: click `‹` next to "Session nodes" to collapse the whole column
+  and let the canvas fill the panel; click `›` in the canvas's top-left corner to expand it.
+  The collapsed state is per page and resets on a mode switch or reload.
 - **Wire after dropping**: on the canvas, drag from a card's right-edge light dot onto another
   card to create a relation; the × at the top-right of an unwired card removes it from the canvas.
 - **Card status**: each card shows that session's own goal state (goal running / paused /
@@ -243,8 +250,10 @@ permission.
   and view tabs; the **session name is read-only** (no switching), and workspace replace, split
   and the title-bar close icon are not offered (close with the floating bar). All four edges
   and all four corners resize it (the top strip's topmost few pixels grow it upward; the rest
-  of the strip still moves it). Floating panes are never written into the saved layout and
-  close automatically when you switch back to tile mode.
+  of the strip still moves it). Floating panes may overlap; clicking anywhere — **including
+  the title bar** — raises that pane to the top, and the topmost pane gets a gold border while
+  the others stay cyan. Floating panes are never written into the saved layout and close
+  automatically when you switch back to tile mode.
 - **Trees stack as whole blocks**: when several disconnected trees exist, each tree is laid out
   on its own and the next tree starts below the previous tree's bottom edge, so arrows and
   notes from different trees never interleave.
@@ -516,23 +525,27 @@ visual only — delivery, waiting and reviews are unchanged.
   - **A freshly split** pane starts empty and prompts "Pick an existing session for this
     pane, or start a new one" — so two panes will not inexplicably show the same
     conversation. Which workspace it shows is what the split menu's second step selected.
-- **Blank sessions never enter the list**: a session that exists but has never been sent a
-  message (`blank: true` on the Host) does not appear in the `Switch session` menu and is not
-  followed as a workspace's "latest session" — otherwise a few stray clicks on `New session`
-  would pile up a row of identically named "New session" entries. This follows the same idea
-  as the native DSH sidebar ("only the currently selected blank session is visible"), just
-  taken further: the menu's first item already is `New session`, so a placeholder row adds
-  nothing. **The one exception is Design mode's left-hand session picker**: blank sessions are
-  listed there (and can be wired into the graph) because "create the target first, wire it,
-  then dispatch work into it" is a real workflow; a blank node is also kept when the graph is
-  saved and restored. Only a blank session that belongs to a workspace and is **currently open
-  in a pane** is listed this way; an orphaned or unopened blank shell is not.
-- **`New session` reuses a blank session first**: when this workspace already has a blank
-  session that no other pane is pinned to, the pane switches to it right away (still applying
-  the pane's staged mode) instead of asking the Host to create another empty record; only when
-  there is nothing to reuse does it really create one. So repeated clicks on `New session`
-  return to the same empty session instead of leaving a trail of unused shells in the Host's
-  session table and on disk.
+- **Ordinary blank sessions never enter the list**: a session that exists but has never been
+  sent a message (`blank: true` on the Host) does not appear in the `Switch session` menu or
+  Design mode's picker, and is not followed as a workspace's "latest session" — otherwise a
+  few stray clicks on `New session` would pile up identically named shells. This follows the
+  native DSH sidebar ("only the currently selected blank session is visible"), just further.
+- **Targets are the exception**: a blank session with a target record is listed in Design
+  mode's picker, the pane's `Switch session` menu and the replace menu as "Untitled target",
+  because "create the target first, wire it, then dispatch work into it" is a real workflow.
+  Once it has content or a title, the real title is shown; there is no extra badge. The target
+  record lives in its own Host file (`storages/pane_dispatch_targets.json`) and exists the
+  moment it is created — it does not depend on "Save canvas". Saving the canvas only stores
+  the graph's nodes, edges and positions. A blank target does **not** appear in the platform's
+  native session list (that list only shows the currently selected blank session), so the
+  delete entry lives on the target card's top-right trash button in Design mode (both the
+  left-hand card and the canvas card; it opens the platform's delete confirmation and also
+  clears the target record and its edges).
+- **`New session` reuses an ordinary blank session first**: when this workspace already has a
+  blank session that no other pane is pinned to, the pane switches to it right away (still
+  applying the pane's staged mode) instead of asking the Host to create another empty record.
+  Targets are excluded from reuse: switching one away would silently change a Design-mode
+  node's session.
 - **The candidates in the split menu's second step**: it lists **all** workspaces, but those
   not yet tiled come first (the primary intent of splitting is to spread another workspace
   out), while those already tiled in other panes come later with the hint on the right
@@ -833,6 +846,9 @@ the whole implementation.
   lives in sibling `host.*.js` modules:
   - `host.constants.js` — service key, remote method list, timeouts and size limits;
   - `host.store.js` — binding-table persistence (the only constructor of the target shape);
+  - `host.targets.js` — dispatch-target records in their own file
+    (`pane_dispatch_targets.json`): a target exists the moment it is created and is not
+    saved with the canvas layout;
   - `host.layout.js` — layout persistence at `$DSH_HOME/storages/pane_layout.json`, with
     atomic temp-file + rename and a 1 MB guard; independent of the browser origin so a
     desktop restart on a new port still finds the saved layout;
@@ -886,6 +902,9 @@ the whole implementation.
 - `test/harness.mjs` — the offline test harness: simulates the browser module loader
   (including the `require.async` code-block rules), a React stand-in, and Context stand-ins
   (including records of `ctx.inject` and `registerFixed`).
+- `client.targets.js` — the dispatch-target store: loads records from the Host and adds/removes
+  them optimistically. Blank targets therefore show up as "Untitled target" in Design mode,
+  the pane session menu and the replace menu, while ordinary blank sessions stay hidden.
 - `client.dispatch.js` — turns the arrows drawn in design mode into bindings and pushes only
   the **changed** owners to the Host (a hand-written remote descriptor, same pattern as
   `dsh-mcp-workspace-policy`).

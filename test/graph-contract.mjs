@@ -249,8 +249,8 @@ await settle();
 const mounted = stubForRemote.mounted ?? [];
 check('插件把 paneDispatch 命名空间挂到了远端网关上', mounted.length === 1 && mounted[0].package === '@local/dsh-split-workspaces', JSON.stringify(mounted.map((item) => item.package)));
 const descriptors = mounted.length === 0 ? [] : mounted[0].descriptors;
-check('命名空间暴露绑定 list/set、派单视觉 pullVisual、卡片状态 readStates 与布局 read/write 六个方法',
-  descriptors.map((item) => item.method).sort().join(',') === 'list,pullVisual,readLayout,readStates,set,writeLayout',
+check('命名空间暴露绑定、视觉、卡片状态、目标记录与布局九个方法',
+  descriptors.map((item) => item.method).sort().join(',') === 'addTarget,list,listTargets,pullVisual,readLayout,readStates,removeTarget,set,writeLayout',
   descriptors.map((item) => item.method).join(','));
 check('每个输入 codec 都是 strict（网关的硬要求）', descriptors.every((item) => item.parameters.every((param) => param.codec.mode === 'strict')));
 check('每个 strict codec 都带 create() schema 工厂（注册表的硬要求）',
@@ -430,6 +430,24 @@ check('空画布提示从左侧拖入会话', (() => {
 })());
 
 /*
+ * 左侧栏可以收起/展开：收起后画布占满，左上角留一个展开按钮。
+ */
+{
+  const pickerNode = findAll(graphDom.tree, byName('GraphPicker'))[0];
+  const pickerDom = mount(pickerNode.type, pickerNode.props);
+  const collapse = findAll(pickerDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerCollapse'))[0];
+  check('左侧会话节点栏有收起按钮', collapse !== undefined);
+  collapse.props.onClick();
+  graphDom.flush();
+  const expanded = findAll(graphDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerExpand'))[0];
+  check('收起后左侧栏消失，出现展开按钮',
+    findAll(graphDom.tree, byName('GraphPicker')).length === 0 && expanded !== undefined);
+  expanded.props.onClick();
+  graphDom.flush();
+  check('展开后左侧栏回来', findAll(graphDom.tree, byName('GraphPicker')).length === 1);
+}
+
+/*
  * 左侧二级选择器：第一级是工作区，默认全部折叠；点开后才列出该工作区的会话。
  * GraphPicker 是独立组件，需要单独挂载才能触发它自己的展开状态。
  */
@@ -605,59 +623,70 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
     !keysBeforeOpen.includes('s-blank'), JSON.stringify(keysBeforeOpen));
   blankInjected.paneStore.setSession('pane-1', 's-blank');
   const blankPanel = blankBoard.render();
-  const blankGraphDom = graphBoardOf(blankPanel.tree);
-  const blankPickerNode = findAll(blankGraphDom.tree, byName('GraphPicker'))[0];
+  const blankDom = graphBoardOf(blankPanel.tree);
+  const blankPickerNode = findAll(blankDom.tree, byName('GraphPicker'))[0];
   const blankPicker = mount(blankPickerNode.type, blankPickerNode.props);
   const blankGroups = findAll(blankPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerGroupHead'));
   check('空白会话所在的工作区在左侧仍然是一组', blankGroups.length === 3, String(blankGroups.length));
-  /*
-   * 不属于任何工作区的空白会话（s-orphan-blank）只是空壳：不能列进左侧，
-   * 更不能因此多出一个“未知工作区”分组。
-   */
   const blankPickerKeys = blankPickerNode.props.groups.flatMap((group) => group.items).map((item) => item.key);
   check('不属于任何工作区的空白会话不进入任务分派左侧',
     !blankPickerKeys.includes('s-orphan-blank'), JSON.stringify(blankPickerKeys));
   check('没有归属的空白会话不会造出「未知工作区」分组',
     blankPickerNode.props.groups.every((group) => group.key !== ''),
     JSON.stringify(blankPickerNode.props.groups.map((group) => group.key)));
-  blankGroups[0].props.onClick();
-  blankPicker.flush();
-  const blankPickerItems = findAll(blankPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerItem'));
-  check('空白会话出现在左侧列表，可以做拖拽起点',
-    blankPickerItems.some((item) => item.props['data-session'] === 's-blank' && item.props.draggable === true),
-    JSON.stringify(blankPickerItems.map((item) => item.props['data-session'])));
   /*
-   * 平台的 displayTitle 对无标题会话会回退成项目目录名（测试台里是 `alpha`）。
-   * 任务分派必须按 blank 标志显示「未命名会话」，不能把目录名当成标题。
+   * 新规则：普通空白会话即使开在窗格里也不列；带目标记录的才显示。
+   * 把 s-blank 登记成目标后，验证「未命名目标」卡片、拖入与连线。
    */
-  const blankPickerItem = blankPickerItems.find((item) => item.props['data-session'] === 's-blank');
-  check('左侧列表把空白会话显示为「未命名会话」，不拿目录名当标题',
-    JSON.stringify(blankPickerItem).includes('未命名会话'),
-    JSON.stringify(blankPickerItem?.children ?? null));
-  // 走真实链路：画布的 onDrop 读取私有 MIME，交给 stageSession。
-  const blankScroll = findAll(blankGraphDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphScroll'))[0];
-  blankScroll.props.onDrop({ preventDefault: () => {}, dataTransfer: transferFor('s-blank') });
-  blankPanel.flush();
-  const blankStagedBoard = graphBoardOf(blankPanel.tree);
-  const blankStagedCards = findCards(blankStagedBoard);
-  check('空白会话可以被拖进画布成为待连线卡片',
-    blankStagedCards.length === 1
-    && blankStagedCards[0].props['data-session'] === 's-blank'
-    && blankStagedCards[0].props['data-staged'] === 'true',
-    JSON.stringify(blankStagedCards.map((card) => card.props['data-session'])));
-  const blankCardTitle = findAll(blankStagedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCardTitle'))[0];
-  check('画布卡片把空白会话显示为「未命名会话」',
-    blankCardTitle !== undefined && blankCardTitle.children[0] === '未命名会话',
-    blankCardTitle === undefined ? 'no title node' : JSON.stringify(blankCardTitle.children));
-  // 再拖入一个目标并连一条边：空白会话既能当派出方，也能当接收方。
-  blankStagedBoard.props.actions.stageSession('s-a');
-  blankPanel.flush();
+  const keysAfterOpen = pickerKeysNow();
+  check('普通空白会话即使开在窗格里也不列',
+    !keysAfterOpen.includes('s-blank'), JSON.stringify(keysAfterOpen));
+  await blankInjected.targetStore.addTarget('s-blank', 'ws-a');
+  await settle();
+  const targetPanel = blankBoard.render();
+  const targetKeys = pickerKeysNow();
+  check('目标空白会话出现在左侧列表',
+    targetKeys.includes('s-blank'), JSON.stringify(targetKeys));
+  const targetDom = graphBoardOf(targetPanel.tree);
+  const targetPickerNode = findAll(targetDom.tree, byName('GraphPicker'))[0];
+  let deletedTarget = null;
+  const targetPicker = mount(targetPickerNode.type, {
+    ...targetPickerNode.props,
+    onDeleteTarget: (sessionId) => { deletedTarget = sessionId; },
+  });
+  const targetGroups = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerGroupHead'));
+  targetGroups[0].props.onClick();
+  targetPicker.flush();
+  const targetItems = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerItem'));
+  const targetItem = targetItems.find((item) => item.props['data-session'] === 's-blank');
+  check('目标空会话显示为「未命名目标」',
+    targetItem !== undefined && JSON.stringify(targetItem).includes('未命名目标'),
+    targetItem === undefined ? 'no item' : JSON.stringify(targetItem.children));
+  const deleteTargetButton = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerDelete'))[0];
+  check('目标卡片带删除按钮', deleteTargetButton !== undefined);
+  deleteTargetButton.props.onClick({ stopPropagation: () => {} });
+  check('删除按钮把目标会话 id 交给删除服务', deletedTarget === 's-blank', String(deletedTarget));
+  const targetScroll = findAll(targetDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphScroll'))[0];
+  targetScroll.props.onDrop({ preventDefault: () => {}, dataTransfer: transferFor('s-blank') });
+  const targetStagedBoard = graphBoardOf(targetPanel.flush());
+  const targetCards = findCards(targetStagedBoard);
+  check('目标可以被拖进画布成为待连线卡片',
+    targetCards.length === 1
+    && targetCards[0].props['data-session'] === 's-blank'
+    && targetCards[0].props['data-staged'] === 'true',
+    JSON.stringify(targetCards.map((card) => card.props['data-session'])));
+  const targetCardTitle = findAll(targetStagedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCardTitle'))[0];
+  check('画布卡片把空目标显示为「未命名目标」',
+    targetCardTitle !== undefined && targetCardTitle.children[0] === '未命名目标',
+    targetCardTitle === undefined ? 'no title node' : JSON.stringify(targetCardTitle.children));
+  // 再拖入一个普通会话并连一条边：目标既能当接收方，也能当派出方。
+  targetStagedBoard.props.actions.stageSession('s-a');
+  targetPanel.flush();
   blankInjected.graphActions.addEdge('s-blank', 's-a');
-  blankPanel.render();
-  const blankWired = graphBoardOf(blankPanel.tree);
-  check('空白会话能连出委派箭头',
+  const targetWired = graphBoardOf(blankBoard.render().tree);
+  check('目标会话能连出委派箭头',
     blankInjected.graphStore.getSnapshot().edges.some((edge) => edge.from === 's-blank' && edge.to === 's-a')
-    && findAll(blankWired.tree, (node) => node.type === 'polygon').length === 1,
+    && findAll(targetWired.tree, (node) => node.type === 'polygon').length === 1,
     JSON.stringify(blankInjected.graphStore.getSnapshot().edges));
 }
 
@@ -711,6 +740,11 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
   floatPanel.render();
   const floatNodes = findAll(floatPanel.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_floatingPane'));
   check('点击卡片后渲染出浮动窗格', floatNodes.length === 1, String(floatNodes.length));
+  check('最上层的浮窗带金色焦点边框',
+    typeof floatNodes[0].props.className === 'string'
+    && floatNodes[0].props.className.split(' ').includes('dshSplitWs_floatingPaneActive'));
+  check('浮窗在捕获阶段置顶，标题栏 stopPropagation 也拦不住',
+    typeof floatNodes[0].props.onPointerDownCapture === 'function');
   const floatPaneFrame = findAll(floatNodes[0], byName('PaneFrame'))[0];
   check('浮窗内部是完整的 PaneFrame，且标记为 floating',
     floatPaneFrame !== undefined && floatPaneFrame.props.floating === true);

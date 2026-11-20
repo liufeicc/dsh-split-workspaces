@@ -636,7 +636,7 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
     JSON.stringify(blankPickerNode.props.groups.map((group) => group.key)));
   /*
    * 新规则：普通空白会话即使开在窗格里也不列；带目标记录的才显示。
-   * 把 s-blank 登记成目标后，验证「未命名目标」卡片、拖入与连线。
+   * 把 s-blank 登记成目标后，验证「未命名员工」卡片、拖入与连线。
    */
   const keysAfterOpen = pickerKeysNow();
   check('普通空白会话即使开在窗格里也不列',
@@ -659,8 +659,8 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
   targetPicker.flush();
   const targetItems = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerItem'));
   const targetItem = targetItems.find((item) => item.props['data-session'] === 's-blank');
-  check('目标空会话显示为「未命名目标」',
-    targetItem !== undefined && JSON.stringify(targetItem).includes('未命名目标'),
+  check('目标空会话显示为「未命名员工」',
+    targetItem !== undefined && JSON.stringify(targetItem).includes('未命名员工'),
     targetItem === undefined ? 'no item' : JSON.stringify(targetItem.children));
   const deleteTargetButton = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerDelete'))[0];
   check('目标卡片带删除按钮', deleteTargetButton !== undefined);
@@ -676,8 +676,8 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
     && targetCards[0].props['data-staged'] === 'true',
     JSON.stringify(targetCards.map((card) => card.props['data-session'])));
   const targetCardTitle = findAll(targetStagedBoard.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphCardTitle'))[0];
-  check('画布卡片把空目标显示为「未命名目标」',
-    targetCardTitle !== undefined && targetCardTitle.children[0] === '未命名目标',
+  check('画布卡片把空目标显示为「未命名员工」',
+    targetCardTitle !== undefined && targetCardTitle.children[0] === '未命名员工',
     targetCardTitle === undefined ? 'no title node' : JSON.stringify(targetCardTitle.children));
   // 再拖入一个普通会话并连一条边：目标既能当接收方，也能当派出方。
   targetStagedBoard.props.actions.stageSession('s-a');

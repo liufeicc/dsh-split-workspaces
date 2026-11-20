@@ -306,7 +306,47 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphEdgeDelete path{stroke:var(--dsw-alias-label-secondary);stroke-width:1.4;stroke-linecap:round}',
       '.dshSplitWs_graphEdgeDelete:hover circle{fill:var(--dsw-alias-state-error-primary);stroke:var(--dsw-alias-state-error-primary)}',
       '.dshSplitWs_graphEdgeDelete:hover path{stroke:var(--dsw-static-neutral-00)}',
-      '.dshSplitWs_graphCard{position:absolute;display:flex;flex-direction:column;gap:4px;box-sizing:border-box;padding:10px 12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;overflow:hidden}',
+      '.dshSplitWs_graphCard{position:absolute;display:flex;flex-direction:row;gap:0;box-sizing:border-box;padding:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;overflow:hidden}',
+      '.dshSplitWs_graphCardBody{display:flex;flex:1 1 auto;flex-direction:column;gap:4px;min-width:0;padding:10px 12px}',
+      // 左侧小人：固定宽度，竖线只占视觉宽度；整块不接收指针，点击仍落在卡片上。
+      '.dshSplitWs_graphCardAgent{position:relative;flex:none;display:flex;align-items:center;justify-content:center;width:46px;color:var(--card-accent,var(--dshSplitWs-accent));opacity:.42;pointer-events:none}',
+      '.dshSplitWs_graphCardAgent::before{content:"";position:absolute;right:0;top:10px;bottom:10px;width:1px;background:var(--dsw-alias-border-l1)}',
+      '.dshSplitWs_graphCardAgent svg{width:40px;height:45px;overflow:visible;shape-rendering:crispEdges}',
+      /*
+       * 小人：静止时就是原来的 12×16 剪影；运行中才播放「砌墙」动画。
+       *
+       * 砖块和人物同色系：人物实心 currentColor，砖用同一颜色的两档透明度，
+       * 所以在青色/紫色等任意强调色下都成立。墙底用固定深色挡住后面的腿。
+       */
+      '.dshSplitWs_masonBody{fill:currentColor}',
+      '.dshSplitWs_masonEye{fill:var(--dshSplitWs-mason-base,#0a1220)}',
+      '.dshSplitWs_masonWall{opacity:0}',
+      '.dshSplitWs_masonBrickBase{fill:var(--dshSplitWs-mason-base,#0a1220)}',
+      '.dshSplitWs_masonBrickShadow{fill:var(--dshSplitWs-mason-base,#0a1220)}',
+      '.dshSplitWs_masonBrick{opacity:0}',
+      '.dshSplitWs_masonBrickTop{fill:currentColor;opacity:.55}',
+      '.dshSplitWs_masonBrickFace{fill:currentColor;opacity:.38}',
+      '.dshSplitWs_masonSweatLayer{opacity:0}',
+      '.dshSplitWs_masonZzz{display:none}',
+      '.dshSplitWs_graphCard[data-running="false"] .dshSplitWs_masonZzz{display:block;fill:#ffffff;transform-box:fill-box;transform-origin:50% 50%;animation:dshSplitWsMasonZzz 2.4s ease-out infinite;animation-delay:var(--zzz-delay,0s)}',
+      '.dshSplitWs_masonSweat{fill:#e9feff;opacity:0}',
+      /*
+       * 运行中才挂动画。动画时间轴固定 5.6 秒：
+       *   - 0.35s 起每 0.45s 落一块砖，共七块（最后一块 3.05s）；
+       *   - 4.15–4.55s 整面墙淡出；
+       *   - 4.55s 之后空墙等下一轮。
+       * 每块砖的出现时刻由内联的 --brick-delay 错开，共用同一条 keyframes。
+       */
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_masonBack{animation:dshSplitWsMasonPress 5.3s linear infinite}',
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_masonWall{animation:dshSplitWsMasonWallCycle 5.3s linear infinite}',
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_masonBrick{animation-name:var(--brick-anim,dshSplitWsMasonBrick0);animation-duration:5.3s;animation-timing-function:linear;animation-iteration-count:infinite;animation-fill-mode:both}',
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_masonSweatLayer{animation:dshSplitWsMasonSweatWindow 5.3s linear infinite}',
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_masonSweat{animation:dshSplitWsMasonSweat 1.5s linear infinite;animation-delay:var(--sweat-delay,0s)}',
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_masonEye{animation:dshSplitWsMasonBlink 2.9s steps(1,end) infinite}',
+      // 运行中的小人亮起，和原来的静态点亮规则一致。
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_graphCardAgent{opacity:1}',
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_graphCardAgent::before{background:var(--dshSplitWs-accent);opacity:.55}',
+      '.dshSplitWs_graphCard[data-running=true] .dshSplitWs_graphCardAgent svg{filter:drop-shadow(0 0 5px currentColor)}',
       '.dshSplitWs_graphCard:hover{border-color:var(--dshSplitWs-accent)}',
       '.dshSplitWs_graphCard[data-running=true]{border-color:var(--dshSplitWs-accent)}',
       // 从左侧拖进来、还没连线的卡片：虚线边框，和已经进入树的实线卡片区分开。
@@ -403,6 +443,12 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphCardMeta{color:var(--sw-muted)}',
       '.dshSplitWs_graphCardRunning{color:var(--sw-neon)}',
       '.dshSplitWs_graphCardStaged{color:var(--sw-neon-2);text-shadow:0 0 8px rgba(167,139,250,.5)}',
+      // 左侧像素小人：用赛博主题的青色；运行中沿竖线加一段渐隐光，和运行边框同色。
+      '.dshSplitWs_graphWrap .dshSplitWs_graphCardAgent{color:var(--card-accent,var(--sw-neon));opacity:.4}',
+      '.dshSplitWs_graphWrap .dshSplitWs_graphCardAgent::before{background:var(--sw-line)}',
+      '.dshSplitWs_graphWrap .dshSplitWs_graphCard[data-running=true] .dshSplitWs_graphCardAgent{opacity:1}',
+      '.dshSplitWs_graphWrap .dshSplitWs_graphCard[data-running=true] .dshSplitWs_graphCardAgent::before{background:linear-gradient(180deg,transparent,rgba(94,231,255,.6),transparent);opacity:1}',
+      '.dshSplitWs_graphWrap .dshSplitWs_graphCard[data-running=true] .dshSplitWs_graphCardAgent svg{filter:drop-shadow(0 0 7px rgba(94,231,255,.65))}',
       '.dshSplitWs_graphCardRemove{background:rgba(94,231,255,.08);color:var(--sw-muted);border:1px solid rgba(94,231,255,.18)}',
       '.dshSplitWs_graphCardRemove:hover{background:rgba(255,107,138,.16);color:#ff8aa0;border-color:rgba(255,107,138,.5)}',
       '.dshSplitWs_graphPort{border:1px solid rgba(94,231,255,.65);background:#0b1422;box-shadow:0 0 8px rgba(94,231,255,.5);transition:transform .16s ease,box-shadow .16s ease,background .16s ease}',
@@ -435,6 +481,28 @@ window.__ModuleLoader__.load({
       '@keyframes dshSplitWsDropPulse{0%,100%{box-shadow:inset 0 0 30px rgba(94,231,255,.07)}50%{box-shadow:inset 0 0 48px rgba(94,231,255,.16)}}',
       '@keyframes dshSplitWsStaged{0%,100%{box-shadow:0 10px 28px rgba(0,0,0,.38),0 0 18px rgba(167,139,250,.10)}50%{box-shadow:0 10px 28px rgba(0,0,0,.38),0 0 28px rgba(167,139,250,.22)}}',
       '@keyframes dshSplitWsFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}',
+      // ── 小人砌墙动画（详见 client.graph.view.js 的 agentGlyph） ──
+      // 砖：落下 2px 并淡入；之后一直可见，由上层 wall 的淡出统一收尾。
+      // 砖：出现之前一直透明，出现后保持到墙淡出。每条 keyframes 对应一块砖，
+      // 百分比就是它的落定时刻（1.5s / 1.95s / … / 4.2s，周期 6.5s）。
+      '@keyframes dshSplitWsMasonBrick0{0%,17.7%{opacity:0;transform:translateY(-2px)}18.9%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}',
+      '@keyframes dshSplitWsMasonBrick1{0%,26.2%{opacity:0;transform:translateY(-2px)}27.4%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}',
+      '@keyframes dshSplitWsMasonBrick2{0%,34.7%{opacity:0;transform:translateY(-2px)}35.9%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}',
+      '@keyframes dshSplitWsMasonBrick3{0%,43.1%{opacity:0;transform:translateY(-2px)}44.3%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}',
+      '@keyframes dshSplitWsMasonBrick4{0%,51.6%{opacity:0;transform:translateY(-2px)}52.8%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}',
+      '@keyframes dshSplitWsMasonBrick5{0%,60.1%{opacity:0;transform:translateY(-2px)}61.3%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}',
+      '@keyframes dshSplitWsMasonBrick6{0%,68.6%{opacity:0;transform:translateY(-2px)}69.8%{opacity:1;transform:translateY(0)}100%{opacity:1;transform:translateY(0)}}',
+      // 墙：砌满后整面墙往下沉 3px 并淡出。
+      '@keyframes dshSplitWsMasonWallCycle{0%,90.6%{opacity:1;transform:translateY(0)}96.3%,100%{opacity:0;transform:translateY(3px)}}',
+      // 汗滴：向下淌 4px 并淡出；横向摆动靠 --sweat-sway。
+      '@keyframes dshSplitWsMasonZzz{0%{opacity:0;transform:translate(0,2px) scale(var(--zzz-scale,1))}10%{opacity:.9}80%{opacity:.5}100%{opacity:0;transform:translate(4px,-6px) scale(var(--zzz-scale,1))}}',
+      '@keyframes dshSplitWsMasonSweat{0%{opacity:0;transform:translate(0,0)}10%{opacity:1}70%{opacity:1}100%{opacity:0;transform:translate(var(--sweat-sway,0),4px)}}',
+      // 汗滴只在砌墙那一段露出来：1.0s 开始淡入、3.7s 淡出，其余时间整组隐藏。
+      '@keyframes dshSplitWsMasonSweatWindow{0%,18.9%{opacity:0}20.5%{opacity:1}68.2%{opacity:1}70%,100%{opacity:0}}',
+      // 眨眼：每 2.9 秒闭一次，用 steps 让它保持像素感。
+      '@keyframes dshSplitWsMasonBlink{0%,96%{fill:var(--dshSplitWs-mason-base,#0a1220)}97%,99%{fill:currentColor}100%{fill:var(--dshSplitWs-mason-base,#0a1220)}}',
+      // 用力：每块砖落定时整个人物往下压 1px（七次脉冲，对齐砖的出现节拍）。
+      '@keyframes dshSplitWsMasonPress{0%,17.9%{transform:translateY(0)}18.9%{transform:translateY(1px)}20.9%{transform:translateY(0)}26.4%{transform:translateY(0)}27.4%{transform:translateY(1px)}29.4%{transform:translateY(0)}34.9%{transform:translateY(0)}35.9%{transform:translateY(1px)}37.9%{transform:translateY(0)}43.3%{transform:translateY(0)}44.3%{transform:translateY(1px)}46.3%{transform:translateY(0)}51.8%{transform:translateY(0)}52.8%{transform:translateY(1px)}54.8%{transform:translateY(0)}60.3%{transform:translateY(0)}61.3%{transform:translateY(1px)}63.3%{transform:translateY(0)}68.8%{transform:translateY(0)}69.8%{transform:translateY(1px)}71.8%{transform:translateY(0)}100%{transform:translateY(0)}}',
       // 说明徽标：只占一个小胶囊，不再铺开正文压住卡片；悬停看全文，点击打开编辑面板。
       '.dshSplitWs_graphEdgeNote{display:flex;align-items:center;gap:5px;max-width:none;overflow:visible;padding:2px 8px;border-radius:999px;background:rgba(9,16,28,.92);border:1px solid rgba(94,231,255,.22);color:var(--sw-muted);font-size:10px;line-height:14px;white-space:nowrap;cursor:pointer;pointer-events:auto;box-shadow:0 0 12px rgba(94,231,255,.08);transition:color .15s ease,border-color .15s ease,box-shadow .15s ease,transform .15s ease}',
       '.dshSplitWs_graphEdgeNote:hover{color:var(--sw-text);border-color:var(--sw-neon);box-shadow:0 0 16px rgba(94,231,255,.22);transform:translate(-50%,-50%) scale(1.04)}',
@@ -987,6 +1055,21 @@ window.__ModuleLoader__.load({
       graphPickerCardArrow: 'dshSplitWs_graphPickerCardArrow',
       graphCard: 'dshSplitWs_graphCard',
       graphCardEmpty: 'dshSplitWs_graphCardEmpty',
+      graphCardBody: 'dshSplitWs_graphCardBody',
+      graphCardAgent: 'dshSplitWs_graphCardAgent',
+      mason: 'dshSplitWs_mason',
+      masonBack: 'dshSplitWs_masonBack',
+      masonBody: 'dshSplitWs_masonBody',
+      masonEye: 'dshSplitWs_masonEye',
+      masonWall: 'dshSplitWs_masonWall',
+      masonBrickBase: 'dshSplitWs_masonBrickBase',
+      masonBrickShadow: 'dshSplitWs_masonBrickShadow',
+      masonBrick: 'dshSplitWs_masonBrick',
+      masonBrickTop: 'dshSplitWs_masonBrickTop',
+      masonBrickFace: 'dshSplitWs_masonBrickFace',
+      masonSweatLayer: 'dshSplitWs_masonSweatLayer',
+      masonZzz: 'dshSplitWs_masonZzz',
+      masonSweat: 'dshSplitWs_masonSweat',
       graphCardWorkspace: 'dshSplitWs_graphCardWorkspace',
       graphCardTitle: 'dshSplitWs_graphCardTitle',
       graphCardMeta: 'dshSplitWs_graphCardMeta',

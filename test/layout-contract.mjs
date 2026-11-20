@@ -1080,15 +1080,15 @@ check('空白会话正被别的窗格占用时，才真正调用 Host 新建',
   sessionMenuOf(choicePane.tree).items.find((item) => item.props.label === '新建会话').props.onClick();
   choicePane.flush();
   const choices = findAll(choicePane.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_newSessionOption'));
-  check('点新建会话先弹出「会话 / 目标」选择框',
+  check('点新建会话先弹出「会话 / 员工」选择框',
     choices.length === 2
     && JSON.stringify(choices[0]).includes('新建会话')
-    && JSON.stringify(choices[1]).includes('新建目标'),
+    && JSON.stringify(choices[1]).includes('新建员工'),
     JSON.stringify(choices.map((node) => node.children)));
   choices[1].props.onClick();
   await settle();
   choicePane.flush();
-  check('选「新建目标」会创建会话、登记目标，并像新建会话一样进入当前窗格',
+  check('选「新建员工」会创建会话、登记目标，并像新建会话一样进入当前窗格',
     choiceBoard.connectCount() === 1
     && choiceBoard.injected.targetStore.isTarget('s-new')
     && choiceBoard.paneStore.getSnapshot().panes.find((pane) => pane.key === 'pane-1').sessionId === 's-new',
@@ -1107,8 +1107,8 @@ check('空白会话正被别的窗格占用时，才真正调用 Host 新建',
   await settle();
   const targetMenuPane = paneDom(targetMenuBoard.render().tree, 'pane-1');
   const labels = sessionMenuOf(targetMenuPane.tree).items.map((item) => item.props.label);
-  check('平铺会话菜单显示目标空会话，并叫「未命名目标」',
-    labels.includes('未命名目标'), JSON.stringify(labels));
+  check('平铺会话菜单显示目标空会话，并叫「未命名员工」',
+    labels.includes('未命名员工'), JSON.stringify(labels));
 }
 
 {

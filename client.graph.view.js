@@ -70,6 +70,133 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 卡片左侧的像素小人：静止时是原来的 12×16 剪影，会话运行中时播放「砌墙」动画。
+     *
+     * ## 为什么动画全在 CSS 里，这里只摆结构
+     *
+     * 卡片可能有十几张，如果每张都在 React 里跑 rAF 更新时间轴，既费电又容易和
+     * 面板的其它重绘打架。这个动画拆成了几段互相独立的 CSS animation（见
+     * `client.styles.js` 的 `dshSplitWsMason*`）：
+     *
+     *   - 人物（back）固定不动，只在每块砖落下时往下压 1px；
+     *   - 墙（wall）负责「砌满后整面淡出」，一个 5.6s 的循环；
+     *   - 每块砖（brick）用同一条 keyframes，靠内联的 `--brick-delay` 错开出现时刻；
+     *   - 墙底（base）用 scaleY 跟着砌到的层数往上长；
+     *   - 汗滴（sweat）各自错开相位，向下淌。
+     *
+     * 只有 `[data-running=true]` 的卡片会挂上这些 animation，其它状态只剩静态剪影。
+     *
+     * ## 坐标
+     *
+     * 网格 16×18（viewBox 从 y=6 裁到 y=24）。人物脚 y=23 与墙底 y=23 对齐，
+     * 七块砖分三层砌到 y=15（肩膀）。眼睛用卡片底色挖空，所以整块剪影是连续的。
+     */
+    const MASON_BRICKS = [
+      { x: 2,  y: 21, w: 5 },
+      { x: 8,  y: 21, w: 5 },
+      { x: 2,  y: 18, w: 2 },
+      { x: 5,  y: 18, w: 5 },
+      { x: 11, y: 18, w: 2 },
+      { x: 2,  y: 15, w: 5 },
+      { x: 8,  y: 15, w: 5 },
+    ];
+
+    /**
+     * 八滴汗的起点与相位。
+     *
+     * 位置都在头部两侧（头是 x=5..11、y=7..13），display 时长 1.5s，八滴错开
+     * 约 0.15s，所以任意时刻画面里都有三四滴在往下淌。
+     */
+    const MASON_SWEATS = [
+      { x: 4,  y: 8,  sway: -1, delay: 0 },
+      { x: 11, y: 8,  sway: 1,  delay: 0.165 },
+      { x: 3,  y: 9,  sway: -1, delay: 0.375 },
+      { x: 12, y: 9,  sway: 1,  delay: 0.54 },
+      { x: 4,  y: 11, sway: -1, delay: 0.75 },
+      { x: 11, y: 11, sway: 1,  delay: 0.915 },
+      { x: 4,  y: 12, sway: -1, delay: 1.125 },
+      { x: 11, y: 12, sway: 1,  delay: 1.29 },
+    ];
+
+    /** 一个像素 Z：三横一斜，3×3 网格；外层定位，内层挂 CSS 动画。 */
+    function zzzGlyph(css, x, y, scale, delay) {
+      return h('g', { key: 'zzz-' + delay, transform: `translate(${x} ${y})` },
+        h('g', {
+          className: css.masonZzz,
+          style: { '--zzz-delay': delay + 's', '--zzz-scale': String(scale) },
+        },
+          /* 3×5 的细长 Z：顶横、右竖、斜点、左竖、底横，笔画只有 1px */
+          h('rect', { x: 0, y: 0, width: 3, height: 1 }),
+          h('rect', { x: 2, y: 1, width: 1, height: 1 }),
+          h('rect', { x: 1, y: 2, width: 1, height: 1 }),
+          h('rect', { x: 0, y: 3, width: 1, height: 1 }),
+          h('rect', { x: 0, y: 4, width: 3, height: 1 })));
+    }
+
+    /** 渲染左侧的状态小人；`aria-hidden` 是因为它就是装饰，状态本身另有文字徽标。 */
+    function agentGlyph(css) {
+      const bricks = MASON_BRICKS.map((brick, index) => h('g', {
+        key: 'brick-' + index,
+        className: css.masonBrick,
+        style: {
+          // 每块砖用自己的 keyframes（0..6 号），出现时间直接写死在百分比里。
+          // 不能用 animation-delay：正延迟只在第一轮生效，后面每轮砖的周期
+          // 会和墙错开，导致第二轮「先挂着上一轮的墙，再开始砌」。
+          '--brick-anim': 'dshSplitWsMasonBrick' + index,
+        },
+      },
+        /* 先铺一层不透明底色：上面的砖色是半透明的，没有这层会把人物透出来 */
+        h('rect', { className: css.masonBrickBase, x: brick.x, y: brick.y, width: brick.w, height: 2 }),
+        h('rect', { className: css.masonBrickTop, x: brick.x, y: brick.y, width: brick.w, height: 1 }),
+        h('rect', { className: css.masonBrickFace, x: brick.x, y: brick.y + 1, width: brick.w, height: 1 }),
+        h('rect', { className: css.masonBrickShadow, x: brick.x, y: brick.y + 2, width: brick.w, height: 1 })));
+
+      const sweats = MASON_SWEATS.map((drop, index) => h('rect', {
+        key: 'sweat-' + index,
+        className: css.masonSweat,
+        x: drop.x,
+        y: drop.y,
+        width: 1,
+        height: 1,
+        style: {
+          '--sweat-delay': drop.delay + 's',
+          '--sweat-sway': drop.sway + 'px',
+        },
+      }));
+
+      return h('svg', {
+        viewBox: '0 4 16 20',
+        role: 'presentation',
+        'aria-hidden': 'true',
+        shapeRendering: 'crispEdges',
+        className: css.mason,
+      },
+        h('g', { key: 'back', className: css.masonBack },
+          /* 腿（脚 y=23，与墙底对齐） */
+          h('rect', { className: css.masonBody, x: 5, y: 19, width: 2, height: 4 }),
+          h('rect', { className: css.masonBody, x: 9, y: 19, width: 2, height: 4 }),
+          /* 躯干、双臂、头 */
+          h('rect', { className: css.masonBody, x: 5, y: 14, width: 6, height: 5 }),
+          h('rect', { className: css.masonBody, x: 3, y: 14, width: 2, height: 4 }),
+          h('rect', { className: css.masonBody, x: 11, y: 14, width: 2, height: 4 }),
+          h('rect', { className: css.masonBody, x: 5, y: 7, width: 6, height: 6 }),
+          /* 眼睛：运行中每 2.9 秒眨一次 */
+          h('rect', { className: css.masonEye, x: 6, y: 10, width: 1, height: 1 }),
+          h('rect', { className: css.masonEye, x: 9, y: 10, width: 1, height: 1 })),
+        h('g', { key: 'wall', className: css.masonWall },
+          /* 不要整块深色墙底：它会先于砖出现，看起来像「墙先在人物背后」。
+           * 改成每块砖自带 1px 阴影，砖落下时才挡住砖缝里的腿。 */
+          ...bricks),
+        /* 汗滴容器：只在砌墙窗口内可见（见 client.styles.js 的 SweatWindow） */
+        h('g', { key: 'sweat', className: css.masonSweatLayer }, ...sweats),
+        /* 非运行状态：人物保持站立，只有三个 Z 从头顶向右上飘 */
+        h('g', { key: 'zzz' },
+          zzzGlyph(css, 10, 8, 0.5, 0),
+          zzzGlyph(css, 11, 6, 0.65, 0.8),
+          zzzGlyph(css, 12, 4, 0.8, 1.6)));
+    }
+
+    /**
      * 把 Host 读回的卡片状态翻成界面徽标。
      *
      * 状态来源有两块（见 Host 的 `readStates`）：
@@ -473,20 +600,26 @@ window.__ModuleLoader__.load({
           onClick: () => actions.openFloating(card.key),
           title: isStaged ? t('graph.stagedHint') : t('graph.openFloatingHint'),
         },
-          h('div', { key: 'ws', className: css.graphCardWorkspace }, card.workspaceTitle),
-          h('div', { key: 'title', className: css.graphCardTitle }, label),
-          h('div', { key: 'meta', className: css.graphCardMeta },
-            card.running === true
-              ? h('span', { key: 'dot', className: css.graphCardRunning }, t('pane.running'))
-              : null,
-            badges.map((badge) => h('span', {
-              key: badge.key,
-              className: css.graphCardState,
-              'data-tone': badge.tone,
-            }, badge.label)),
-            isStaged
-              ? h('span', { key: 'staged', className: css.graphCardStaged }, t('graph.stagedBadge'))
-              : null),
+          /*
+           * 卡片左侧的小人与右侧内容分成两块：小人块固定在最左边，用一条竖线
+           * 与内容隔开。竖线只占视觉宽度，不参与点击（agent 整块 pointer-events:none）。
+           */
+          h('div', { key: 'agent', className: css.graphCardAgent }, agentGlyph(css)),
+          h('div', { key: 'body', className: css.graphCardBody },
+            h('div', { key: 'ws', className: css.graphCardWorkspace }, card.workspaceTitle),
+            h('div', { key: 'title', className: css.graphCardTitle }, label),
+            h('div', { key: 'meta', className: css.graphCardMeta },
+              card.running === true
+                ? h('span', { key: 'dot', className: css.graphCardRunning }, t('pane.running'))
+                : null,
+              badges.map((badge) => h('span', {
+                key: badge.key,
+                className: css.graphCardState,
+                'data-tone': badge.tone,
+              }, badge.label)),
+              isStaged
+                ? h('span', { key: 'staged', className: css.graphCardStaged }, t('graph.stagedBadge'))
+                : null)),
           /*
            * 待连线卡片右上角的「移出画布」。连上箭头之后它就不再是待连线，
            * 这个按钮也跟着消失 —— 移除关系走箭头上的编辑面板，两个动作不混。

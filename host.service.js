@@ -457,6 +457,41 @@ export class PaneDispatchService {
         if (key.slice(0, separator) === id) reviewOwned += 1;
         if (key.slice(separator + 1) === id) reviewWaiting += 1;
       }
+      /*
+       * 只读补账：审核记录只在「派单交付」或「派新任务前的审核闸」落盘，
+       * 目标自己跑完（goal complete）时并不会主动写账。这里按同一套真相
+       * （complete goal）补计数，但不写账 —— 写账仍然只发生在审核动作里。
+       * 否则卡片上永远看不到「待审核」，直到下次派单。
+       */
+      if (goal.status === 'complete' && reviewWaiting === 0) {
+        for (const [ownerId, targets] of this.bindings) {
+          if (ownerId === id) continue;
+          if (targets.some((target) => target.id === id)) { reviewWaiting += 1; break; }
+        }
+      }
+      if (reviewOwned === 0) {
+        const owned = this.bindings.get(id) ?? [];
+        for (const target of owned) {
+          if (this.reviews.has(id + '\u0000' + target.id)) continue;
+          let targetAgent;
+          try {
+            targetAgent = agents !== undefined && agents !== null && typeof agents.get === 'function'
+              ? agents.get(target.id)
+              : undefined;
+          } catch {
+            targetAgent = undefined;
+          }
+          let targetView;
+          try {
+            targetView = goals !== undefined && goals !== null && typeof goals.get === 'function'
+              ? goals.get(targetAgent)
+              : undefined;
+          } catch {
+            targetView = undefined;
+          }
+          if (classifyGoal(targetView, targetAgent).status === 'complete') reviewOwned += 1;
+        }
+      }
       states[id] = {
         goal: goal.status,
         terminal: goal.terminal,

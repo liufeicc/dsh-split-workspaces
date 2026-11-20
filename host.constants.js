@@ -75,7 +75,7 @@ export const MAX_REPORT_ASK_CHARS = 4000;
  * 汇报是「读历史 + 生成一段总结」，通常几秒到几十秒；60 秒还没回来就先把这一个目标
  * 记成 timeout，其它目标不受影响。
  */
-export const REPORT_TIMEOUT_MS = 60 * 1000;
+export const REPORT_TIMEOUT_MS = 300 * 1000;
 
 /** 单份汇报返回给 A 的最大字符数，防止一份总结撑爆 A 的上下文。 */
 export const REPORT_MAX_CHARS = 4000;

@@ -256,6 +256,51 @@ window.__ModuleLoader__.load({
        */
       const viewModeStore = mods.graphModel.createViewModeStore();
       const graphStore = mods.graphModel.createGraphStore();
+      /*
+       * 「视频逐帧查看」浮窗的调用入口，由 @local/dsh-video-frame-viewer 的客户端
+       * 半边用 ctx.provide 发布 `{ open(), close(), toggle() }`。
+       *
+       * 与删除会话服务同一套规矩：不能写进本插件的 inject 列表（那会把另一个
+       * 插件的加载顺序变成自己的前置条件），点击时惰性 ctx.get；取不到就
+       * 不渲染按钮（见下方 store 与 GraphBoard 的条件渲染），而不是假装打开了。
+       *
+       * 可用性单独用一个小 store 镜像：按钮要能实时从禁用变可用（两个插件谁先
+       * 加载不确定），而 ctx.inject 恰好在服务出现/消失时回调，正好用来更新它。
+       */
+      const VIDEO_VIEWER_SERVICE_KEY = 'videoFrameViewer';
+      const videoViewerStore = (() => {
+        let available = false;
+        const listeners = new Set();
+        return {
+          getSnapshot: () => available,
+          subscribe: (listener) => {
+            listeners.add(listener);
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+          set(next) {
+            if (next === available) return;
+            available = next;
+            for (const listener of [...listeners]) listener();
+          },
+        };
+      })();
+      ctx.inject([VIDEO_VIEWER_SERVICE_KEY], (scope) => {
+        scope.effect(() => {
+          videoViewerStore.set(true);
+          return () => videoViewerStore.set(false);
+        }, 'split-workspaces: video viewer availability');
+      });
+      /**
+       * 打开视频逐帧查看浮窗。
+       * @returns 是否已经交给视频插件；服务不在时返回 false。
+       */
+      const openVideoViewer = () => {
+        const service = ctx.get(VIDEO_VIEWER_SERVICE_KEY);
+        if (service === undefined || service === null || typeof service.open !== 'function') return false;
+        return service.open() !== false;
+      };
       const dispatchSync = mods.dispatch.createDispatchSync(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY));
       /*
        * 派单目标记录：Host 落盘、客户端镜像。目标创建即存在，不靠保存画布；
@@ -686,6 +731,8 @@ window.__ModuleLoader__.load({
           openWorkspaceDirectory,
           requestSessionDelete,
           viewModeStore,
+          videoViewerStore,
+          openVideoViewer,
           graphStore,
           graphModel: mods.graphModel,
           dispatchStore: dispatchSync,

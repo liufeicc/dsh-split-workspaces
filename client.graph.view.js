@@ -436,7 +436,7 @@ window.__ModuleLoader__.load({
      * @param props.degraded - 绑定服务没就绪时为真，画布顶部给一行说明。
      */
     function GraphBoard(props) {
-      const { cards: cardList, states, edges, layout, graph, actions, pickerGroups, t, css, cx, degraded, diagnostic } = props;
+      const { cards: cardList, states, edges, layout, graph, actions, pickerGroups, t, css, cx, degraded, diagnostic, videoViewerAvailable, onOpenVideoViewer } = props;
       const canvasRef = useRef(null);
       /** 正在拉的那条线：`{ from, x, y }`，`x` / `y` 是画布坐标。 */
       const [drag, setDrag] = useState(null);
@@ -829,7 +829,31 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: css.graphWrap },
         h('div', { className: css.graphBar },
-          h('span', { className: css.graphHint }, t('graph.hint')),
+          /*
+           * 原来这里是一行拖拽说明，现在换成「视频逐帧查看」按钮：
+           * 点击后由视频插件在 shell.overlay 上开出浮动窗口，平铺面板本身不卸载。
+           *
+           * 视频插件没安装 / 还没就绪时**整个按钮都不渲染** —— 用户要求
+           * 「没有这个插件就不显示」，而不是留一个灰按钮或报错。可用性由
+           * client.js 里的 ctx.inject 维护，缺失时它保持 false。
+           */
+          videoViewerAvailable === true
+            ? h('button', {
+                type: 'button',
+                className: css.graphVideoButton,
+                title: t('graph.openVideoHint'),
+                'aria-label': t('graph.openVideo'),
+                onClick: () => {
+                  if (typeof onOpenVideoViewer === 'function') onOpenVideoViewer();
+                },
+              },
+                h('span', { className: css.graphVideoIcon, 'aria-hidden': true },
+                  h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                    h('rect', { x: 2, y: 2.5, width: 12, height: 11, rx: 2, stroke: 'currentColor', strokeWidth: 1.3 }),
+                    h('path', { d: 'M2 6h12M2 10h12', stroke: 'currentColor', strokeWidth: 1.1, opacity: 0.55 }),
+                    h('path', { d: 'M6.6 6.7 10.4 8l-3.8 1.4Z', fill: 'currentColor' }))),
+                t('graph.openVideo'))
+            : null,
           rejectText === null ? null : h('span', { className: css.graphReject, role: 'alert' }, rejectText),
           degraded === true ? h('span', { className: css.graphDegraded }, t('pane.dispatchUnavailable')) : null),
         h('div', { className: css.graphBody },

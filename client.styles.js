@@ -251,7 +251,9 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphDiagnostic{position:sticky;left:0;bottom:0;display:inline-block;margin:6px 0 0 4px;padding:2px 8px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap}',
       '.dshSplitWs_graphWrap{flex:1;min-height:0;display:flex;flex-direction:column}',
       '.dshSplitWs_graphBar{flex:none;display:flex;align-items:center;gap:12px;padding:8px 20px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);border-bottom:.5px solid var(--dsw-alias-border-l1)}',
-      '.dshSplitWs_graphVideoButton{flex:none;margin-right:auto;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;white-space:nowrap}',
+      /* 左侧入口组：视频与图片编辑并排。auto 外边距放在组上，不能放在单个按钮上。 */
+      '.dshSplitWs_graphActions{display:flex;flex:none;align-items:center;gap:8px;margin-right:auto}',
+      '.dshSplitWs_graphVideoButton{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;white-space:nowrap}',
       '.dshSplitWs_graphVideoButton:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-brand-primary)}',
       '.dshSplitWs_graphVideoButton:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}',
       '.dshSplitWs_graphVideoButton:disabled{opacity:.5;cursor:not-allowed}',
@@ -1010,6 +1012,7 @@ window.__ModuleLoader__.load({
       mode: 'dshSplitWs_mode',
       graphWrap: 'dshSplitWs_graphWrap',
       graphBar: 'dshSplitWs_graphBar',
+      graphActions: 'dshSplitWs_graphActions',
       graphVideoButton: 'dshSplitWs_graphVideoButton',
       graphVideoIcon: 'dshSplitWs_graphVideoIcon',
       graphReject: 'dshSplitWs_graphReject',

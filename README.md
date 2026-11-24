@@ -204,6 +204,12 @@ that currently holds focus is marked by a brand-coloured title bar.
   dispatching a new task. Each result also lists the remaining idle targets as a reminder to keep
   distributing, and a delivered task must be reviewed before that target can take a new one.
   See the dedicated section below.
+- **Image editor entry**: the tile-mode header and the dispatch canvas toolbar each carry an
+  "Image Editor" button (requires `@local/dsh-image-editor`; the button is not rendered when
+  that plugin is absent). It opens a floating canvas on `shell.overlay` — draw freely, or paste
+  a screenshot and annotate it, then copy it back into the conversation or save a PNG. The
+  floating window and the sidebar's full-page panel share the same canvas content, and the
+  tiled panel stays mounted.
 - The `Add workspace` dropdown lists "workspaces that are not tiled yet" and also supports
   **creating** a workspace from the folder picker (`uiWorkspace.pickDirectory()`, or through
   the preload bridge under Desktop). The same "pick a directory → register a workspace"

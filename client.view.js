@@ -261,7 +261,7 @@ window.__ModuleLoader__.load({
 
       /** 整块棋盘。 */
       function SplitPanel(props) {
-        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, skillStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets, viewModeStore, videoViewerStore, openVideoViewer, graphStore, graphModel, dispatchStore, targetStore, graphActions } = props;
+        const { t, renderSlot, SessionProvider, paneStore, paneActions, presetStore, mcpStore, skillStore, sessions, sessionList, workspaces, uiWorkspace, openWorkspaceDirectory, requestSessionDelete, agentPresets, viewModeStore, videoViewerStore, openVideoViewer, imageEditorStore, openImageEditor, graphStore, graphModel, dispatchStore, targetStore, graphActions } = props;
         const paneState = useSource(paneStore);
         const workspaceState = useSource(workspaces.list);
         const sessionState = useSource(sessionList);
@@ -270,6 +270,7 @@ window.__ModuleLoader__.load({
         const skillState = useSource(skillStore);
         const modeState = useSource(viewModeStore);
         const videoViewerState = useSource(videoViewerStore);
+        const imageEditorState = useSource(imageEditorStore);
         const graphState = useSource(graphStore);
         const dispatchState = useSource(dispatchStore);
         const targetState = useSource(targetStore);
@@ -1482,6 +1483,8 @@ window.__ModuleLoader__.load({
           pickerGroups,
           videoViewerAvailable: videoViewerState === true,
           onOpenVideoViewer: openVideoViewer,
+          imageEditorAvailable: imageEditorState === true,
+          onOpenImageEditor: openImageEditor,
           actions: {
             addEdge: graphActions.addEdge,
             removeEdge: graphActions.removeEdge,

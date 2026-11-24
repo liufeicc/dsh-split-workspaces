@@ -436,7 +436,7 @@ window.__ModuleLoader__.load({
      * @param props.degraded - 绑定服务没就绪时为真，画布顶部给一行说明。
      */
     function GraphBoard(props) {
-      const { cards: cardList, states, edges, layout, graph, actions, pickerGroups, t, css, cx, degraded, diagnostic, videoViewerAvailable, onOpenVideoViewer } = props;
+      const { cards: cardList, states, edges, layout, graph, actions, pickerGroups, t, css, cx, degraded, diagnostic, videoViewerAvailable, onOpenVideoViewer, imageEditorAvailable, onOpenImageEditor } = props;
       const canvasRef = useRef(null);
       /** 正在拉的那条线：`{ from, x, y }`，`x` / `y` 是画布坐标。 */
       const [drag, setDrag] = useState(null);
@@ -830,6 +830,14 @@ window.__ModuleLoader__.load({
       return h('div', { className: css.graphWrap },
         h('div', { className: css.graphBar },
           /*
+           * 两个入口并排放在左侧组里。
+           *
+           * 视频按钮原本自带 `margin-right:auto`，用来把右侧的错误/降级提示推开；
+           * 直接复用到第二个按钮会把图片编辑推到画布中间。把 auto 外边距移到组上，
+           * 两个按钮就始终相邻靠左。
+           */
+          h('div', { className: css.graphActions },
+          /*
            * 原来这里是一行拖拽说明，现在换成「视频逐帧查看」按钮：
            * 点击后由视频插件在 shell.overlay 上开出浮动窗口，平铺面板本身不卸载。
            *
@@ -854,6 +862,40 @@ window.__ModuleLoader__.load({
                     h('path', { d: 'M6.6 6.7 10.4 8l-3.8 1.4Z', fill: 'currentColor' }))),
                 t('graph.openVideo'))
             : null,
+          /*
+           * 「图片编辑」入口：与平铺模式标题栏那个按钮走同一个客户端服务。
+           * 同样遵守「插件不在就不渲染」，而不是留一个灰按钮。
+           */
+          imageEditorAvailable === true
+            ? h('button', {
+                type: 'button',
+                className: css.graphVideoButton,
+                title: t('graph.openImageEditorHint'),
+                'aria-label': t('graph.openImageEditor'),
+                onClick: () => {
+                  if (typeof onOpenImageEditor === 'function') onOpenImageEditor();
+                },
+              },
+                h('span', { className: css.graphVideoIcon, 'aria-hidden': true },
+                  h('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                    h('rect', { x: 1.6, y: 2.4, width: 12.8, height: 10.8, rx: 2, stroke: 'currentColor', strokeWidth: 1.25 }),
+                    h('path', {
+                      d: 'M2.2 10.9 5.9 7.2l2.1 2.1 1.8-1.7 3.5 3.4',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.15,
+                      strokeLinecap: 'round',
+                      strokeLinejoin: 'round',
+                      opacity: 0.6,
+                    }),
+                    h('path', {
+                      d: 'M9.9 13.6 13.8 9.7l.9.9-3.9 3.9-1.7.5z',
+                      fill: 'currentColor',
+                      stroke: 'currentColor',
+                      strokeWidth: 0.8,
+                      strokeLinejoin: 'round',
+                    }))),
+                t('graph.openImageEditor'))
+            : null),
           rejectText === null ? null : h('span', { className: css.graphReject, role: 'alert' }, rejectText),
           degraded === true ? h('span', { className: css.graphDegraded }, t('pane.dispatchUnavailable')) : null),
         h('div', { className: css.graphBody },

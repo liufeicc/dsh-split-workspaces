@@ -301,6 +301,49 @@ window.__ModuleLoader__.load({
         if (service === undefined || service === null || typeof service.open !== 'function') return false;
         return service.open() !== false;
       };
+      /*
+       * 「图片编辑」浮窗的调用入口，由 @local/dsh-image-editor 的客户端半边
+       * 用 ctx.provide 发布 `{ open(), close(), toggle(), isOpen(), subscribe }`。
+       *
+       * 规则与上面的视频查看完全一致：服务不进本插件的 inject 列表（避免把另一个
+       * 插件的加载顺序变成自己的前置条件），点击时惰性 ctx.get；服务不在时按钮
+       * 不渲染。可用性用一个独立的小 store 镜像，ctx.inject 负责在服务出现/消失
+       * 时回调 —— 两个插件谁先加载都不影响按钮最终可用。
+       */
+      const IMAGE_EDITOR_SERVICE_KEY = 'imageEditor';
+      const imageEditorStore = (() => {
+        let available = false;
+        const listeners = new Set();
+        return {
+          getSnapshot: () => available,
+          subscribe: (listener) => {
+            listeners.add(listener);
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+          set(next) {
+            if (next === available) return;
+            available = next;
+            for (const listener of [...listeners]) listener();
+          },
+        };
+      })();
+      ctx.inject([IMAGE_EDITOR_SERVICE_KEY], (scope) => {
+        scope.effect(() => {
+          imageEditorStore.set(true);
+          return () => imageEditorStore.set(false);
+        }, 'split-workspaces: image editor availability');
+      });
+      /**
+       * 打开图片编辑浮窗。
+       * @returns 是否已经交给图片编辑插件；服务不在时返回 false。
+       */
+      const openImageEditor = () => {
+        const service = ctx.get(IMAGE_EDITOR_SERVICE_KEY);
+        if (service === undefined || service === null || typeof service.open !== 'function') return false;
+        return service.open() !== false;
+      };
       const dispatchSync = mods.dispatch.createDispatchSync(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY));
       /*
        * 派单目标记录：Host 落盘、客户端镜像。目标创建即存在，不靠保存画布；
@@ -733,6 +776,8 @@ window.__ModuleLoader__.load({
           viewModeStore,
           videoViewerStore,
           openVideoViewer,
+          imageEditorStore,
+          openImageEditor,
           graphStore,
           graphModel: mods.graphModel,
           dispatchStore: dispatchSync,

@@ -93,7 +93,7 @@ export function report() {
  * @param options.pickerThrows - 让文件夹选择器直接失败，用来检查报错文案。
  * @param options.createdId - `workspaces.create` 建出来的工作区 id。
  */
-export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new', preloadPanes = true, remoteHandlers = {} } = {}) {
+export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new', preloadPanes = true, remoteHandlers = {}, extraSessions = [] } = {}) {
   const stub = createStubContext({ presets: [] });
   Object.assign(stub.remoteHandlers, remoteHandlers);
   await mod.apply(stub.ctx);
@@ -104,33 +104,40 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
     injected.paneStore.addPane('ws-b');
   }
 
-  const workspaces = source({
-    items: [
-      { workspaceId: 'ws-a', title: 'alpha', path: '/tmp/alpha', sessionIds: ['s-a', 's-blank'] },
-      { workspaceId: 'ws-b', title: 'beta', path: '/tmp/beta', sessionIds: ['s-b'] },
-      // 第三个工作区故意不铺开：分屏菜单第二步应当把它排在已铺开的前面。
-      // 第四个会话属于 ws-c：这个工作区**没有**铺到棋盘上，用来验证「任务分派列的是
-      // 全部已存在的会话」，而不是「只列当前铺开的工作区里的」。
-      { workspaceId: 'ws-c', title: 'gamma', path: '/tmp/gamma', sessionIds: ['s-c'] },
-    ],
-    archivedSessionIds: [],
-  });
-  const sessions = source({
-    ids: ['s-a', 's-b', 's-blank', 's-c', 's-orphan-blank'],
-    phase: 'ready',
-    byId: {
-      's-a': { id: 's-a', displayTitle: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
-      's-b': { id: 's-b', displayTitle: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
-      's-c': { id: 's-c', displayTitle: 'c', blank: false, origin: 'user', updatedAt: 0, retainedBy: {}, projectionValues: {} },
-      // 没发过消息的空白会话：会话菜单不该列它，但「新建会话」应当优先复用它。
-      // displayTitle 故意填项目目录名：平台对无标题会话的回退就是 cwd basename，
-      // 任务分派必须按 blank 标志显示「未命名会话」，不能把这个目录名当标题。
-      's-blank': { id: 's-blank', displayTitle: 'alpha', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
-      // 不属于任何工作区的空白会话：任务是「只列属于工作区的空白会话」，
-      // 这个空壳不能把左侧多撑出一个“未知工作区”分组。
-      's-orphan-blank': { id: 's-orphan-blank', displayTitle: 'orphan', blank: true, origin: 'user', cwd: '/tmp/orphan', updatedAt: 4, retainedBy: {}, projectionValues: {} },
-    },
-  });
+  /*
+   * 测试台的固定工作区/会话。`extraSessions` 只在需要的用例里追加（默认空，现有用例
+   * 的候选列表一个字节都不变）：每个 `{ workspaceId, session }` 会被放进对应工作区的
+   * `sessionIds` 与会话表里，用来构造「同一工作区有多张空白会话」这种边界。
+   */
+  const workspaceItems = [
+    { workspaceId: 'ws-a', title: 'alpha', path: '/tmp/alpha', sessionIds: ['s-a', 's-blank'] },
+    { workspaceId: 'ws-b', title: 'beta', path: '/tmp/beta', sessionIds: ['s-b'] },
+    // 第三个工作区故意不铺开：分屏菜单第二步应当把它排在已铺开的前面。
+    // 第四个会话属于 ws-c：这个工作区**没有**铺到棋盘上，用来验证「任务分派列的是
+    // 全部已存在的会话」，而不是「只列当前铺开的工作区里的」。
+    { workspaceId: 'ws-c', title: 'gamma', path: '/tmp/gamma', sessionIds: ['s-c'] },
+  ];
+  const sessionIds = ['s-a', 's-b', 's-blank', 's-c', 's-orphan-blank'];
+  const sessionById = {
+    's-a': { id: 's-a', displayTitle: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
+    's-b': { id: 's-b', displayTitle: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
+    's-c': { id: 's-c', displayTitle: 'c', blank: false, origin: 'user', updatedAt: 0, retainedBy: {}, projectionValues: {} },
+    // 没发过消息的空白会话：会话菜单不该列它，但「新建会话」应当优先复用它。
+    // displayTitle 故意填项目目录名：平台对无标题会话的回退就是 cwd basename，
+    // 任务分派必须按 blank 标志显示「未命名会话」，不能把这个目录名当标题。
+    's-blank': { id: 's-blank', displayTitle: 'alpha', blank: true, origin: 'user', updatedAt: 3, retainedBy: {}, projectionValues: {} },
+    // 不属于任何工作区的空白会话：任务是「只列属于工作区的空白会话」，
+    // 这个空壳不能把左侧多撑出一个“未知工作区”分组。
+    's-orphan-blank': { id: 's-orphan-blank', displayTitle: 'orphan', blank: true, origin: 'user', cwd: '/tmp/orphan', updatedAt: 4, retainedBy: {}, projectionValues: {} },
+  };
+  for (const extra of extraSessions) {
+    const workspace = workspaceItems.find((item) => item.workspaceId === extra.workspaceId);
+    if (workspace !== undefined && !workspace.sessionIds.includes(extra.session.id)) workspace.sessionIds.push(extra.session.id);
+    if (!sessionIds.includes(extra.session.id)) sessionIds.push(extra.session.id);
+    sessionById[extra.session.id] = extra.session;
+  }
+  const workspaces = source({ items: workspaceItems, archivedSessionIds: [] });
+  const sessions = source({ ids: sessionIds, phase: 'ready', byId: sessionById });
   /** 记录 `workspaces.create` 收到的参数、`connectWorkspace` 的调用次数/参数与 `pickDirectory` 的次数。 */
   const createdWith = [];
   let pickCount = 0;

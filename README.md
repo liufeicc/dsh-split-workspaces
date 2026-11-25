@@ -31,6 +31,9 @@ that currently holds focus is marked by a brand-coloured title bar.
   nodes dragged onto the canvas but not yet wired)**.
   The other part keeps its last save and is never cleared by this action. The record does not
   store the panel mode: a page reload always starts in tile mode.
+  **Blank sessions already dragged onto the canvas** are exempt from the "only the newest
+  blank per workspace" limit, and saving never filters them out — even if the user creates
+  another blank session later, the existing unwired card stays on the canvas.
   The saved record lives in the Host's `$DSH_HOME/storages/pane_layout.json`.
   The first time the tiled panel is opened after a page reload — or after the desktop app
   restarts on a different port — it restores that snapshot;
@@ -973,6 +976,12 @@ the whole implementation.
   graph sanitizing (missing nodes, self-edges, cycles, multiple parents), Host
   persistence/read-back, and automatic restore of the board and graph in tile mode when
   the panel mounts.
+- `test/staged-save-contract.mjs` — offline contract tests for unwired cards
+  (`graph.staged`) (`node test/staged-save-contract.mjs`): pure serialization/restore,
+  tile-mode saves carrying the previous staged nodes, and the real edge case — **when the
+  same workspace has a newer blank session, the older blank card already on the canvas
+  still shows**, is written into `graph.staged` by Save, and comes back on the canvas after
+  a simulated reload with a fresh client instance.
 - `test/host-layout-contract.mjs` — offline contract tests for the Host layout file
   (`node test/host-layout-contract.mjs`): missing file, atomic save/read-back, storage path,
   and invalid root rejection.
@@ -1067,6 +1076,7 @@ node test/views-contract.mjs
 node test/tint-contract.mjs
 node test/font-contract.mjs
 node test/save-contract.mjs
+node test/staged-save-contract.mjs
 node test/host-layout-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs

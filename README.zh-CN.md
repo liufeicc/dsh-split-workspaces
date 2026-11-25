@@ -23,6 +23,8 @@
   平铺模式只写棋盘（分屏方向、比例、窗格顺序、焦点）与每格的会话/Agent 模式；
   任务分派模式只写**分派图（边 + 说明 + 已拖入但还没连线的节点）**。另一部分保留**上一次保存的内容**，
   不会被这次保存清空。保存结构不记录面板模式：刷新后固定从平铺模式开始。
+  **已经拖进画布的空白会话**不受「每个工作区只显示最新一条」的限制，保存时也不会被筛掉
+  —— 即使用户之后又新建了一张空白会话，画布上原有的待连线卡片仍然保留。
   保存记录落在 Host 的 `$DSH_HOME/storages/pane_layout.json`；页面重新加载后
   第一次进入平铺面板时自动恢复，同一次页面内切换面板不会覆盖当前实时布局。
   恢复时缺工作区/会话/模式/分派边都静默丢弃或回退，不报错。模型本身按会话
@@ -837,6 +839,10 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
   缺会话/缺工作区/缺模式、布局剪枝与焦点回退、坏 JSON/坏版本、分派图清洗
   （缺节点、自连、成环、多上级）、真实落盘/读回，以及面板挂载时自动恢复棋盘与图
   （默认平铺模式）。
+- `test/staged-save-contract.mjs` —— 未连线卡片（`graph.staged`）保存/恢复的离线契约测试
+  （`node test/staged-save-contract.mjs`）：纯序列化/恢复、平铺模式携带上一次的待连线节点，
+  以及那个真实边界 —— **同一工作区有更新的空白会话时，已经拖进画布的旧空白卡片仍然显示**，
+  点保存后写进 `graph.staged`，用新实例模拟刷新后它还在画布上。
 - `test/drag-contract.mjs` —— 两种拖动的离线契约测试（`node test/drag-contract.mjs`）：
   分隔条改尺寸（含键盘微调与双击均分），以及**标题栏拖动交换位置**的整条链路。
   后者只用一个假 `document` 替掉 `elementFromPoint` 与 `querySelector` 两个浏览器专属答案，
@@ -955,6 +961,7 @@ node test/views-contract.mjs
 node test/tint-contract.mjs
 node test/font-contract.mjs
 node test/save-contract.mjs
+node test/staged-save-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs
 node test/preset-contract.mjs

@@ -876,3 +876,12 @@ window.__ModuleLoader__.load({
  * client.graph.model.js / client.styles.js / client.dicts.js；入口 revision 同样靠这条
  * 注释推进，已打开的页面才会重新拉取新的代码块。
  */
+
+/*
+ * 2026-11-25（三）：修复任务分派「未连线卡片保存」在普通空白会话上的一个口子。
+ * 同一工作区有多张空白会话时，`graphCards` 只保留最新一张；用户先把旧的那张拖进
+ * 画布、之后再新建空白会话，旧卡片会被「空白名额」过滤掉 —— 画布少一张、保存时
+ * 也丢。现在：已进入 `stagedSessions` 的会话不受名额限制；`stageSession` 按会话表
+ * 判断存在性；保存也按会话表过滤，不看显示层。改动落在 client.view.js /
+ * test/board.mjs；新增 test/staged-save-contract.mjs。入口 revision 靠这条注释推进。
+ */

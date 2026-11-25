@@ -931,8 +931,12 @@ window.__ModuleLoader__.load({
                * 普通空白会话（没有目标记录）也要作为候选：任务分派左侧现在会把
                * 「未命名会话」显示成卡片。每个工作区只留最近更新的一条，避免历史
                * 空壳刷屏；目标不占这个名额，永远显示。
+               *
+               * **已经拖进画布的会话不占这个名额、也不被它挤掉**：用户可能在
+               * 还有一张更新空白会话的情况下继续用旧的那张，它在画布上是「待连线」
+               * 卡片；如果这里按名额把它过滤掉，画布会少一张卡、保存时也会丢。
                */
-              if (row.blank === true && !targetIds.has(row.id)) {
+              if (row.blank === true && !targetIds.has(row.id) && !stagedSessions.has(row.id)) {
                 if (blankWorkspaces.has(workspace.workspaceId)) continue;
                 blankWorkspaces.add(workspace.workspaceId);
               }
@@ -953,7 +957,8 @@ window.__ModuleLoader__.load({
             if (seen.has(id)) continue;
             const summary = sessionState.byId[id];
             if (summary === undefined || summary.origin === 'subagent') continue;
-            if (summary.blank === true && !targetIds.has(id)) continue;
+            // 同上：已经拖进画布的空白会话必须留下，不能被「空白会话兜底跳过」筛掉。
+            if (summary.blank === true && !targetIds.has(id) && !stagedSessions.has(id)) continue;
             if (archivedSessionIds.includes(id)) continue;
             seen.add(id);
             const owner = items.find((item) => item.path === summary.cwd);
@@ -1027,7 +1032,7 @@ window.__ModuleLoader__.load({
               target,
             };
           });
-        }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t, targetIds, targetState]);
+        }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t, targetIds, targetState, stagedSessions]);
 
         /** 卡片（按会话 id）的索引，换算绑定表时用它取显示名。 */
         const graphCardById = useMemo(() => {
@@ -1037,17 +1042,30 @@ window.__ModuleLoader__.load({
         }, [graphCards]);
 
 
-        /** 把一个真实会话加入画布；未知 id 直接忽略，避免画出一张查不到内容的空卡。 */
+        /**
+         * 把一个真实会话加入画布。
+         *
+         * 判据是**会话真实存在**，而不是「此刻在 `graphCards` 里」：普通空白会话可能
+         * 因为同工作区还有更新的一条而暂时不在候选列表里；用户已经把它拖进画布时
+         * 必须留下 —— 先让它进 `stagedSessions`，`graphCards` 会按上面的规则把它保下来。
+         */
         const stageSession = useCallback((sessionId) => {
           if (typeof sessionId !== 'string' || sessionId === '') return;
-          if (!graphCardById.has(sessionId)) return;
+          const summary = sessionState.byId[sessionId];
+          /*
+           * 目标（员工）记录可能比会话表先到：这时 `sessionState` 里还没有它，
+           * 但左侧已经有「未命名员工」卡片，必须能拖进画布。
+           */
+          const knownTarget = targetIds.has(sessionId);
+          if (!knownTarget && (summary === undefined || summary.origin === 'subagent')) return;
+          if (archivedSessionIds.includes(sessionId)) return;
           setStagedSessions((current) => {
             if (current.has(sessionId)) return current;
             const next = new Set(current);
             next.add(sessionId);
             return next;
           });
-        }, [graphCardById]);
+        }, [sessionState, archivedSessionIds, targetIds]);
 
         /** 把待连线会话移出画布；已连线的会话不在这里移除（那要删箭头）。 */
         const unstageSession = useCallback((sessionId) => {
@@ -1674,7 +1692,19 @@ window.__ModuleLoader__.load({
             connectedIds.add(edge.from);
             connectedIds.add(edge.to);
           }
-          const stagedForSave = [...stagedSessions].filter((id) => graphCardById.has(id) && !connectedIds.has(id));
+          /*
+           * 未连线节点按**会话是否真实存在**过滤，不按 `graphCardById`：
+           * 显示层可能因为「同工作区只留最新空白会话」暂时不画它，但它确实在画布上，
+           * 保存时不能丢。归档/子代理会话仍然排除。
+           */
+          const stagedForSave = [...stagedSessions].filter((id) => {
+            const summary = sessionState.byId[id];
+            // 目标记录可能比会话表先到，不能因此把刚拖进来的员工卡片丢掉。
+            const knownTarget = targetIds.has(id);
+            if (!knownTarget && (summary === undefined || summary.origin === 'subagent')) return false;
+            if (archivedSessionIds.includes(id)) return false;
+            return !connectedIds.has(id);
+          });
           const graphSnapshot = saveScope === 'graph' ? { edges: graphState.edges, staged: stagedForSave } : null;
           /*
            * “跟随最新会话”的窗格记录里 `sessionId` 往往是 null，真正显示的是

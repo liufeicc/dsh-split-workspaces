@@ -517,8 +517,13 @@ window.__ModuleLoader__.load({
      *
      * 返回的 `items` 是会话 id 数组；视图层只负责把 id 映射回卡片。
      *
+     * `options.workspaces` 用来补出**还没有任何会话的工作区**：任务分派左侧每个工作区
+     * 行右侧都带「创建会话 / 创建员工」两个入口，如果空工作区整组消失，用户就没有
+     * 地方建第一张卡片。补出来的组 `items` 为空，组行本身照样渲染。
+     *
      * @param cards - 候选卡片数组，每项 `{ key, label, workspaceKey, workspaceTitle }`。
      * @param options.unknownLabel - 「未归属工作区」的本地化显示名。
+     * @param options.workspaces - 全部工作区 `[{ workspaceId, title }]`；用来补空组。
      * @returns `[{ key, label, items: [sessionId] }]`。
      */
     function groupSessionsByWorkspace(cards, options) {
@@ -540,6 +545,18 @@ window.__ModuleLoader__.load({
           if (entry.label === '' && groupLabel !== '') entry.label = groupLabel;
           entry.cards.push(card);
         }
+      }
+      /*
+       * 补空工作区。已经由卡片建出来的组不重复插入；标题回退顺序与卡片组一致：
+       * 工作区标题 → 工作区 id。
+       */
+      for (const workspace of Array.isArray(options?.workspaces) ? options.workspaces : []) {
+        if (workspace === null || typeof workspace !== 'object') continue;
+        const key = workspace.workspaceId;
+        if (typeof key !== 'string' || key === '') continue;
+        if (groups.has(key)) continue;
+        const label = typeof workspace.title === 'string' && workspace.title !== '' ? workspace.title : key;
+        groups.set(key, { key, label, cards: [] });
       }
       const ordered = [...groups.values()];
       ordered.sort((left, right) => {

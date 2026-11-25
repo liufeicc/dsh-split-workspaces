@@ -122,6 +122,24 @@ check('组按工作区名排序（大小写不敏感）',
 check('组内按会话名排序', roster[0].items.join(',') === 's-a,s-m', roster[0].items.join(','));
 check('未归属工作区的会话固定排在最后', roster[roster.length - 1].key === '', roster[roster.length - 1].key);
 
+/*
+ * 空工作区也要成组：任务分派左侧每个工作区行右侧都有「创建会话 / 创建员工」，
+ * 如果空工作区整组消失，用户就没有地方建第一张卡片。
+ */
+const rosterWithEmpty = graph.groupSessionsByWorkspace(rosterCards, {
+  unknownLabel: '未归属',
+  workspaces: [
+    { workspaceId: 'ws-2', title: 'Beta' },
+    { workspaceId: 'ws-4', title: 'Empty place' },
+    { workspaceId: 'ws-1', title: 'alpha' },
+  ],
+});
+const emptyGroup = rosterWithEmpty.find((group) => group.key === 'ws-4');
+check('没有会话的工作区也补成一组（items 为空）',
+  emptyGroup !== undefined && emptyGroup.items.length === 0 && emptyGroup.label === 'Empty place',
+  JSON.stringify(emptyGroup));
+check('补空组不会重复追加已有工作区', rosterWithEmpty.length === 5, String(rosterWithEmpty.length));
+
 const stagedLayout = graph.layoutGraphWithStaged(
   [edge('a', 'b')],
   ['a', 'b'],
@@ -461,16 +479,53 @@ check('选择器默认折叠，先让用户选工作区', findPickerItems(picker
 groupHeads[0].props.onClick();
 picker.flush();
 const pickerItems = findPickerItems(picker);
-check('点开工作区后才列出它的会话', pickerItems.length === 1
-  && pickerItems[0].props['data-session'] === 's-a',
+check('点开工作区后列出它的会话（普通会话 + 空白会话）', pickerItems.length === 2
+  && pickerItems.some((item) => item.props['data-session'] === 's-a')
+  && pickerItems.some((item) => item.props['data-session'] === 's-blank'),
   JSON.stringify(pickerItems.map((item) => item.props['data-session'])));
 /*
- * 空白会话的专门用例在文件末尾：它必须“当前开在窗格里”才会出现，
- * 这里 s-blank 没有打开，所以不应列出来。
+ * 空白会话现在也会显示成卡片；标题必须按 `blank` 标志写成「未命名会话」，
+ * 不能把平台回退的目录名（alpha）当成会话标题。
  */
-check('没打开的空白会话不混进普通选择器',
-  !pickerItems.some((item) => item.props['data-session'] === 's-blank'),
-  JSON.stringify(pickerItems.map((item) => item.props['data-session'])));
+const blankPickerItem = pickerItems.find((item) => item.props['data-session'] === 's-blank');
+check('空白会话显示为「未命名会话」',
+  blankPickerItem !== undefined && JSON.stringify(blankPickerItem).includes('未命名会话'),
+  blankPickerItem === undefined ? 'no item' : JSON.stringify(blankPickerItem.children));
+
+/*
+ * 工作区行右侧的两个创建入口：两个图标都存在，点击把该工作区的 id 交给回调。
+ */
+{
+  const sessionCalls = [];
+  const targetCalls = [];
+  const actionPicker = mount(pickerNode.type, {
+    ...pickerNode.props,
+    onCreateSession: (workspaceId) => {
+      sessionCalls.push(workspaceId);
+      return Promise.resolve({ ok: true, sessionId: 's-new' });
+    },
+    onCreateTarget: (workspaceId) => {
+      targetCalls.push(workspaceId);
+      return Promise.resolve({ ok: true, sessionId: 's-target' });
+    },
+  });
+  const actionButtons = findAll(actionPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerGroupAction'));
+  check('每个工作区行右侧都有两个创建图标', actionButtons.length === 6, String(actionButtons.length));
+  const groupButtons = actionButtons.filter((node) => node.props['data-group'] === 'ws-a');
+  check('ws-a 的两个图标分别是创建会话与创建员工',
+    groupButtons.length === 2
+    && groupButtons.some((node) => node.props['data-kind'] === 'session')
+    && groupButtons.some((node) => node.props['data-kind'] === 'target'),
+    JSON.stringify(groupButtons.map((node) => node.props['data-kind'])));
+  groupButtons.find((node) => node.props['data-kind'] === 'session').props.onClick({ stopPropagation: () => {} });
+  await settle();
+  check('创建会话图标把工作区 id 交给回调',
+    sessionCalls.length === 1 && sessionCalls[0] === 'ws-a', JSON.stringify(sessionCalls));
+  groupButtons.find((node) => node.props['data-kind'] === 'target').props.onClick({ stopPropagation: () => {} });
+  await settle();
+  check('创建员工图标把工作区 id 交给回调',
+    targetCalls.length === 1 && targetCalls[0] === 'ws-a', JSON.stringify(targetCalls));
+}
 
 /*
  * 把会话拖到画布：选择器写私有 MIME，画布的 onDrop 读出来交给 stageSession。
@@ -599,6 +654,31 @@ injected.paneActions.forgetSession('s-b');
 check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSnapshot().edges.length === 0);
 
 /*
+ * 工作区行「创建会话」的真实行为：
+ *   - ws-a 已经有空白会话 s-blank → 复用，不惊动 Host；
+ *   - ws-b 没有空白会话 → 调 connectWorkspace 真正新建。
+ * 这条链走的是视图层 createPickerSession，而不只是图标回调是否被调用。
+ */
+{
+  const createBoard = await renderBoard(mod, {});
+  const createModes = findAll(createBoard.render().tree, (node) => node.props?.['aria-pressed'] !== undefined && typeof node.props.className === 'string' && node.props.className.includes('dshSplitWs_mode'));
+  createModes[1].props.onClick();
+  const createDom = graphBoardOf(createBoard.render().tree);
+  const createPickerNode = findAll(createDom.tree, byName('GraphPicker'))[0];
+  const createPicker = mount(createPickerNode.type, createPickerNode.props);
+  const createAction = (groupId, kind) => findAll(createPicker.tree, (node) => node.props?.['data-group'] === groupId && node.props?.['data-kind'] === kind)[0];
+  createAction('ws-a', 'session').props.onClick({ stopPropagation: () => {} });
+  await settle();
+  check('已有空白会话时，创建会话只复用、不向 Host 新建',
+    createBoard.connectCount() === 0, String(createBoard.connectCount()));
+  createAction('ws-b', 'session').props.onClick({ stopPropagation: () => {} });
+  await settle();
+  check('没有空白会话时，创建会话才向 Host 新建',
+    createBoard.connectCount() === 1 && createBoard.connectCalls()[0] === 'ws-b',
+    JSON.stringify({ count: createBoard.connectCount(), calls: createBoard.connectCalls() }));
+}
+
+/*
  * 空白会话（新建、还没输入内容）也要能作为任务分派节点：
  * 出现在左侧列表 → 拖入画布 → 连出箭头。
  *
@@ -610,8 +690,8 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
   const blankModes = findAll(blankBoard.render().tree, (node) => node.props?.['aria-pressed'] !== undefined && typeof node.props.className === 'string' && node.props.className.includes('dshSplitWs_mode'));
   blankModes[1].props.onClick();
   /*
-   * 空白会话只在“当前确实开在窗格里”时列出。先把 s-blank 留在窗格外，
-   * 确认它不出现；再把它开进 pane-1，走下面的“可拖入、可连线”路径。
+   * 普通空白会话现在会直接显示成「未命名会话」卡片，不需要先开进窗格；
+   * 每个工作区只保留最近更新的一条（见 `graphCards` 的 blankWorkspaces 过滤）。
    */
   const pickerKeysNow = () => {
     const dom = graphBoardOf(blankBoard.render().tree);
@@ -619,8 +699,8 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
     return node.props.groups.flatMap((group) => group.items).map((item) => item.key);
   };
   const keysBeforeOpen = pickerKeysNow();
-  check('属于工作区但没在任何窗格里打开的空白会话不列',
-    !keysBeforeOpen.includes('s-blank'), JSON.stringify(keysBeforeOpen));
+  check('属于工作区但没在窗格里打开的空白会话也列出来',
+    keysBeforeOpen.includes('s-blank'), JSON.stringify(keysBeforeOpen));
   blankInjected.paneStore.setSession('pane-1', 's-blank');
   const blankPanel = blankBoard.render();
   const blankDom = graphBoardOf(blankPanel.tree);
@@ -635,12 +715,12 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
     blankPickerNode.props.groups.every((group) => group.key !== ''),
     JSON.stringify(blankPickerNode.props.groups.map((group) => group.key)));
   /*
-   * 新规则：普通空白会话即使开在窗格里也不列；带目标记录的才显示。
-   * 把 s-blank 登记成目标后，验证「未命名员工」卡片、拖入与连线。
+   * 空白会话开进窗格后仍然只在列表里出现一次；随后把 s-blank 登记成目标，
+   * 验证「未命名员工」卡片、拖入与连线。
    */
   const keysAfterOpen = pickerKeysNow();
-  check('普通空白会话即使开在窗格里也不列',
-    !keysAfterOpen.includes('s-blank'), JSON.stringify(keysAfterOpen));
+  check('空白会话开在窗格里也只出现一次',
+    keysAfterOpen.filter((id) => id === 's-blank').length === 1, JSON.stringify(keysAfterOpen));
   await blankInjected.targetStore.addTarget('s-blank', 'ws-a');
   await settle();
   const targetPanel = blankBoard.render();
@@ -649,23 +729,30 @@ check('会话被删除时才清掉它牵涉的箭头', injected.graphStore.getSn
     targetKeys.includes('s-blank'), JSON.stringify(targetKeys));
   const targetDom = graphBoardOf(targetPanel.tree);
   const targetPickerNode = findAll(targetDom.tree, byName('GraphPicker'))[0];
-  let deletedTarget = null;
+  let deletedSession = null;
   const targetPicker = mount(targetPickerNode.type, {
     ...targetPickerNode.props,
-    onDeleteTarget: (sessionId) => { deletedTarget = sessionId; },
+    onDeleteSession: (sessionId) => { deletedSession = sessionId; },
   });
   const targetGroups = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerGroupHead'));
   targetGroups[0].props.onClick();
   targetPicker.flush();
   const targetItems = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerItem'));
   const targetItem = targetItems.find((item) => item.props['data-session'] === 's-blank');
+  const normalItem = targetItems.find((item) => item.props['data-session'] === 's-a');
   check('目标空会话显示为「未命名员工」',
     targetItem !== undefined && JSON.stringify(targetItem).includes('未命名员工'),
     targetItem === undefined ? 'no item' : JSON.stringify(targetItem.children));
-  const deleteTargetButton = findAll(targetPicker.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerDelete'))[0];
+  const deleteOf = (item) => findAll(item, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphPickerDelete'))[0];
+  const normalDeleteButton = normalItem === undefined ? undefined : deleteOf(normalItem);
+  check('普通会话卡片也带删除按钮', normalDeleteButton !== undefined);
+  normalDeleteButton.props.onClick({ stopPropagation: () => {} });
+  check('普通会话删除按钮把 id 交给删除服务', deletedSession === 's-a', String(deletedSession));
+  deletedSession = null;
+  const deleteTargetButton = targetItem === undefined ? undefined : deleteOf(targetItem);
   check('目标卡片带删除按钮', deleteTargetButton !== undefined);
   deleteTargetButton.props.onClick({ stopPropagation: () => {} });
-  check('删除按钮把目标会话 id 交给删除服务', deletedTarget === 's-blank', String(deletedTarget));
+  check('目标删除按钮把目标会话 id 交给删除服务', deletedSession === 's-blank', String(deletedSession));
   const targetScroll = findAll(targetDom.tree, (node) => typeof node.props?.className === 'string' && node.props.className.split(' ').includes('dshSplitWs_graphScroll'))[0];
   targetScroll.props.onDrop({ preventDefault: () => {}, dataTransfer: transferFor('s-blank') });
   const targetStagedBoard = graphBoardOf(targetPanel.flush());

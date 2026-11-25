@@ -488,6 +488,49 @@ window.__ModuleLoader__.load({
         };
       }, 'split-workspaces: paneDispatch namespace');
 
+      /**
+       * 在指定工作区里**真正新建**一条空白会话（不复用）。
+       *
+       * 「复用空白会话」是视图层的决定：任务分派图标点「创建会话」时，视图先看本工作区
+       * 有没有可复用的空白会话，有就直接用；只有没有时才调到这里。因此这里必须绕过
+       * 平台的复用分支 —— `connectWorkspace` 默认会挑一个空白会话复用，而目标（员工）
+       * 也是空白会话，一旦被挑走，画布上已经连好的节点就会悄悄换成别的对话。
+       *
+       * `connectBlank(workspaceId, undefined)` 是平台服务里无复用地 `sessions.create`
+       * 的运行时入口（类型里标了 private），所以先探测，旧版本没有时才退回公开方法。
+       *
+       * @param workspaceId - 目标工作区 id。
+       * @param workspaceApi - 工作区导航服务；省略时用 ctx.uiWorkspace。
+       * @returns `{ ok: true, sessionId }` 或 `{ ok: false, reason }`。
+       */
+      const createBlankSessionInWorkspace = async (workspaceId, workspaceApi) => {
+        if (typeof workspaceId !== 'string' || workspaceId === '') {
+          return { ok: false, reason: 'no workspace' };
+        }
+        const api = workspaceApi !== undefined && workspaceApi !== null ? workspaceApi : ctx.uiWorkspace;
+        if (api === undefined || api === null || (typeof api.connectBlank !== 'function' && typeof api.connectWorkspace !== 'function')) {
+          return { ok: false, reason: 'workspace service unavailable' };
+        }
+        try {
+          const createdId = typeof api.connectBlank === 'function'
+            ? await api.connectBlank(workspaceId, undefined)
+            : await api.connectWorkspace(workspaceId);
+          if (typeof createdId !== 'string' || createdId === '') {
+            return { ok: false, reason: 'empty session id' };
+          }
+          /*
+           * 会话表可能还没收到新会话；主动刷一次，让任务分派/平铺菜单立即看到它。
+           * 刷新失败不影响会话本身，界面最多晚一个事件周期。
+           */
+          if (ctx.sessions !== undefined && ctx.sessions !== null && typeof ctx.sessions.refresh === 'function') {
+            Promise.resolve(ctx.sessions.refresh()).catch(() => {});
+          }
+          return { ok: true, sessionId: createdId };
+        } catch (reason) {
+          return { ok: false, reason: reason instanceof Error ? reason.message : String(reason) };
+        }
+      };
+
       /** 交给组件层的动作集合：组件只调这里，不直接碰存储内部。 */
       const paneActions = {
         addPane: (workspaceId, sessionId) => paneStore.addPane(workspaceId, sessionId),
@@ -533,53 +576,36 @@ window.__ModuleLoader__.load({
         readDispatchStates: (sessionIds) => mods.dispatch.readDispatchStates(() => ctx.get(mods.dispatch.DISPATCH_REMOTE_KEY), sessionIds),
         loadTargets: () => targetStore.load(),
         /**
-         * 新建一个派单目标：强制创建一个新的空白会话，再登记目标记录。
+         * 新建一个普通会话：真正创建一条新的空白会话。
          *
-         * 不走平铺的「复用空白会话」逻辑 —— 每次点「新建目标」都必须得到一个新的
-         * 会话 id，否则 B/C/D 会指向同一个会话，派单无法区分。
+         * **复用由视图层负责**：点「创建会话」时先查本工作区有没有可复用的空白会话，
+         * 有就直接用现有的，只有没有时才调到这里。这样「反复点新建最多只多一个空壳」
+         * 的规则不变，也不会因为平台侧的复用分支把目标会话抢走。
          *
-         * 创建成功后不切换当前窗格/模式：调用方（窗格）只负责提示一句。
+         * 创建成功后不切换当前窗格/模式：任务分派只让新卡片出现在左侧列表里。
+         *
+         * @param workspaceId - 会话所属工作区。
+         * @param workspaceApi - 工作区导航服务；省略时用 ctx.uiWorkspace。
+         * @returns `{ ok, sessionId?, reason? }`。
+         */
+        createSession: (workspaceId, workspaceApi) => createBlankSessionInWorkspace(workspaceId, workspaceApi),
+        /**
+         * 新建一个派单目标（员工）：强制创建一个新的空白会话，再登记目标记录。
+         *
+         * 不走「复用空白会话」逻辑 —— 每次点「创建员工」都必须得到一个新的会话 id，
+         * 否则 B/C/D 会指向同一个会话，派单无法区分。
          *
          * @param workspaceId - 目标所属工作区。
          * @returns `{ ok, sessionId?, reason? }`。
          */
         createTarget: async (workspaceId, workspaceApi) => {
-          if (typeof workspaceId !== 'string' || workspaceId === '') {
-            return { ok: false, reason: 'no workspace' };
+          const created = await createBlankSessionInWorkspace(workspaceId, workspaceApi);
+          if (created.ok !== true) return created;
+          const registered = await targetStore.addTarget(created.sessionId, workspaceId);
+          if (registered.ok !== true) {
+            return { ok: false, sessionId: created.sessionId, reason: registered.reason };
           }
-          const api = workspaceApi !== undefined && workspaceApi !== null ? workspaceApi : ctx.uiWorkspace;
-          if (api === undefined || api === null || typeof api.connectWorkspace !== 'function') {
-            return { ok: false, reason: 'workspace service unavailable' };
-          }
-          try {
-            /*
-             * 必须绕过平台的「复用空白会话」：`connectWorkspace` 的 options 默认是 `{}`，
-             * 会走 `createInWorkspace` 的复用分支，同一个工作区连点多次只会得到同一个
-             * 空会话。`connectBlank(workspaceId, undefined)` 才是无复用地真正
-             * `sessions.create`。它是平台服务的运行时方法（类型里标了 private），
-             * 所以先探测，再退回公开的 connectWorkspace。
-             */
-            const createdId = typeof api.connectBlank === 'function'
-              ? await api.connectBlank(workspaceId, undefined)
-              : await api.connectWorkspace(workspaceId);
-            if (typeof createdId !== 'string' || createdId === '') {
-              return { ok: false, reason: 'empty session id' };
-            }
-            const registered = await targetStore.addTarget(createdId, workspaceId);
-            if (registered.ok !== true) {
-              return { ok: false, sessionId: createdId, reason: registered.reason };
-            }
-            /*
-             * 会话表可能还没收到新会话；主动刷一次，让平铺菜单/任务分派立即看到它。
-             * 刷新失败不影响目标本身，界面最多晚一个事件周期。
-             */
-            if (ctx.sessions !== undefined && ctx.sessions !== null && typeof ctx.sessions.refresh === 'function') {
-              Promise.resolve(ctx.sessions.refresh()).catch(() => {});
-            }
-            return { ok: true, sessionId: createdId };
-          } catch (reason) {
-            return { ok: false, reason: reason instanceof Error ? reason.message : String(reason) };
-          }
+          return created;
         },
         removeTarget: (sessionId) => targetStore.removeTarget(sessionId),
       };
@@ -841,4 +867,12 @@ window.__ModuleLoader__.load({
  * 2026-11-20（二）：任务分派画布卡片最左侧加一块静态像素小人（先用来看布局效果）。
  * 改动落在 client.graph.view.js 与 client.styles.js；同样用这条注释推进入口产物的
  * revision，已打开的页面才会重新拉取新的代码块。
+ */
+
+/*
+ * 2026-11-25：任务分派左侧工作区行右侧加「创建会话 / 创建员工」两个图标；展开后
+ * 普通空白会话也显示为「未命名会话」卡片（每个工作区只留最近更新的一条，复用规则
+ * 不变）；左侧所有会话卡片都带删除按钮。改动落在 client.view.js / client.graph.view.js /
+ * client.graph.model.js / client.styles.js / client.dicts.js；入口 revision 同样靠这条
+ * 注释推进，已打开的页面才会重新拉取新的代码块。
  */

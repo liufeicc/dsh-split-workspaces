@@ -222,6 +222,46 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 工作区行右侧的「创建会话」图标：对话气泡里一个加号。
+     *
+     * 用内联 svg 而不是字符/emoji：主题切换时图标跟着 `currentColor` 走，也不会
+     * 在不同平台被渲染成不同的彩色 emoji。
+     */
+    function createSessionIcon() {
+      return h('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+        h('path', {
+          d: 'M2.2 3.1h11.6v7.2H7.4l-3.5 2.9v-2.9H2.2z',
+          stroke: 'currentColor',
+          strokeWidth: 1.1,
+          strokeLinejoin: 'round',
+        }),
+        h('path', {
+          d: 'M8 4.7v3.4M6.3 6.4h3.4',
+          stroke: 'currentColor',
+          strokeWidth: 1.1,
+          strokeLinecap: 'round',
+        }));
+    }
+
+    /** 工作区行右侧的「创建员工」图标：人形加号。 */
+    function createTargetIcon() {
+      return h('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+        h('circle', { cx: 6.3, cy: 5.1, r: 2.3, stroke: 'currentColor', strokeWidth: 1.1 }),
+        h('path', {
+          d: 'M2.2 13.1c.3-2.5 2-4 4.1-4 1.2 0 2.2.4 3 1.1',
+          stroke: 'currentColor',
+          strokeWidth: 1.1,
+          strokeLinecap: 'round',
+        }),
+        h('path', {
+          d: 'M12 9.4v4M10 11.4h4',
+          stroke: 'currentColor',
+          strokeWidth: 1.1,
+          strokeLinecap: 'round',
+        }));
+    }
+
+    /**
      * 左侧的二级会话选择器。
      *
      * 第一级是工作区（默认**全部折叠**，一行一个），点开后才列出该工作区的会话；
@@ -229,15 +269,33 @@ window.__ModuleLoader__.load({
      * 会话不会留在这里（见 `client.view.js` 的 `pickerGroups`），所以列表永远只
      * 包含「还能加进去的」，不需要额外的状态标记。
      *
+     * 每个工作区行右侧有两个入口：
+     *   - **创建会话**：在本工作区里建一条普通会话（已有空白会话时复用）；
+     *   - **创建员工**：建一条新的空白会话并登记成派单目标。
+     * 两张新卡片都会出现在该工作区下面，所以创建前先把组展开。
+     *
+     * 每张会话卡片右上角都有删除按钮：普通会话、空白会话、员工目标走同一套确认框，
+     * 目标删除后由 `client.js` 的 `onDeleted` 顺手清掉目标记录与牵涉的箭头。
+     *
      * @param props.groups - `[{ key, label, items: [{ key, label, workspaceTitle, running }] }]`。
      * @param props.onStage - 把会话拖/点进画布。
+     * @param props.onCreateSession - 在工作区里创建普通会话；收回执 Promise。
+     * @param props.onCreateTarget - 在工作区里创建员工目标；收回执 Promise。
+     * @param props.onDeleteSession - 删除卡片对应的会话。
      * @param props.t / props.css / props.cx - 文案、class 表、class 拼接。
      * @param props.dragMime - 拖拽时写入的私有 MIME。
      */
     function GraphPicker(props) {
-      const { groups, onStage, t, css, cx, dragMime, states, onCollapse, onDeleteTarget } = props;
+      const { groups, onStage, t, css, cx, dragMime, states, onCollapse, onDeleteSession, onCreateSession, onCreateTarget } = props;
       /** 展开的工作区 key 集合；默认全折叠，先让用户选工作区。 */
       const [open, setOpen] = useState(() => new Set());
+      /**
+       * 正在执行的创建动作，形如 `session:ws-a` / `target:ws-a`。
+       *
+       * 创建要等 Host 回执：期间把两个图标一起禁用，避免连点「创建员工」建出
+       * 两条目标、或者「会话 + 员工」同时挤进同一个工作区。空值表示空闲。
+       */
+      const [busy, setBusy] = useState(null);
       const toggle = (key) => {
         setOpen((current) => {
           const next = new Set(current);
@@ -246,43 +304,113 @@ window.__ModuleLoader__.load({
           return next;
         });
       };
+      /** 确保某个工作区是展开的（创建后要立刻看到新卡片）。 */
+      const expand = (key) => {
+        setOpen((current) => {
+          if (current.has(key)) return current;
+          const next = new Set(current);
+          next.add(key);
+          return next;
+        });
+      };
+      /**
+       * 触发一次创建。先展开再调用，成功与否都由调用方（视图层）写错误行；
+       * 这里只负责防重入与收尾 —— 接住异常只是避免出现未处理的 Promise，
+       * 具体的失败原因已经由视图层写进面板顶部的错误行。
+       */
+      const runCreate = (kind, key) => {
+        const callback = kind === 'session' ? onCreateSession : onCreateTarget;
+        if (typeof callback !== 'function' || busy !== null) return;
+        setBusy(kind + ':' + key);
+        expand(key);
+        Promise.resolve()
+          .then(() => callback(key))
+          .catch(() => undefined)
+          .finally(() => setBusy(null));
+      };
 
       const rows = [];
       for (const group of groups) {
         const expanded = open.has(group.key);
         const accent = accentFor(group.key);
+        /* 未归属工作区没有可创建的目标：它不是真实注册过的工作区。 */
+        const canCreate = group.key !== '';
         rows.push(h('div', { key: 'g-' + group.key, className: css.graphPickerGroup },
-          h('button', {
+          h('div', {
             key: 'head',
-            type: 'button',
             className: cx(css.graphPickerGroupHead, expanded ? css.graphPickerGroupOpen : null),
             style: { '--pick-accent': accent },
-            'aria-expanded': expanded,
-            title: t('graph.pickerGroupHint', { title: group.label }),
+            /*
+             * 组行本身负责展开/收起。展开按钮与两个创建图标都在这一层里面：
+             * 图标点击会 stopPropagation，所以不会顺带折叠/展开；测试与键盘仍能
+             * 直接对组行触发点击。
+             */
             onClick: () => toggle(group.key),
           },
-            h('svg', {
-              key: 'chevron',
-              className: css.graphPickerChevron,
-              width: 8,
-              height: 8,
-              viewBox: '0 0 8 8',
-              'aria-hidden': true,
-            }, h('path', {
-              d: 'M2.5 1l3.5 3-3.5 3',
-              fill: 'none',
-              stroke: 'currentColor',
-              strokeWidth: 1.3,
-              strokeLinecap: 'round',
-              strokeLinejoin: 'round',
-            })),
-            h('span', { key: 'label', className: css.graphPickerGroupLabel }, group.label),
-            h('span', {
-              key: 'dot',
-              className: css.graphPickerDot,
-              style: { background: accent, boxShadow: '0 0 8px ' + accent },
-              'aria-hidden': true,
-            })),
+            h('button', {
+              key: 'toggle',
+              type: 'button',
+              className: css.graphPickerGroupToggle,
+              'aria-expanded': expanded,
+              title: t('graph.pickerGroupHint', { title: group.label }),
+            },
+              h('svg', {
+                key: 'chevron',
+                className: css.graphPickerChevron,
+                width: 8,
+                height: 8,
+                viewBox: '0 0 8 8',
+                'aria-hidden': true,
+              }, h('path', {
+                d: 'M2.5 1l3.5 3-3.5 3',
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 1.3,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round',
+              })),
+              h('span', { key: 'label', className: css.graphPickerGroupLabel }, group.label),
+              h('span', {
+                key: 'dot',
+                className: css.graphPickerDot,
+                style: { background: accent, boxShadow: '0 0 8px ' + accent },
+                'aria-hidden': true,
+              })),
+            canCreate
+              ? h('span', { key: 'actions', className: css.graphPickerGroupActions },
+                  h('button', {
+                    key: 'create-session',
+                    type: 'button',
+                    draggable: false,
+                    className: css.graphPickerGroupAction,
+                    'data-group': group.key,
+                    'data-kind': 'session',
+                    title: t('graph.createSession'),
+                    'aria-label': t('graph.createSession'),
+                    disabled: busy !== null,
+                    onPointerDown: (event) => event.stopPropagation(),
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      runCreate('session', group.key);
+                    },
+                  }, createSessionIcon()),
+                  h('button', {
+                    key: 'create-target',
+                    type: 'button',
+                    draggable: false,
+                    className: css.graphPickerGroupAction,
+                    'data-group': group.key,
+                    'data-kind': 'target',
+                    title: t('graph.createTarget'),
+                    'aria-label': t('graph.createTarget'),
+                    disabled: busy !== null,
+                    onPointerDown: (event) => event.stopPropagation(),
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      runCreate('target', group.key);
+                    },
+                  }, createTargetIcon()))
+              : null),
           expanded ? h('div', { key: 'items', className: css.graphPickerItems },
             group.items.map((item) => {
               const badges = stateBadges(states === undefined || states === null ? undefined : states[item.key], t);
@@ -294,6 +422,7 @@ window.__ModuleLoader__.load({
                 tabIndex: 0,
                 draggable: true,
                 'data-session': item.key,
+                'data-blank': item.blank === true ? 'true' : undefined,
                 title: t('graph.pickerItemHint', { title: item.label }),
                 onDragStart: (event) => {
                   event.dataTransfer.setData(dragMime, item.key);
@@ -309,7 +438,7 @@ window.__ModuleLoader__.load({
               },
                 h('div', {
                   key: 'top',
-                  className: item.target === true && typeof onDeleteTarget === 'function'
+                  className: typeof onDeleteSession === 'function'
                     ? cx(css.graphPickerCardTop, css.graphPickerCardTopWithDelete)
                     : css.graphPickerCardTop,
                 },
@@ -342,22 +471,26 @@ window.__ModuleLoader__.load({
                     strokeLinecap: 'round',
                     strokeLinejoin: 'round',
                   }))),
-                // 只有目标卡片提供删除：普通会话在平铺的切换菜单里已经有垃圾桶。
-                item.target === true && typeof onDeleteTarget === 'function'
+                /*
+                 * 所有卡片都能删：空白会话与普通会话在平台原生侧边栏里要么不显示、
+                 * 要么入口很远；员工目标更是只存在本面板。统一走平台的删除确认框，
+                 * 删除目标时 onDeleted 会顺手清目标记录与箭头。
+                 */
+                typeof onDeleteSession === 'function'
                   ? h('button', {
-                      key: 'delete-target',
+                      key: 'delete-session',
                       type: 'button',
                       draggable: false,
                       className: css.graphPickerDelete,
-                      title: t('graph.deleteTarget'),
-                      'aria-label': t('graph.deleteTarget'),
+                      title: t('graph.deleteSessionNamed', { title: item.label }),
+                      'aria-label': t('graph.deleteSessionNamed', { title: item.label }),
                       onPointerDown: (event) => {
                         event.preventDefault();
                         event.stopPropagation();
                       },
                       onClick: (event) => {
                         event.stopPropagation();
-                        onDeleteTarget(item.key, item.label);
+                        onDeleteSession(item.key, item.label);
                       },
                     }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
                       h('path', {
@@ -641,18 +774,18 @@ window.__ModuleLoader__.load({
            * 必须给一个删除位置；已连线的目标也允许从这里删，边会随会话一起清掉。
            * 待连线时右上角已经有「移出画布」，删除放到它下面一行，避免两个 × 叠住。
            */
-          card.target === true && typeof actions.deleteTarget === 'function'
+          card.target === true && typeof actions.deleteSession === 'function'
             ? h('button', {
                 key: 'delete-target',
                 type: 'button',
                 className: css.graphCardDelete,
                 style: { top: isStaged ? '28px' : '5px' },
-                title: t('graph.deleteTarget'),
-                'aria-label': t('graph.deleteTarget'),
+                title: t('graph.deleteSessionNamed', { title: label }),
+                'aria-label': t('graph.deleteSessionNamed', { title: label }),
                 onPointerDown: (event) => event.stopPropagation(),
                 onClick: (event) => {
                   event.stopPropagation();
-                  actions.deleteTarget(card.key, label);
+                  actions.deleteSession(card.key, label);
                 },
               }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
                 h('path', {
@@ -913,7 +1046,9 @@ window.__ModuleLoader__.load({
                 states,
                 onStage: actions.stageSession,
                 onCollapse: () => setPickerCollapsed(true),
-                onDeleteTarget: actions.deleteTarget,
+                onDeleteSession: actions.deleteSession,
+                onCreateSession: actions.createSession,
+                onCreateTarget: actions.createTarget,
                 t,
                 css,
                 cx,

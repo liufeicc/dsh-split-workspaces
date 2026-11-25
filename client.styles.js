@@ -274,8 +274,19 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphPickerScroll{flex:1;min-height:0;overflow:auto;padding:6px}',
       '.dshSplitWs_graphPickerEmpty{padding:16px 8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;text-align:center}',
       '.dshSplitWs_graphPickerGroup{display:flex;flex-direction:column}',
-      '.dshSplitWs_graphPickerGroupHead{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;padding:5px 6px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer}',
+      '.dshSplitWs_graphPickerGroupHead{display:flex;align-items:center;gap:4px;width:100%;box-sizing:border-box;padding:3px 4px 3px 6px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer;user-select:none}',
       '.dshSplitWs_graphPickerGroupHead:hover{background:var(--dsw-alias-bg-layer-2)}',
+      // 展开/收起只由这一块承担，右侧两个创建图标是它的兄弟节点（不能嵌套按钮）。
+      '.dshSplitWs_graphPickerGroupToggle{display:flex;align-items:center;gap:6px;flex:1;min-width:0;padding:2px 0;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}',
+      '.dshSplitWs_graphPickerGroupActions{flex:none;display:flex;align-items:center;gap:2px}',
+      /*
+       * 工作区行右侧的「创建会话 / 创建员工」图标。默认半透明常驻（不是只在 hover
+       * 时才出现），否则用户根本不知道这里有入口；悬停或聚焦时压亮。
+       */
+      '.dshSplitWs_graphPickerGroupAction{display:flex;align-items:center;justify-content:center;flex:none;width:22px;height:22px;box-sizing:border-box;padding:0;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;opacity:.72;transition:opacity .12s ease,color .12s ease,background .12s ease}',
+      '.dshSplitWs_graphPickerGroupAction:hover{opacity:1;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3,var(--dsw-alias-bg-layer-2))}',
+      '.dshSplitWs_graphPickerGroupAction:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px;opacity:1}',
+      '.dshSplitWs_graphPickerGroupAction:disabled{opacity:.32;cursor:default}',
       '.dshSplitWs_graphPickerChevron{flex:none;width:12px;color:var(--dsw-alias-label-secondary);font-size:10px;line-height:18px}',
       '.dshSplitWs_graphPickerGroupLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}',
       '.dshSplitWs_graphPickerItems{display:flex;flex-direction:column;gap:1px;padding:2px 0 4px}',
@@ -404,8 +415,12 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphPickerTitle::before{content:"";display:inline-block;width:6px;height:6px;margin-right:8px;border-radius:50%;background:var(--sw-neon);box-shadow:0 0 10px var(--sw-neon);vertical-align:1px;animation:dshSplitWsBlink 2.4s ease-in-out infinite}',
       '.dshSplitWs_graphPickerHint{color:var(--sw-muted);font-size:10.5px;letter-spacing:.03em}',
       '.dshSplitWs_graphPickerGroup{margin-bottom:2px}',
-      '.dshSplitWs_graphPickerGroupHead{padding:7px 8px;border-radius:8px;color:var(--sw-text);font-size:11.5px;letter-spacing:.05em;transition:background .18s ease,box-shadow .18s ease}',
+      '.dshSplitWs_graphPickerGroupHead{padding:5px 5px 5px 8px;border-radius:8px;color:var(--sw-text);font-size:11.5px;letter-spacing:.05em;transition:background .18s ease,box-shadow .18s ease}',
       '.dshSplitWs_graphPickerGroupHead:hover{background:color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 12%,transparent);box-shadow:inset 0 0 18px color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 10%,transparent)}',
+      '.dshSplitWs_graphPickerGroupAction{color:var(--sw-muted);opacity:.7}',
+      '.dshSplitWs_graphPickerGroupAction:hover{opacity:1;color:var(--sw-text);background:color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 16%,transparent);box-shadow:inset 0 0 10px color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 12%,transparent)}',
+      '.dshSplitWs_graphPickerGroupAction:focus-visible{outline-color:var(--pick-accent,var(--sw-neon))}',
+      '.dshSplitWs_graphPickerGroupAction:disabled{opacity:.3;box-shadow:none}',
       '.dshSplitWs_graphPickerGroupOpen .dshSplitWs_graphPickerChevron{transform:rotate(90deg)}',
       '.dshSplitWs_graphPickerChevron{color:var(--pick-accent,var(--sw-neon));transition:transform .22s ease;filter:drop-shadow(0 0 4px var(--sw-glow))}',
       '.dshSplitWs_graphPickerGroupLabel{font-weight:600}',
@@ -413,7 +428,7 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphPickerItems{padding:4px 0 8px;animation:dshSplitWsFadeIn .24s ease both}',
       // 会话卡片：左侧一道霓虹竖线，悬停轻微上浮并扫过一道光。
       '.dshSplitWs_graphPickerItem{position:relative;display:flex;flex-direction:column;gap:3px;margin:0 0 6px 10px;padding:9px 10px 8px;border:1px solid rgba(94,231,255,.16);border-radius:10px;background:linear-gradient(150deg,rgba(18,32,52,.85),rgba(8,14,24,.9));box-shadow:0 4px 14px rgba(0,0,0,.3),inset 0 0 18px rgba(94,231,255,.04);align-items:stretch;cursor:grab;user-select:none;overflow:hidden;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;animation:dshSplitWsCardIn .26s cubic-bezier(.2,.8,.2,1) backwards}',
-      // 目标卡片右上角的删除入口：空目标不会出现在平台会话列表里，这里必须给一个。
+      // 每张会话卡片右上角的删除入口：普通会话、空白会话、员工目标统一走这里。
       '.dshSplitWs_graphPickerDelete{position:absolute;top:4px;right:4px;z-index:2;width:18px;height:18px;padding:0;border:0;border-radius:5px;background:rgba(255,77,109,.08);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;opacity:.65;transition:opacity .12s ease,color .12s ease,background .12s ease}',
       '.dshSplitWs_graphPickerItem:hover .dshSplitWs_graphPickerDelete,.dshSplitWs_graphPickerDelete:focus-visible{opacity:1}',
       '.dshSplitWs_graphPickerDelete:hover{background:rgba(255,77,109,.2);color:var(--dsw-alias-state-error-primary)}',
@@ -1047,6 +1062,9 @@ window.__ModuleLoader__.load({
       graphPickerEmpty: 'dshSplitWs_graphPickerEmpty',
       graphPickerGroup: 'dshSplitWs_graphPickerGroup',
       graphPickerGroupHead: 'dshSplitWs_graphPickerGroupHead',
+      graphPickerGroupToggle: 'dshSplitWs_graphPickerGroupToggle',
+      graphPickerGroupActions: 'dshSplitWs_graphPickerGroupActions',
+      graphPickerGroupAction: 'dshSplitWs_graphPickerGroupAction',
       graphPickerGroupOpen: 'dshSplitWs_graphPickerGroupOpen',
       graphPickerChevron: 'dshSplitWs_graphPickerChevron',
       graphPickerGroupLabel: 'dshSplitWs_graphPickerGroupLabel',

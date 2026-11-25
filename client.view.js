@@ -640,6 +640,86 @@ window.__ModuleLoader__.load({
         }, [paneActions]);
 
         /**
+         * 任务分派左侧工作区行上的「创建会话」。
+         *
+         * 规则与窗格里的「新建会话」一致：本工作区已有普通空白会话就直接复用它，
+         * 只有没有时才让 Host 真正新建。差别只是**不切换任何窗格** —— 新会话会作为
+         * 一张「未命名会话」卡片出现在左侧列表里，等用户自己拖进画布。
+         *
+         * 目标（员工）不参与复用：它已经有明确用途，被普通新建抢走会让画布上的
+         * 节点悄悄换会话。
+         *
+         * @param workspaceId - 在哪个工作区里创建。
+         * @returns `{ ok, sessionId?, reason? }`；失败时同时写面板顶部错误行。
+         */
+        const createPickerSession = useCallback(async (workspaceId) => {
+          setAddError(null);
+          const workspace = workspaceById.get(workspaceId);
+          if (workspace === undefined) {
+            setAddError(t('graph.createSessionFailed') + ': ' + t('pane.unknownWorkspace'));
+            return { ok: false, reason: 'unknown workspace' };
+          }
+          const reusable = model.reusableBlankSession(
+            workspace,
+            sessionState,
+            archivedSessionIds,
+            [],
+            targetIds,
+          );
+          if (reusable !== undefined) {
+            // 已经有空白会话：不惊动 Host，卡片本来就会出现在左侧列表里。
+            return { ok: true, sessionId: reusable, reused: true };
+          }
+          if (typeof paneActions.createSession !== 'function') {
+            setAddError(t('graph.createSessionFailed') + ': ' + t('graph.createUnavailable'));
+            return { ok: false, reason: 'create session unavailable' };
+          }
+          try {
+            const result = await paneActions.createSession(workspaceId, uiWorkspace);
+            if (result === undefined || result === null || result.ok !== true) {
+              const reason = result !== undefined && result !== null && typeof result.reason === 'string'
+                ? result.reason
+                : 'unknown error';
+              setAddError(t('graph.createSessionFailed') + ': ' + reason);
+            }
+            return result;
+          } catch (reason) {
+            setAddError(t('graph.createSessionFailed') + ': ' + errorText(reason));
+            return { ok: false, reason: errorText(reason) };
+          }
+        }, [workspaceById, model, sessionState, archivedSessionIds, targetIds, paneActions, uiWorkspace, t]);
+
+        /**
+         * 任务分派左侧工作区行上的「创建员工」。
+         *
+         * 每次都必须得到一条**新的**空白会话，再登记成目标（员工）；登记成功后它会
+         * 以「未命名员工」卡片出现在该工作区下面，用户可以直接拖进画布连线。
+         *
+         * @param workspaceId - 员工所属工作区。
+         * @returns `{ ok, sessionId?, reason? }`；失败时同时写面板顶部错误行。
+         */
+        const createPickerTarget = useCallback(async (workspaceId) => {
+          setAddError(null);
+          if (typeof paneActions.createTarget !== 'function') {
+            setAddError(t('graph.createTargetFailed') + ': ' + t('graph.createUnavailable'));
+            return { ok: false, reason: 'create target unavailable' };
+          }
+          try {
+            const result = await paneActions.createTarget(workspaceId, uiWorkspace);
+            if (result === undefined || result === null || result.ok !== true) {
+              const reason = result !== undefined && result !== null && typeof result.reason === 'string'
+                ? result.reason
+                : 'unknown error';
+              setAddError(t('graph.createTargetFailed') + ': ' + reason);
+            }
+            return result;
+          } catch (reason) {
+            setAddError(t('graph.createTargetFailed') + ': ' + errorText(reason));
+            return { ok: false, reason: errorText(reason) };
+          }
+        }, [paneActions, uiWorkspace, t]);
+
+        /**
          * 文件夹选择器的失败带一个标记，好让调用方说清是「选择器打不开」还是
          * 「工作区建不出来」——这两种失败用户能做的事不一样。
          */
@@ -824,6 +904,15 @@ window.__ModuleLoader__.load({
           const seen = new Set();
           const rows = [];
           /*
+           * **普通空白会话每个工作区只收最近更新的一条**。
+           *
+           * 用户明确要求「没输入过的会话也显示成卡片」，否则刚建完的会话在任务分派里
+           * 找不到；但「新建会话优先复用空白会话」的规则不变，正常情况下一个工作区
+           * 最多也就一个空壳。历史上反复新建可能留下多个，全列出来会把左侧刷满，
+           * 因此按 `selectableSessions` 的更新时间倒序，只保留最新的那一个。
+           */
+          const blankWorkspaces = new Set();
+          /*
            * 候选是**全部已存在的会话**，不再限于「当前铺在棋盘上的工作区」。
            *
            * 理由：委派关系是会话之间的事，跟哪个工作区现在开着没关系。真实需求里常见
@@ -838,8 +927,15 @@ window.__ModuleLoader__.load({
           for (const workspace of items) {
             for (const row of model.selectableSessions(workspace, sessionState, archivedSessionIds, { includeBlank: true, includeTargets: targetIds })) {
               if (seen.has(row.id)) continue;
-              // 普通空白会话不显示；带目标记录的空会话才显示成「未命名目标」。
-              if (row.blank === true && !targetIds.has(row.id)) continue;
+              /*
+               * 普通空白会话（没有目标记录）也要作为候选：任务分派左侧现在会把
+               * 「未命名会话」显示成卡片。每个工作区只留最近更新的一条，避免历史
+               * 空壳刷屏；目标不占这个名额，永远显示。
+               */
+              if (row.blank === true && !targetIds.has(row.id)) {
+                if (blankWorkspaces.has(workspace.workspaceId)) continue;
+                blankWorkspaces.add(workspace.workspaceId);
+              }
               seen.add(row.id);
               rows.push({ row, workspace });
             }
@@ -989,14 +1085,13 @@ window.__ModuleLoader__.load({
          * 「还能加入的」，用户不用在已加入的条目里辨认状态。把它移出画布（卡片右上角 ×，
          * 或删掉箭头后回到待连线再移出）之后，它会重新出现在这里。
          *
-         * 分组与字母排序交给模型（`groupSessionsByWorkspace`）；没有任何可选项的工作区
-         * 整组隐藏，避免展开一个空组。
+         * 分组、字母排序与「空工作区补组」都交给模型（`groupSessionsByWorkspace`）。
+         * **没有可选项的工作区也要保留组行**：每个工作区行右侧都有「创建会话 / 创建员工」
+         * 两个入口，组一隐藏，用户就没法给这个工作区建第一张卡片。
          *
-         * **空白会话要额外过一道筛**：普通空白会话（包括当前窗格正打开的那个）一律
-         * 不列；只有带目标记录的空白会话才显示成「未命名目标」。平台每次新建会话都会
-         * 立即落一个空白记录，历史上反复新建会攒出很多没有用途的空壳，全列出来只会
-         * 把左侧刷满。已经连进图的目标不受影响 —— 它本来就不在左侧列（被 connected
-         * 过滤），画布卡片照常渲染。
+         * **空白会话**：普通空白会话（没输入过内容）也会显示成「未命名会话」卡片，
+         * 方便建完马上在任务分派里看到；`graphCards` 已按工作区只保留最近更新的一条，
+         * 不会把历史空壳全列出来。带目标记录的空会话仍显示成「未命名员工」。
          */
         const pickerGroups = useMemo(() => {
           const connected = new Set();
@@ -1004,7 +1099,10 @@ window.__ModuleLoader__.load({
             connected.add(edge.from);
             connected.add(edge.to);
           }
-          return graphModel.groupSessionsByWorkspace(graphCards, { unknownLabel: t('pane.unknownWorkspace') })
+          return graphModel.groupSessionsByWorkspace(graphCards, {
+            unknownLabel: t('pane.unknownWorkspace'),
+            workspaces: items,
+          })
             .map((group) => ({
               key: group.key,
               label: group.label,
@@ -1012,20 +1110,19 @@ window.__ModuleLoader__.load({
                 .map((id) => graphCardById.get(id))
                 .filter((card) => card !== undefined
                   && !connected.has(card.key)
-                  && !stagedSessions.has(card.key)
-                  && (card.blank !== true || card.target === true))
+                  && !stagedSessions.has(card.key))
                 .map((card) => ({
                   key: card.key,
                   label: card.label,
                   workspaceTitle: card.workspaceTitle,
                   running: card.running === true,
-                  // 目标卡片在左侧带一个删除入口：空目标不会出现在平台侧边栏，
-                  // 用户否则没有地方删它。
+                  // 普通空白会话与目标都保留标记：前者用于「未命名会话」命名，
+                  // 后者用于画布/删除时的语义判断。
+                  blank: card.blank === true,
                   target: card.target === true,
                 })),
-            }))
-            .filter((group) => group.items.length > 0);
-        }, [graphCards, graphCardById, graphState.edges, stagedSessions, graphModel, t]);
+            }));
+        }, [graphCards, graphCardById, graphState.edges, stagedSessions, graphModel, items, t]);
 
         /**
          * 把画出来的箭头换算成 Host 的绑定表，并在它变化时同步过去。
@@ -1499,10 +1596,11 @@ window.__ModuleLoader__.load({
               openFloatingPane(sessionId, card === undefined ? '' : card.workspaceKey);
             },
             /*
-             * 删除目标：走平台会话删除的确认弹窗；会话删掉后 client.js 的
-             * onDeleted 会同时清掉目标记录和牵涉的箭头。
+             * 删除会话：左侧每一张卡片（普通会话 / 空白会话 / 目标员工）都走
+             * 平台会话删除的确认弹窗；会话删掉后 client.js 的 onDeleted 会同时
+             * 清掉目标记录和牵涉的箭头。
              */
-            deleteTarget: (sessionId, displayTitle) => {
+            deleteSession: (sessionId, displayTitle) => {
               if (typeof requestSessionDelete !== 'function') {
                 setAddError(t('graph.deleteUnavailable'));
                 return;
@@ -1510,6 +1608,8 @@ window.__ModuleLoader__.load({
               const accepted = requestSessionDelete(sessionId, displayTitle);
               if (accepted === false) setAddError(t('graph.deleteUnavailable'));
             },
+            createSession: createPickerSession,
+            createTarget: createPickerTarget,
             stageSession,
             unstageSession,
           },

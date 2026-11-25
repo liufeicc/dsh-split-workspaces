@@ -233,15 +233,20 @@ permission.
 - **Candidates grouped by workspace**: the canvas no longer tiles every session. A left-hand
   picker groups sessions by workspace (groups sorted alphabetically, collapsed by default);
   open a workspace to list its session cards, then drag one onto the canvas (or click it) to add
-  it. **Added sessions disappear from the left-hand list** and come back only after being removed
-  from the canvas. A dragged card first waits in the canvas's left-hand "unwired" column with a
-  dashed border; it joins the tree on the right only after an arrow is drawn, and drops back to
-  unwired when that arrow is deleted. Sessions **with content** that belong to no registered
-  workspace go into an "unknown workspace" group at the end. **Ordinary blank sessions are
-  never listed** — not even the one open in a pane: the platform persists a blank record the
-  moment it is created, so unused shells would otherwise fill the picker with identical names.
-  Only a blank session carrying a **target record** is listed, as "Untitled target"; once it
-  has content or a real title, that title is shown instead.
+  it. **Every workspace row has two buttons on its right**: `Create session` (reuses an existing
+  blank session in that workspace, creating one only when none exists) and `Create employee`
+  (always creates a fresh blank session and registers it as a delegation target). Creating
+  expands the workspace automatically. **Workspaces without sessions keep their group row**,
+  so the new buttons always have a place to live. **Added sessions disappear from the left-hand
+  list** and come back only after being removed from the canvas. A dragged card first waits in
+  the canvas's left-hand "unwired" column with a dashed border; it joins the tree on the right
+  only after an arrow is drawn, and drops back to unwired when that arrow is deleted. Sessions
+  **with content** that belong to no registered workspace go into an "unknown workspace" group
+  at the end. Ordinary blank sessions appear as **"Untitled session"** cards (newest one per
+  workspace only, so historic shells do not flood the picker); a blank session carrying a
+  **target record** appears as "Untitled employee". Once it has content or a real title, that
+  title is shown instead. **Every card has a delete button at its top-right**, for ordinary,
+  blank, and employee sessions alike; target deletion also clears the target record and edges.
 - **Collapse the left column**: click `‹` next to "Session nodes" to collapse the whole column
   and let the canvas fill the panel; click `›` in the canvas's top-left corner to expand it.
   The collapsed state is per page and resets on a mode switch or reload.
@@ -531,27 +536,29 @@ visual only — delivery, waiting and reviews are unchanged.
   - **A freshly split** pane starts empty and prompts "Pick an existing session for this
     pane, or start a new one" — so two panes will not inexplicably show the same
     conversation. Which workspace it shows is what the split menu's second step selected.
-- **Ordinary blank sessions never enter the list**: a session that exists but has never been
-  sent a message (`blank: true` on the Host) does not appear in the `Switch session` menu or
-  Design mode's picker, and is not followed as a workspace's "latest session" — otherwise a
-  few stray clicks on `New session` would pile up identically named shells. This follows the
-  native DSH sidebar ("only the currently selected blank session is visible"), just further.
-- **Targets are the exception**: a blank session with a target record is listed in Design
-  mode's picker, the pane's `Switch session` menu and the replace menu as "Untitled target",
+- **Ordinary blank sessions stay out of the session menus**: a session that exists but has never
+  been sent a message (`blank: true` on the Host) does not appear in the `Switch session` menu
+  and is not followed as a workspace's "latest session" — otherwise a few stray clicks on
+  `New session` would pile up identically named shells. This follows the native DSH sidebar
+  ("only the currently selected blank session is visible"). **Design mode's picker is the
+  exception**: it shows a blank session as an "Untitled session" card so it can be wired right
+  away; only the newest blank per workspace is listed, so historic shells do not flood the list.
+- **Sessions with a target record** appear in Design mode's picker as "Untitled employee",
   because "create the target first, wire it, then dispatch work into it" is a real workflow.
   Once it has content or a title, the real title is shown; there is no extra badge. The target
   record lives in its own Host file (`storages/pane_dispatch_targets.json`) and exists the
   moment it is created — it does not depend on "Save canvas". Saving the canvas only stores
   the graph's nodes, edges and positions. A blank target does **not** appear in the platform's
-  native session list (that list only shows the currently selected blank session), so the
-  delete entry lives on the target card's top-right trash button in Design mode (both the
-  left-hand card and the canvas card; it opens the platform's delete confirmation and also
-  clears the target record and its edges).
+  native session list (that list only shows the currently selected blank session), so **every
+  card in Design mode's left-hand list now has a trash button at its top-right** — ordinary,
+  blank, and employee sessions alike. It opens the platform's delete confirmation; deleting a
+  target also clears its target record and edges.
 - **`New session` reuses an ordinary blank session first**: when this workspace already has a
   blank session that no other pane is pinned to, the pane switches to it right away (still
   applying the pane's staged mode) instead of asking the Host to create another empty record.
-  Targets are excluded from reuse: switching one away would silently change a Design-mode
-  node's session.
+  The `Create session` icon on a workspace row follows the same reuse rule, but **does not
+  switch any pane**; the card simply appears in the left-hand list. Targets are excluded from
+  reuse: switching one away would silently change a Design-mode node's session.
 - **The candidates in the split menu's second step**: it lists **all** workspaces, but those
   not yet tiled come first (the primary intent of splitting is to spread another workspace
   out), while those already tiled in other panes come later with the hint on the right

@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
      * 看一眼画布左下角那行自诊断就知道 —— 之前「刷新后箭头没了」查了两轮，卡住的
      * 正是「无法确认浏览器到底加载了哪一版」。
      */
-    const CLIENT_BUILD = '2026-11-19e';
+    const CLIENT_BUILD = '2026-11-26a';
 
     /** 把一个裸可观察源的 subscribe 包成 uSES 需要的稳定函数。 */
     function subscribeTo(source) {
@@ -1043,14 +1043,20 @@ window.__ModuleLoader__.load({
               blank: row.blank === true,
               target,
               /*
-               * 能不能改名：**只有已经有明确标题的会话**才行。
+               * 能不能改名：**已有明确标题的会话**，或者**目标员工**。
                *
-               * 「未命名会话」和「未命名员工」都是还没有标题的占位卡：平台会把它们的
-               * 标题回退成项目目录名或「未命名」，即便写进一个标题，界面上也仍然显示
-               * 占位名。所以这类卡片干脆不给改名入口（铅笔不渲染），避免用户改完
-               * 发现「名字没变」。`explicitTitle` 为空就是这一类。
+               * 「未命名会话」是普通空白会话的占位卡：平台会把标题回退成项目目录名，
+               * 即便写进标题也显示不出来，所以不给改名入口。
+               * 「未命名员工」不一样：它是用户显式创建的目标，允许先给它起一个名字，
+               * 再连到画布上；动作层也会对目标放行。
                */
-              renameable: explicitTitle !== '',
+              renameable: explicitTitle !== '' || target === true,
+              /*
+               * 改名弹层的初始草稿。用**显式标题**而不是显示名：未命名员工的显示名是
+               * 「未命名员工」，把它预填进输入框会让用户先删一遍；这里留空，
+               * 让 placeholder 提示「输入名称」。
+               */
+              renameTitle: explicitTitle,
             };
           });
         }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t, targetIds, targetState, stagedSessions]);
@@ -1159,8 +1165,9 @@ window.__ModuleLoader__.load({
                   // 后者用于画布/删除时的语义判断。
                   blank: card.blank === true,
                   target: card.target === true,
-                  // 未命名的卡片不给改名入口（理由见 `graphCards` 里的 `renameable`）。
+                  // 未命名会话不给改名入口；未命名员工可以（理由见 `graphCards` 的 `renameable`）。
                   renameable: card.renameable === true,
+                  renameTitle: card.renameTitle === undefined ? '' : card.renameTitle,
                 })),
             }));
         }, [graphCards, graphCardById, graphState.edges, stagedSessions, graphModel, items, t]);

@@ -181,6 +181,31 @@ check('松手落在卡片上就算命中', (() => {
 check('松手落在空白处什么都不做', graph.resolveDrop([], layout, 'a', { x: -100, y: -100 }).over === null);
 check('松手落回自己身上不算一条边', graph.resolveDrop([], layout, 'a', { x: at('a').x + 1, y: at('a').y + 1 }).over === null);
 
+// ── 拖拽边缘自动滚动 ──
+{
+  const rect = { left: 100, top: 50, right: 500, bottom: 450 };
+  const mid = graph.edgeScrollVelocity(rect, { x: 300, y: 250 });
+  check('指针在画布中间时不自动滚动', mid.dx === 0 && mid.dy === 0, JSON.stringify(mid));
+  const top = graph.edgeScrollVelocity(rect, { x: 300, y: 55 });
+  check('靠近上边缘时向上滚', top.dy < 0 && top.dx === 0, JSON.stringify(top));
+  const bottom = graph.edgeScrollVelocity(rect, { x: 300, y: 445 });
+  check('靠近下边缘时向下滚', bottom.dy > 0 && bottom.dx === 0, JSON.stringify(bottom));
+  const left = graph.edgeScrollVelocity(rect, { x: 105, y: 250 });
+  const right = graph.edgeScrollVelocity(rect, { x: 495, y: 250 });
+  check('左右边缘各自向对应方向滚', left.dx < 0 && right.dx > 0, JSON.stringify({ left, right }));
+  const corner = graph.edgeScrollVelocity(rect, { x: 102, y: 52 });
+  check('角落同时滚两个轴', corner.dx < 0 && corner.dy < 0, JSON.stringify(corner));
+  const clamped = graph.edgeScrollVelocity(rect, { x: 300, y: -1000 });
+  check('指针拖到视口外时速度封顶', clamped.dy === -14, JSON.stringify(clamped));
+  const near = graph.edgeScrollVelocity(rect, { x: 300, y: rect.top + 1 }, { edge: 64, max: 14 }).dy;
+  const far = graph.edgeScrollVelocity(rect, { x: 300, y: rect.top + 63 }, { edge: 64, max: 14 }).dy;
+  check('越靠近边缘滚得越快', Math.abs(near) > Math.abs(far), String(near) + ' vs ' + String(far));
+  check('视口尺寸为 0 时不会产生 NaN/Infinity', (() => {
+    const value = graph.edgeScrollVelocity({ left: 0, top: 0, right: 0, bottom: 0 }, { x: 0, y: 0 });
+    return Number.isFinite(value.dx) && Number.isFinite(value.dy);
+  })());
+}
+
 // ── 图 → 绑定 ──
 const describe = (map) => (key) => map[key] ?? null;
 const bindings = graph.bindingsFromEdges(

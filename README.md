@@ -231,6 +231,8 @@ deleting an arrow revokes the authorization. There is no second configuration: t
 permission.
 
 - **Draw one**: drag from the dot on a card's right edge onto another card.
+  When the pointer reaches within 64 px of the canvas edge, the canvas auto-scrolls, so a
+  long-distance connection does not require scrolling first.
 - **See the content**: click a card to open that session in a floating window — draggable,
   accepting input, and leaving the design canvas in place.
 - **Delete one**: click the small cross at the arrow's midpoint.

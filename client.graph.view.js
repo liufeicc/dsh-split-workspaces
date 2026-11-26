@@ -520,7 +520,7 @@ window.__ModuleLoader__.load({
                           },
                           onClick: (event) => {
                             event.stopPropagation();
-                            onRenameSession(item.key, item.label);
+                            onRenameSession(item.key, item.renameTitle);
                           },
                         }, renameIcon())
                       : null,
@@ -759,8 +759,28 @@ window.__ModuleLoader__.load({
     function GraphBoard(props) {
       const { cards: cardList, states, edges, layout, graph, actions, pickerGroups, t, css, cx, degraded, diagnostic, videoViewerAvailable, onOpenVideoViewer, imageEditorAvailable, onOpenImageEditor } = props;
       const canvasRef = useRef(null);
+      /**
+       * 真正负责滚动的容器（`graphScroll`，`overflow:auto`）。
+       *
+       * 不能拿 `canvasRef` 代替：它指向里面的 `graphCanvas` 内容层，那一层的
+       * `scrollTop` 永远是 0。自动滚动必须改这个容器的 `scrollLeft` / `scrollTop`。
+       */
+      const scrollRef = useRef(null);
       /** 正在拉的那条线：`{ from, x, y }`，`x` / `y` 是画布坐标。 */
       const [drag, setDrag] = useState(null);
+      /**
+       * 拖拽期间的原始指针位置（视口坐标）。自动滚动循环每帧都要用它算速度，
+       * 所以不能只存在 state 里 —— state 是画布坐标，且更新是异步的。
+       */
+      const pointerRef = useRef({ x: 0, y: 0, valid: false });
+      /**
+       * 与 `drag` 同步的引用。自动滚动每帧都要读最新端点，不能依赖 effect 闭包里
+       * 捕获的旧 `drag`；`onUp` 也从这里拿起点，避免 effect 因每次 pointermove
+       * 重建监听（那会让 rAF 反复取消/重启）。
+       */
+      const dragRef = useRef(null);
+      /** 自动滚动循环的 rAF id；拖拽结束/取消时停掉。 */
+      const autoScrollRef = useRef(null);
       /** 上一次被拒绝的原因码；下一次成功连边或换手势时清掉。 */
       const [rejectCode, setRejectCode] = useState(null);
       /** 正在编辑说明的那条边 `{ from, to }`；null 表示没有在编辑。 */
@@ -796,14 +816,15 @@ window.__ModuleLoader__.load({
         return index;
       }, [layout]);
 
-      /** 画布坐标：把视口坐标减去画布在视口里的位置，再补上滚动偏移。 */
+      /** 画布坐标：把视口坐标减去内容层在视口里的位置，再补上滚动容器的偏移。 */
       const toCanvas = useCallback((event) => {
-        const node = canvasRef.current;
-        if (node === null) return { x: 0, y: 0 };
-        const rect = node.getBoundingClientRect();
+        const canvas = canvasRef.current;
+        if (canvas === null) return { x: 0, y: 0 };
+        const scroll = scrollRef.current;
+        const rect = canvas.getBoundingClientRect();
         return {
-          x: event.clientX - rect.left + node.scrollLeft,
-          y: event.clientY - rect.top + node.scrollTop,
+          x: event.clientX - rect.left + (scroll === null ? 0 : scroll.scrollLeft),
+          y: event.clientY - rect.top + (scroll === null ? 0 : scroll.scrollTop),
         };
       }, []);
 
@@ -812,7 +833,9 @@ window.__ModuleLoader__.load({
         event.stopPropagation();
         setRejectCode(null);
         const point = toCanvas(event);
-        setDrag({ from: paneKey, x: point.x, y: point.y });
+        pointerRef.current = { x: event.clientX, y: event.clientY, valid: true };
+        dragRef.current = { from: paneKey, x: point.x, y: point.y };
+        setDrag(dragRef.current);
       }, [toCanvas]);
 
       /*
@@ -850,15 +873,23 @@ window.__ModuleLoader__.load({
        * 拖动期间的监听挂在 window 上，而不是画布节点上：指针一旦移出画布（用户往往
        * 正是拖到边缘那张卡片上），画布自己就收不到 move / up 了，拖动会卡在半路。
        */
+      /** 是否正在拉线；用它做 effect 依赖，避免每次 pointermove 都重挂监听。 */
+      const dragging = drag !== null;
       useEffect(() => {
-        if (drag === null) return undefined;
+        if (!dragging) return undefined;
         const onMove = (event) => {
+          pointerRef.current = { x: event.clientX, y: event.clientY, valid: true };
           const point = toCanvas(event);
-          setDrag((current) => (current === null ? current : { ...current, x: point.x, y: point.y }));
+          if (dragRef.current === null) return;
+          dragRef.current = { ...dragRef.current, x: point.x, y: point.y };
+          setDrag(dragRef.current);
         };
-        const onUp = (event) => {
-          const current = drag;
+        const finish = (event) => {
+          const current = dragRef.current;
+          dragRef.current = null;
+          pointerRef.current = { ...pointerRef.current, valid: false };
           setDrag(null);
+          if (current === null) return;
           /*
            * 判定整个交给模型里的纯函数（`resolveDrop`）：命中哪张卡片、这条边能不能加，
            * 两个问题的答案都只取决于数据，因此可以在离线测试里逐条喂。视图这边只负责
@@ -873,16 +904,74 @@ window.__ModuleLoader__.load({
           }
           setRejectCode(resolved.verdict.code);
         };
-        const onCancel = () => setDrag(null);
+        const onUp = (event) => finish(event);
+        const onCancel = () => {
+          dragRef.current = null;
+          pointerRef.current = { ...pointerRef.current, valid: false };
+          setDrag(null);
+        };
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
         window.addEventListener('pointercancel', onCancel);
+        /*
+         * 拖到画布边缘时自动滚动。
+         *
+         * 为什么不在 `onMove` 里做：指针停在边缘不动时不会再触发 pointermove，
+         * 而用户恰恰需要「停住、让画布继续滚」。所以用一个 rAF 循环，每帧按
+         * 指针与视口的距离算速度；滚动后同步更新连线端点，线会跟着卡片走。
+         */
+        const tick = () => {
+          const scroll = scrollRef.current;
+          const canvas = canvasRef.current;
+          const pointer = pointerRef.current;
+          if (scroll !== null && canvas !== null && pointer.valid) {
+            /*
+             * 边缘检测用**滚动容器的视口矩形**（用户看到的那块区域）；
+             * 坐标换算再用内容层矩形（它带 padding，且会随滚动移动）。
+             */
+            const viewport = scroll.getBoundingClientRect();
+            const velocity = typeof graph.edgeScrollVelocity === 'function'
+              ? graph.edgeScrollVelocity(viewport, { x: pointer.x, y: pointer.y })
+              : { dx: 0, dy: 0 };
+            if (velocity.dx !== 0 || velocity.dy !== 0) {
+              const beforeX = scroll.scrollLeft;
+              const beforeY = scroll.scrollTop;
+              scroll.scrollLeft += velocity.dx;
+              scroll.scrollTop += velocity.dy;
+              /*
+               * 滚到顶/底时 scrollTop 不再变化，此时不能更新端点：
+               * 否则线会在视觉上「追着指针跑」，但卡片其实没动。
+               */
+              if (scroll.scrollLeft !== beforeX || scroll.scrollTop !== beforeY) {
+                const current = dragRef.current;
+                if (current !== null) {
+                  const canvasRect = canvas.getBoundingClientRect();
+                  const next = {
+                    ...current,
+                    x: pointer.x - canvasRect.left + scroll.scrollLeft,
+                    y: pointer.y - canvasRect.top + scroll.scrollTop,
+                  };
+                  dragRef.current = next;
+                  setDrag(next);
+                }
+              }
+            }
+          }
+          autoScrollRef.current = requestAnimationFrame(tick);
+        };
+        if (typeof requestAnimationFrame === 'function') {
+          autoScrollRef.current = requestAnimationFrame(tick);
+        }
         return () => {
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
           window.removeEventListener('pointercancel', onCancel);
+          if (autoScrollRef.current !== null) {
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(autoScrollRef.current);
+            autoScrollRef.current = null;
+          }
         };
-      }, [drag, toCanvas, layout, edges, graph, actions]);
+      }, [dragging, toCanvas, layout, edges, graph, actions]);
 
       /** 打开某条边的说明编辑器，草稿从这条边现有的说明起头。 */
       const openEditor = (edge) => {
@@ -912,9 +1001,9 @@ window.__ModuleLoader__.load({
         const item = itemsByKey.get(card.key);
         if (item === undefined) return null;
         /*
-         * 「未命名会话 / 未命名员工」不给改名：它们的标题还没有确定（平台会回退成
-         * 目录名或占位名），改了也显示不出来。能不能改由视图层的 `renameable` 决定，
-         * 这里只负责不给入口 —— 判断只在**一处**，卡片与左侧列表用的是同一份数据。
+         * 未命名会话不给改名；未命名员工可以（先起名再连到画布）。
+         * 能不能改由视图层的 `renameable` 决定，这里只负责不给入口 ——
+         * 判断只在**一处**，卡片与左侧列表用的是同一份数据。
          */
         const canRenameCard = canRename && card.renameable !== false;
         /*
@@ -996,7 +1085,7 @@ window.__ModuleLoader__.load({
                     },
                     onClick: (event) => {
                       event.stopPropagation();
-                      openRename(card.key, label);
+                      openRename(card.key, card.renameTitle);
                     },
                   }, renameIcon())
                 : null,
@@ -1016,7 +1105,13 @@ window.__ModuleLoader__.load({
                       event.stopPropagation();
                       actions.unstageSession(card.key);
                     },
-                  }, '×')
+                  }, h('svg', { width: 9, height: 9, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                    h('path', {
+                      d: 'M4 4l8 8M12 4l-8 8',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.6,
+                      strokeLinecap: 'round',
+                    })))
                 : null,
               /*
                * 目标卡片的删除入口。空目标不会出现在平台会话列表里，所以画布/左侧
@@ -1307,6 +1402,7 @@ window.__ModuleLoader__.load({
               }),
           h('div', {
             className: css.graphScroll,
+            ref: scrollRef,
             'data-drop': dropActive ? 'true' : 'false',
             onDragOver,
             onDragLeave,

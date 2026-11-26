@@ -321,6 +321,47 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 拖拽连线时，根据指针位置计算画布应该自动滚动的速度。
+     *
+     * 为什么需要它：画布是 `overflow:auto` 的滚动容器，而连线拖拽只监听
+     * `pointermove`。用户从最下面的卡片往上拖时，指针到了视口顶部，画布不会
+     * 跟着滚，最上面的卡片永远在视口外 —— 线就「拉不上去」。
+     *
+     * 规则：指针进入视口四边各 `edge` 像素的范围内就开始滚，越靠近边缘越快，
+     * 封顶 `max` 像素/帧。中间区域返回 0，不影响正常拖拽。
+     *
+     * 纯函数：不读 DOM、不滚动，只根据矩形与指针算速度，方便离线逐条断言。
+     *
+     * @param rect - 视口矩形 `{ left, top, right, bottom }`（也接受 `{ left, top, width, height }`）。
+     * @param point - 指针的视口坐标 `{ x, y }`。
+     * @param options - `{ edge, max }`，默认 64 / 14。
+     * @returns `{ dx, dy }`：每帧应滚动的像素数；0 表示该轴不动。
+     */
+    function edgeScrollVelocity(rect, point, options) {
+      const edge = Number.isFinite(options?.edge) && options.edge > 0 ? options.edge : 64;
+      const max = Number.isFinite(options?.max) && options.max > 0 ? options.max : 14;
+      const left = Number.isFinite(rect?.left) ? rect.left : 0;
+      const top = Number.isFinite(rect?.top) ? rect.top : 0;
+      const right = Number.isFinite(rect?.right)
+        ? rect.right
+        : left + (Number.isFinite(rect?.width) ? rect.width : 0);
+      const bottom = Number.isFinite(rect?.bottom)
+        ? rect.bottom
+        : top + (Number.isFinite(rect?.height) ? rect.height : 0);
+      const x = Number.isFinite(point?.x) ? point.x : left;
+      const y = Number.isFinite(point?.y) ? point.y : top;
+      /** 距离边缘越近，速度越大；至少 1 像素，避免「已经进入边缘却不动」。 */
+      const speedAt = (distance) => Math.min(max, Math.max(1, Math.ceil((distance / edge) * max)));
+      let dx = 0;
+      let dy = 0;
+      if (x < left + edge) dx = -speedAt(left + edge - x);
+      else if (x > right - edge) dx = speedAt(x - (right - edge));
+      if (y < top + edge) dy = -speedAt(top + edge - y);
+      else if (y > bottom - edge) dy = speedAt(y - (bottom - edge));
+      return { dx, dy };
+    }
+
+    /**
      * 从 Host 的绑定表反推出边（用于「刷新页面后把上次画的树恢复出来」）。
      *
      * 绑定表是 `Map<ownerId, { label, targets }>`，一条绑定就是一个 owner 指向若干目标；
@@ -721,6 +762,7 @@ window.__ModuleLoader__.load({
       validateEdge,
       sanitizeEdges,
       resolveDrop,
+      edgeScrollVelocity,
       edgesFromBindings,
       groupSessionsByWorkspace,
       layoutGraph,

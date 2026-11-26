@@ -1,6 +1,10 @@
 /**
  * 多工作区平铺 —— 客户端入口块。
  *
+ * 2026-11-26：客户端构建标记推到 2026-11-26a（拖拽边缘自动滚动、卡片动作横排）。
+ * 改这一行不是装饰：DSH 的客户端代码块 `rev` 只跟**入口文件**的 mtime/ctime/size 走，
+ * 只改子块（`client.view.js` 等）不会让浏览器重新拉取带 `immutable` 缓存的旧 chunk。
+ *
  * 它在 Web 界面里提供三样东西：
  *   1. 侧边栏的一行图标（`sidebar.panellist`），点开把主区切到本面板；
  *   2. 主面板本身（`main`，key = `split-workspaces`）：一块可以上下左右平铺、
@@ -649,11 +653,11 @@ window.__ModuleLoader__.load({
             return { ok: false, reason: t('graph.renameUnavailable') };
           }
           /*
-           * 未命名的会话（还没有标题的空白会话 / 未命名员工）不允许改名。
+           * 未命名的**普通空白会话**不允许改名；**未命名员工**（目标）允许先起名。
            *
-           * 界面已经不给这类卡片渲染铅笔，这里再挡一层：调用方绕过来时也只会得到
-           * 一句人话，而不是「改完还是未命名」。判定看会话列表里的 `title` ——
-           * 它存在才说明这个会话已经有名字。
+           * 普通空白会话的标题会被平台回退成目录名，改了也显示不出来，所以拦掉；
+           * 目标员工是用户显式创建的对象，给它起名是有意义的动作。
+           * 判定看会话列表里的 `title`，再用 `targetStore.isTarget` 区分两类空标题。
            */
           const list = sessions.list;
           const snapshot = list !== undefined && list !== null && typeof list.getSnapshot === 'function'
@@ -664,7 +668,9 @@ window.__ModuleLoader__.load({
             : snapshot.byId[sessionId];
           if (summary === undefined) return { ok: false, reason: t('graph.renameInvalid') };
           if (typeof summary.title !== 'string' || summary.title === '') {
-            return { ok: false, reason: t('graph.renameUntitled') };
+            if (!targetStore.isTarget(sessionId)) {
+              return { ok: false, reason: t('graph.renameUntitled') };
+            }
           }
           try {
             await sessions.using(sessionId, { source: mods.model.SESSION_SOURCE }, async (reference) => {

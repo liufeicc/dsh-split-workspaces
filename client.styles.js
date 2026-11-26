@@ -342,7 +342,7 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphCard{position:absolute;display:flex;flex-direction:row;gap:0;box-sizing:border-box;padding:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;overflow:hidden}',
       '.dshSplitWs_graphCardBody{display:flex;flex:1 1 auto;flex-direction:column;gap:4px;min-width:0;padding:10px 12px}',
       // 右上角有动作按钮时，正文右侧让出按钮那一列，标题不会被压住。
-      '.dshSplitWs_graphCard[data-actions=true] .dshSplitWs_graphCardBody{padding-right:28px}',
+      '.dshSplitWs_graphCard[data-actions=true] .dshSplitWs_graphCardWorkspace{padding-right:64px}',
       // 左侧小人：固定宽度，竖线只占视觉宽度；整块不接收指针，点击仍落在卡片上。
       '.dshSplitWs_graphCardAgent{position:relative;flex:none;display:flex;align-items:center;justify-content:center;width:46px;color:var(--card-accent,var(--dshSplitWs-accent));opacity:.42;pointer-events:none}',
       '.dshSplitWs_graphCardAgent::before{content:"";position:absolute;right:0;top:10px;bottom:10px;width:1px;background:var(--dsw-alias-border-l1)}',
@@ -408,16 +408,16 @@ window.__ModuleLoader__.load({
        * 三个按钮放进同一个纵向容器，谁出现谁消失都不需要重算「下一个放第几行」；
        * 平时淡一点，悬停卡片或键盘聚焦时整块变清楚。
        */
-      '.dshSplitWs_graphCardActions{position:absolute;top:5px;right:5px;z-index:2;display:flex;flex-direction:column;align-items:center;gap:4px;opacity:.72;transition:opacity .12s ease}',
+      '.dshSplitWs_graphCardActions{position:absolute;top:5px;right:5px;z-index:2;display:flex;flex-direction:row;align-items:center;gap:4px;opacity:.72;transition:opacity .12s ease}',
       '.dshSplitWs_graphCard:hover .dshSplitWs_graphCardActions,.dshSplitWs_graphCardActions:focus-within{opacity:1}',
       '.dshSplitWs_graphCardRename{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer}',
       '.dshSplitWs_graphCardRename:hover{color:var(--dshSplitWs-accent);background:var(--dsw-alias-bg-layer-1)}',
       '.dshSplitWs_graphCardRename:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
       // 待连线卡片的「移出画布」。
-      '.dshSplitWs_graphCardRemove{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;line-height:18px;text-align:center;cursor:pointer}',
+      '.dshSplitWs_graphCardRemove{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer}',
       '.dshSplitWs_graphCardRemove:hover{color:var(--dsw-alias-label-primary)}',
       '.dshSplitWs_graphCardRemove:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
-      '.dshSplitWs_graphCardDelete{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:center;cursor:pointer}',
+      '.dshSplitWs_graphCardDelete{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer}',
       '.dshSplitWs_graphCardDelete:hover{color:var(--dsw-alias-state-error-primary);background:rgba(255,77,109,.15)}',
       // 出线端口：右边缘中点上那个圆点，拖动起点。命中区比看上去大（14px），
       // 因为 6px 的圆在触控板上很难一次按准。

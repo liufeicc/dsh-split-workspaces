@@ -270,16 +270,16 @@ try {
     titledCard !== undefined && titledCard.label === '用户起的名字',
     JSON.stringify(titledCard));
 
-  // ───────────────────────── 四之三、未命名卡片不能改名 ─────────────────────────
+  // ───────────────────────── 四之三、未命名会话不能改，未命名员工可以 ─────────────────────────
 
   /*
-   * 用户明确要求：**未命名会话 / 未命名员工不能修改卡片名称**。
+   * 用户要求：**未命名会话不能改，未命名员工可以改**。
    *
-   * 这两类都是还没有标题的占位卡（平台会把标题回退成目录名或占位名），即便写进一个
-   * 标题，界面上也仍然显示占位名 —— 所以干脆不给入口。三层都要挡住：
-   *   1. 画布卡片不渲染铅笔；
-   *   2. 左侧选择器不渲染铅笔；
-   *   3. 动作层直接拒绝（防止有人绕过界面调用）。
+   * 普通空白会话的标题会被平台回退成目录名或占位名，即便写进标题也显示不出来，
+   * 所以不给入口、动作层也拒绝；目标员工是用户显式创建的对象，允许先起名。
+   * 三层都要对得上：
+   *   1. 未命名会话：画布/选择器都不渲染铅笔，动作层直接拒绝；
+   *   2. 未命名员工：卡片有铅笔，弹层初始值为空，动作层放行。
    */
   const untitledBoard = await renderBoard(mod);
   untitledBoard.stub.setSessionList({
@@ -312,7 +312,7 @@ try {
   check('有标题的会话在左侧仍有铅笔',
     untitledItem !== undefined && findAll(untitledItem, (node) => hasClass(node, cssOf.graphPickerRename)).length === 1);
 
-  // 把这张空白会话登记成「员工」：仍未命名 → 卡片依然没有铅笔。
+  // 把这张空白会话登记成「员工」：仍未命名，但用户要求允许先起名。
   await untitledBoard.injected.targetStore.addTarget('s-blank', 'ws-a');
   untitledOpen.panel.render();
   await settle();
@@ -323,10 +323,28 @@ try {
   const employeeLabel = employeeCard === undefined
     ? undefined
     : findAll(employeeCard, (node) => hasClass(node, cssOf.graphCardTitle))[0]?.children;
-  check('未命名员工的卡片上也没有改名铅笔', employeeCard !== undefined
+  const employeeRenameButtons = employeeCard === undefined
+    ? []
+    : findAll(employeeCard, (node) => hasClass(node, cssOf.graphCardRename));
+  check('未命名员工的卡片上有改名铅笔', employeeCard !== undefined
     && String(employeeLabel) === '未命名员工'
-    && findAll(employeeCard, (node) => hasClass(node, cssOf.graphCardRename)).length === 0,
+    && employeeRenameButtons.length === 1,
   JSON.stringify(employeeLabel));
+
+  // 点铅笔：改名框的初始草稿应为空，而不是预填「未命名员工」。
+  if (employeeRenameButtons.length === 1) {
+    employeeRenameButtons[0].props.onClick({ stopPropagation() {} });
+    employeeNow.flush();
+  }
+  const employeeDialog = findAll(employeeNow.tree, byName('GraphRenameDialog'))[0];
+  check('未命名员工点铅笔会打开改名框', employeeDialog !== undefined);
+  check('改名框初始值是空的（不预填占位名）',
+    employeeDialog !== undefined && employeeDialog.props.request.title === '',
+    JSON.stringify(employeeDialog === undefined ? undefined : employeeDialog.props.request));
+  const renamedEmployee = await employeeNow.props.actions.renameSession('s-blank', '新员工');
+  check('动作层允许未命名员工改名',
+    renamedEmployee !== undefined && renamedEmployee.ok === true,
+    JSON.stringify(renamedEmployee));
 
   // ───────────────────────── 五、旧部署降级 ─────────────────────────
 

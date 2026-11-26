@@ -24,6 +24,7 @@
     "host.goal-create.js",
     "host.reviews.js",
     "host.report.js",
+    "host.consult.js",
     "host.wait.js",
     "host.batch.js",
     "host.redirect.js",

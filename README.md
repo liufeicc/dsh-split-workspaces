@@ -199,11 +199,14 @@ that currently holds focus is marked by a brand-coloured title bar.
   when the skill plugin's client half is not mounted the button is **not rendered at all**.
 - **Design mode + task dispatch**: a second panel mode that draws each **session** as a card
   and connects them with arrows into a directed tree — the graph *is* the authorization. Sessions
-  with outgoing arrows get agent-scoped `dispatch_task`, `report_task`, and `control_task` tools:
+  with outgoing arrows get agent-scoped `dispatch_task`, `report_task`, `consult_task`, and
+  `control_task` tools:
   `dispatch_task` hands work to another session, one target or several in parallel, with
   `wait: all | any | none`; `report_task` asks a target for a **read-only report** based on its
   own model-visible history, without changing the target, creating a goal, or producing a
-  delivery conclusion; `control_task` stops a task in flight or wakes a paused goal, without
+  delivery conclusion; `consult_task` **actually delivers** a question into the target session,
+  which may read files / run commands before answering, without creating a goal or entering the
+  review gate; `control_task` stops a task in flight or wakes a paused goal, without
   dispatching a new task. Each result also lists the remaining idle targets as a reminder to keep
   distributing, and a delivered task must be reviewed before that target can take a new one.
   See the dedicated section below.
@@ -292,6 +295,10 @@ enforced by a pure function (`validateEdge`) before the edge is added.
 A session with outgoing arrows gets an **agent-scoped** copy of `dispatch_task` (it shadows
 the global one) whose description lists the available targets.
 
+Dispatch and reporting are only for **subordinates**: sessions whose title contains
+"expert"/"advisor" (or similar), or whose connection note explicitly says consulting is
+appropriate, are not dispatched to and not asked for reports — use `consult_task` instead.
+
 | Parameter | Meaning |
 |---|---|
 | `task` | Task body. The target cannot see A's history, so background **and verifiable acceptance criteria** belong here. Omit it when waiting for a previous dispatch. When the target is already running, a `task` means a **correction**: stop its current round, resend the correction as a fresh user message, and restart the target (no new goal) |
@@ -324,6 +331,9 @@ turn continues one more step and collects the result instead of requiring user i
 correct / review, it can call `report_task` and ask the target session's **read-only reporter**
 a specific question:
 
+It is only for **reviewing a subordinate's execution progress**, not for consulting an expert —
+use `consult_task` for experts/advisors.
+
 | Parameter | Meaning |
 |---|---|
 | `targets` | Targets to report on, at most 8; each target gets its own model request, all in parallel |
@@ -336,12 +346,54 @@ into the target; it does not depend on any external side-query plugin or command
 
 It returns `{ status, results, note }`, with one
 `{ target, status, report, goalPhase, asOf, truncated, note }` per target. A single target times
-out after 60 seconds; a timeout or failure only affects that target.
+out after 300 seconds (5 minutes); a timeout or failure only affects that target.
 
 Limits: it only sees the **model-visible history** (tool output outside the window or never
 committed to history is invisible), the report is another model's summary rather than ground
 truth, and it does not change dispatch state — it cannot replace `dispatch_task` for collecting
 results or `reviews` for reviewing.
+
+### Consult: `consult_task`
+
+When A does not want to hand out work, but has a specific question for a target expert —
+especially when it wants the target to **read files and run commands** before answering — it
+uses `consult_task`. The question is delivered as a real user message into the target session;
+the target answers with its full toolset and the answer is returned to A as the tool result.
+
+Consulting requires clear evidence: the target title contains words like "expert" / "advisor",
+**or** the connection note explicitly says consulting is appropriate. If neither is true, do not
+consult. The tool description lists each connection's title and note so the model can judge.
+
+| Parameter | Meaning |
+|---|---|
+| `targets` | Targets to consult, at most 8; multiple targets run in parallel, each in its own turn |
+| `question` | What to answer, which files / modules to look at, and what evidence to provide |
+
+Difference from `report_task`:
+
+| | `report_task` | `consult_task` |
+|---|---|---|
+| Delivered into the target session | no (side request) | yes (a normal user message) |
+| Target can read files / run commands | no | yes (full toolset; may modify files when necessary) |
+| Visible in the UI | no | yes (the Q&A appears in the target session) |
+| Changes target state | no | only one ordinary turn; no goal, `pending`, or `reviews` |
+| Best for | reviewing a target's existing history | asking a new question that needs real verification |
+
+Boundaries:
+
+- **Busy targets are skipped**: if a target is running another turn, it is marked `busy` and
+  skipped; the others still answer. Nothing is queued or interrupted;
+- **No goal, no review**: a consult is not a deliverable, and the target stops after that turn;
+- **The target may modify files** (the user explicitly chose this): the wrapper asks it to state
+  which files it changed and why. This is a prompt-level instruction, not a hard permission; the
+  target's own toolset still decides what it can do;
+- Per-target timeout is 10 minutes; on timeout / user stop / cancellation, any received text goes
+  to `progress` and is not passed off as an answer;
+- The Q&A stays in the target's history, so the target remembers the conversation afterwards.
+
+It returns `{ status, results, note }` with one `{ target, status, reply, progress, note }` per
+target. Only `status: "ok"` carries a complete `reply`; `busy` / `timeout` / `interrupted` /
+`cancelled` / `error` do not.
 
 ### Stop and wake: `control_task`
 
@@ -867,8 +919,8 @@ the whole implementation.
   conversation and the message-reveal animation also live here (appended sci-fi section).
 - `client.dicts.js` — Chinese and English strings.
 - `index.js` — the **Host entry**: mounts the `paneDispatch` service and the `dispatch_task` /
-  `report_task` / `control_task` tools, owns their lifecycle, serves the bundled fonts at
-  `/split-workspaces-fonts`, and re-exports the public symbols. The implementation
+  `report_task` / `consult_task` / `control_task` tools, owns their lifecycle, serves the bundled
+  fonts at `/split-workspaces-fonts`, and re-exports the public symbols. The implementation
   lives in sibling `host.*.js` modules:
   - `host.constants.js` — service key, remote method list, timeouts and size limits;
   - `host.store.js` — binding-table persistence (the only constructor of the target shape);
@@ -887,9 +939,11 @@ the whole implementation.
     backfill from a completed goal;
   - `host.report.js` — the read-only `report_task` side request: history selection, report prompt,
     per-target timeout, and parallel fan-out;
+  - `host.consult.js` — parallel scheduling for `consult_task`: skip busy targets, shape each
+    result, aggregate the batch status (no goal, no `pending` / `reviews`);
   - `host.control.js` — stop and wake: the `disarm → cancel(hook) → wait for real idle → pause`
     order, `stopping` on timeout, and resuming the original goal with a fresh ticket;
-  - `host.message.js` — pure helpers (task wrapping, target matching, assistant text);
+  - `host.message.js` — pure helpers (task/consult wrapping, target matching, assistant text);
   - `host.wait.js` — delivery and waiting (goal mode / plain delivery, cancellation wiring);
   - `host.batch.js` — batch scheduling: preflight, concurrent waiting, `all`/`any`/`none`
     completion, the pre-create review gate, honest partial failures;
@@ -899,7 +953,8 @@ the whole implementation.
   - `host.watch.js` — what happens after dispatch: the background watcher behind `wait: none`
     (one long-lived subscription) and `adoptOrphanGoals`, which reclaims dispatched-but-lost
     work after a Host restart by matching the goal objective prefix;
-  - `host.tool.js` — the model-facing `dispatch_task` / `report_task` descriptions and execution;
+  - `host.tool.js` — the model-facing `dispatch_task` / `report_task` / `consult_task`
+    descriptions and execution;
   - `host.tool.control.js` — the model-facing `control_task` description and execution
     (stop / resume validation and result shaping).
 - `REVIEW-2026-11-01.md` / `REVIEW-2026-11-03.md` — the two code-review reports.
@@ -918,6 +973,11 @@ the whole implementation.
   `ask` and goal objective, the tool is read-only, truncated history is flagged, a missing LLM
   service fails per target, and the implementation does not reference an external side-query
   plugin.
+- `test/consult-contract.mjs` — the `consult_task` contract: the question is really delivered via
+  `prompt` into the target session; no goal is created and `pending` / `reviews` stay untouched;
+  busy targets are skipped; multiple targets run in parallel and a partly-busy batch reports
+  `partial`; timeout / user stop / cancellation never pass a half answer off as the reply; and
+  the empty-question / missing-target / no-arrow / delivery-failure paths each explain themselves.
 - `test/control-contract.mjs` — the `control_task` contract: stop running / idle / timed-out /
   already-complete / cross-owner targets, the `hook` cancellation and "wait for idle before
   pause" order; wake `paused` and `active+disarmed`, refuse `complete` / `blocked` /
@@ -1121,6 +1181,7 @@ node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs
 node test/dispatch-restart-contract.mjs
 node test/report-contract.mjs
+node test/consult-contract.mjs
 node test/control-contract.mjs
 ```
 

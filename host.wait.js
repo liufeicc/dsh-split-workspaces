@@ -15,9 +15,14 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { DISPATCH_SLICE_MS, DISPATCH_TIMEOUT_MS, STATUS_INTERRUPTED } from './host.constants.js';
+import {
+  CONSULT_TIMEOUT_MS,
+  DISPATCH_SLICE_MS,
+  DISPATCH_TIMEOUT_MS,
+  STATUS_INTERRUPTED,
+} from './host.constants.js';
 import { classifyGoal, liveAgent } from './host.goal-state.js';
-import { assistantText, errorText, wrapTask } from './host.message.js';
+import { assistantText, errorText, wrapConsult, wrapTask } from './host.message.js';
 
 /**
  * 把「最后一段助手文本」按结束状态分成**交付结论**与**过程稿**。
@@ -113,9 +118,13 @@ export function runningText(ctx, binding) {
  * @param targetId - 目标会话 id。
  * @param requestId - 本次投递的一次性 id（会写进消息的 rpcId）。
  * @param signal - 调用方的取消信号。
+ * @param options - `{ timeoutMs }`：普通派单用默认 20 分钟，咨询可以更短。
  * @returns `{ status, reply, progress, reason, interruptedBy }`。
  */
-export function waitForTurn(ctx, targetId, requestId, signal) {
+export function waitForTurn(ctx, targetId, requestId, signal, options) {
+  const timeoutMs = Number.isInteger(options?.timeoutMs) && options.timeoutMs > 0
+    ? options.timeoutMs
+    : DISPATCH_TIMEOUT_MS;
   return new Promise((resolve) => {
     let claimed = false;
     let acceptSeq = -1;
@@ -168,11 +177,11 @@ export function waitForTurn(ctx, targetId, requestId, signal) {
       return;
     }
     signal.addEventListener('abort', onAbort, { once: true });
-    timer = setTimeout(() => finish(outcomeOf('timeout', lastText)), DISPATCH_TIMEOUT_MS);
+    timer = setTimeout(() => finish(outcomeOf('timeout', lastText)), timeoutMs);
     /*
-     * 兜底定时器**不许吊住事件循环**：它最长 20 分钟，而它唯一的作用是「万一没人叫醒
-     * 这个 Promise」。在长驻宿主里这没什么，但在短命进程（离线测试、一次性脚本）里，
-     * 一个没人再等的计时器会让进程白白挂 20 分钟才退出。
+     * 兜底定时器**不许吊住事件循环**：它最长由调用方指定（派单默认 20 分钟、咨询 10 分钟），
+     * 而它唯一的作用是「万一没人叫醒这个 Promise」。在长驻宿主里这没什么，但在短命进程
+     * （离线测试、一次性脚本）里，一个没人再等的计时器会让进程白白挂到超时才退出。
      */
     timer.unref?.();
   });
@@ -406,6 +415,80 @@ export async function deliverAndWait(ctx, binding, task, sourceLabel, signal) {
    * `finally`，于是投递一返回联动就断了 —— 用户在 A 那边按停止时，正在等 B 的这个
    * 等待收不到任何通知，会一直挂到 20 分钟兜底。而「投递完成后等 B 跑完」正是这段
    * 功能里**最长**、也最需要能取消的那一段。
+   */
+  try {
+    return await waiting;
+  } finally {
+    signal.removeEventListener('abort', onOuterAbort);
+  }
+}
+
+/**
+ * 把一条咨询投递给目标会话，并等它回答完这一轮。
+ *
+ * 与 `deliverAndWait` 的差别：
+ *   - 不建 goal、不查目标服务，老部署也能用；
+ *   - 超时更短（咨询不该等 20 分钟）；
+ *   - 包装用 `wrapConsult`，明确「这是咨询，不是派活」。
+ *
+ * 忙检查与派单一致：目标正在跑一个回合时直接拒绝，不排队。理由见 `runningText` ——
+ * 把咨询混进目标正在执行的任务上下文，回答会不可靠，也会污染它正在做的事。
+ *
+ * @param ctx - 宿主上下文。
+ * @param binding - 目标绑定 `{ id, label }`。
+ * @param question - 问题正文。
+ * @param sourceLabel - 发起方显示名。
+ * @param signal - 调用方取消信号。
+ * @param options - `{ timeoutMs }`。
+ * @returns `{ status, reply, progress, reason, interruptedBy }`。
+ */
+export async function consultAndWait(ctx, binding, question, sourceLabel, signal, options) {
+  const busy = runningText(ctx, binding);
+  if (busy !== null) {
+    throw new Error('目标会话「' + binding.label + '」正在跑一个回合，暂时不能接受咨询；等它闲下来再问。');
+  }
+  const sessions = ctx.get('sessionController');
+  if (sessions === undefined || sessions === null || typeof sessions.prompt !== 'function') {
+    throw new Error('这个部署没有会话服务（sessionController），没法向另一个会话投递咨询。');
+  }
+  const requestId = randomUUID();
+  const inner = new AbortController();
+  const onOuterAbort = () => inner.abort();
+  if (signal.aborted) inner.abort();
+  signal.addEventListener('abort', onOuterAbort, { once: true });
+  const timeoutMs = Number.isInteger(options?.timeoutMs) && options.timeoutMs > 0
+    ? options.timeoutMs
+    : CONSULT_TIMEOUT_MS;
+  const waiting = waitForTurn(ctx, binding.id, requestId, inner.signal, { timeoutMs });
+  let accepted;
+  try {
+    /*
+     * 只交 AbortSignal，不交 source：`SessionController.prompt(request, signal)` 在
+     * 真实实现里固定把消息来源写成 `{ kind: 'user', rpcId }`。目标界面看到的是一条
+     * 普通用户消息，来源靠 `wrapConsult` 的正文说明 —— 与派单链路完全一致。
+     */
+    accepted = await sessions.prompt(
+      {
+        requestId,
+        sessionId: binding.id,
+        mode: 'queue',
+        content: [{ type: 'text', text: wrapConsult(question, sourceLabel) }],
+      },
+      inner.signal,
+    );
+  } catch (reason) {
+    inner.abort();
+    await waiting.catch(() => undefined);
+    throw new Error('向目标会话投递咨询失败：' + errorText(reason));
+  }
+  if (accepted === undefined || accepted === null || accepted.accepted !== true) {
+    inner.abort();
+    await waiting.catch(() => undefined);
+    throw new Error('目标会话没有接受这条咨询。');
+  }
+  /*
+   * 联动必须挂满整个等待期：投递一返回就解绑的话，用户在 A 那边按停止时，
+   * 正在等目标回答的这个 Promise 收不到通知，会一直挂到超时。
    */
   try {
     return await waiting;

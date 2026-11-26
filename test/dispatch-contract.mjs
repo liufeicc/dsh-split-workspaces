@@ -30,6 +30,13 @@ check('任务包装要求结论可复现', host.wrapTask('做事', 'A 会话').i
   check('工具描述要求把验收标准写成可检验的条款', description.includes('可检验'), '');
   check('工具描述要求拿到结论后先复核再转述', description.includes('拿到结论之后'), '');
   check('工具描述要求不达标时按具体缺口重派', description.includes('具体缺口'), '');
+  check('简介明确不能给专家/顾问派任务', (() => {
+    freshHome();
+    const service = new host.PaneDispatchService({});
+    service.set({ owner: 's-a', targets: [{ id: 's-b', label: 'B 会话' }] });
+    return host.dispatchDescription(service, 's-a')
+      .includes('不能给专家、顾问等类型的会话指派任务');
+  })(), '');
 }
 
 check('从助手消息里只取文本块', host.assistantText({

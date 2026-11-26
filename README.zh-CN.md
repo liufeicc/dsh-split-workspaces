@@ -143,12 +143,14 @@
 
 - **设计模式 + 任务分派**：面板顶部多一个 `设计`，把每个**会话**画成卡片、用箭头连成
   一棵有向树 —— 箭头方向就是授权方向，删掉箭头等于撤回授权。连了箭头的会话会拿到
-  **作用域版** `dispatch_task`、`report_task` 与 `control_task` 工具（描述里直接列出可派目标）：
+  **作用域版** `dispatch_task`、`report_task`、`consult_task` 与 `control_task` 工具
+  （描述里直接列出可派目标）：
   `dispatch_task` 把任务交给对方会话并拿回结论，一次可派给多个目标、并行推进，支持
   「等全部 / 等第一个 / 派完就走」三种收尾，派完就走的还会在回合结束前被提醒回来收结果；
   `report_task` 则按 A 的要求，让目标基于自己的模型可见历史做一次**只读汇报**，
-  不改目标、不创建 goal、不产生交付结论；`control_task` 用来中途停住（等目标真正 idle、
-  暂停）或唤醒暂停的原目标。每次结果还会附上其余空闲目标，提示继续分配；
+  不改目标、不创建 goal、不产生交付结论；`consult_task` 把问题**真正投递**进目标会话，
+  目标用自己的工具查文件/跑命令后回答，不建 goal、不进入审核；`control_task` 用来中途停住
+  （等目标真正 idle、暂停）或唤醒暂停的原目标。每次结果还会附上其余空闲目标，提示继续分配；
   交付后必须先审核，才能给同一个目标派新任务。详见下面的专节。
 
 - **图片编辑入口**：平铺模式的标题栏与任务分派画布顶部各有一个「图片编辑」按钮
@@ -249,8 +251,12 @@
 
 ### 模型怎么用
 
-A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具：前者派活，
-`report_task` 只读汇报，`control_task` 停止或唤醒。下面先说派单。
+A 的模型多了 `dispatch_task`、`report_task`、`consult_task`、`control_task` 四个工具：
+`dispatch_task` 派活，`report_task` 只读汇报，`consult_task` 真投递咨询，
+`control_task` 停止或唤醒。下面先说派单。
+
+派单和汇报只针对**下属**：标题含「专家」「顾问」等字样、或连接线描述明确说可以咨询的会话，
+不派活、也不要求汇报；有问题用 `consult_task` 咨询。
 
 | 参数 | 说明 |
 |---|---|
@@ -296,6 +302,8 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
 `dispatch_task` 的 `progress` 是廉价的被动过程稿；当 A 怀疑方向偏了，或者准备纠正/验收时，
 可以调用 `report_task`，让目标会话的**只读汇报助手**回答具体问题：
 
+它只用于**审阅下属的执行进度**，不是向专家请教：专家/顾问不是下属，有问题请用 `consult_task`。
+
 | 参数 | 说明 |
 |---|---|
 | `targets` | 要汇报的目标，最多 8 个；每个目标一次独立模型请求，逐目标并行 |
@@ -311,7 +319,7 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
 { target, status, report, goalPhase, asOf, truncated, note }
 ```
 
-单个目标最多等 60 秒；超时或失败只影响它自己，其他目标照常返回。
+单个目标最多等 300 秒（5 分钟）；超时或失败只影响它自己，其他目标照常返回。
 报告会明确区分「有证据的事实 / 目标的自述 / 推断 / 未知」。
 
 限制：
@@ -319,6 +327,44 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
 - 只读**模型可见历史**：历史窗口外、没有落进历史的工具输出看不到；
 - 汇报是另一个模型的总结，不是真相；关键结论仍要 A 自己看证据；
 - 它不改变派单状态，不能代替 `dispatch_task` 取结果，也不能代替 `reviews` 审核。
+
+### 咨询：`consult_task`
+
+如果 A 不是要派活，而是有一个具体问题需要目标专家回答 —— 尤其希望它**实际查文件、
+跑命令**再回答 —— 用 `consult_task`。它把问题作为一条真实用户消息投递进目标会话，
+目标用自己的完整工具核实后回答，回答作为工具结果返回给 A。
+
+咨询对象要有明确依据：目标标题含「专家」「顾问」等字样，**或**连接线描述里明确写了
+可以咨询；两者都没有时不要咨询。工具描述里会列出每条连接线的标题与描述，供模型判断。
+
+| 参数 | 说明 |
+|---|---|
+| `targets` | 要咨询的目标，最多 8 个；多目标并行，每个目标独立一轮 |
+| `question` | 问题正文。写清要它回答什么、看哪些文件/模块、给什么证据 |
+
+与 `report_task` 的区别：
+
+| | `report_task` | `consult_task` |
+|---|---|---|
+| 是否投递进目标会话 | 否（旁注请求） | 是（普通用户消息） |
+| 目标能否读文件/跑命令 | 否 | 是（完整工具，必要时可修改文件） |
+| 界面是否可见 | 否 | 是（目标会话里出现问答） |
+| 是否改变目标状态 | 否 | 只产生一轮普通对话；不建 goal、不写 `pending` / `reviews` |
+| 适用 | 审阅目标已有的历史 | 向专家问一个新问题、要它动手核实 |
+
+行为边界：
+
+- **忙就跳过**：目标正在跑一个回合时，本次咨询跳过（结果里标 `busy`），不排队、不打断；
+  多目标时只跳过忙的那些，其余照常问；
+- **不建 goal、不审核**：咨询不是交付，回答完这一轮就停；
+- **允许目标修改文件**（用户明确选择）：包装里要求它说明「改了哪个文件、为什么改」；
+  这只是提示词约束，真正的工具集仍由目标会话自己决定；
+- 单目标超时 10 分钟；超时/用户停止/取消时，已收到的文本进 `progress`，不冒充回答；
+- 咨询内容与回答会留在目标会话历史里，之后目标仍然记得这次问答。
+
+返回 `{ status, results, note }`，每个结果包含 `{ target, status, reply, progress, note }`。
+`status` 为 `ok` 时 `reply` 才是完整回答；`busy` / `timeout` / `interrupted` / `cancelled` /
+`error` 都不是。
 
 ### 停止与唤醒：`control_task`
 
@@ -781,8 +827,8 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
   平铺面板的半透明渐变、所有会话的站酷快乐体与消息浮现动画也在这里（末尾的科幻覆盖段）。
 - `client.dicts.js` —— 中英文案。
 - `index.js` —— **Host 半边的入口**：装配 `paneDispatch` 服务与 `dispatch_task` /
-  `report_task` / `control_task` 工具、维护生命周期，并把公共符号原样转出。实现按职责放在同目录的
-  `host.*.js`：
+  `report_task` / `consult_task` / `control_task` 工具、维护生命周期，并把公共符号原样转出。
+  实现按职责放在同目录的 `host.*.js`：
   - `host.constants.js` —— 服务键、远端方法清单、超时与长度上限；
   - `host.store.js` —— 绑定表的落盘与读回（唯一的目标形状构造点）；
   - `host.targets.js` —— 派单目标记录的独立落盘（`pane_dispatch_targets.json`）：
@@ -795,9 +841,11 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
   - `host.reviews.js` —— 审核闸：人工审核后的释放、`reviews` 落账、complete goal 补账；
   - `host.report.js` —— `report_task` 的只读旁注请求：历史裁剪、汇报提示词、
     单目标超时与并行；
+  - `host.consult.js` —— `consult_task` 的并行调度：忙目标跳过、单目标结果整形、
+    整批状态聚合（不建 goal、不写 pending/reviews）；
   - `host.control.js` —— 停止与唤醒：`disarm → cancel(hook) → 等真正 idle → pause`
     的顺序、超时返回 `stopping`、唤醒原 goal 并重新开票；
-  - `host.message.js` —— 分派链路上的纯函数（包装任务、匹配目标、取助手文本）；
+  - `host.message.js` —— 分派链路上的纯函数（包装任务/咨询、匹配目标、取助手文本）；
   - `host.wait.js` —— 投递与等待（目标模式 / 普通投递两条路，含取消联动）；
   - `host.batch.js` —— 一批目标的调度与收尾：预检、并发等待、`all`/`any`/`none` 三种收尾、
     建目标前的审核闸、部分失败的如实记录；
@@ -805,8 +853,8 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
     重新启动目标」（与界面停止同一个底层动作，原因记为 `hook`；不新建目标）；
   - `host.watch.js` —— 派出去之后的「盯」与「认」：`wait: none` 用的后台监视（单订阅长听），
     以及 Host 重启后凭 goal 前缀把孤儿单子认回来（`adoptOrphanGoals`）；
-  - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` 工具描述与执行
-    （参数解析、结果整形）；
+  - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` / `consult_task`
+    工具描述与执行（参数解析、结果整形）；
   - `host.tool.control.js` —— 面向模型的 `control_task` 工具描述与执行
     （stop / resume 的参数校验与结果整形）。
   「打开目录」那条路仍然不需要 Host 支持 ——
@@ -899,6 +947,11 @@ A 的模型多了 `dispatch_task`、`report_task`、`control_task` 三个工具�
   （`node test/report-contract.mjs`）：最多 8 个目标、8 个目标真的并行、单目标失败/超时
   不影响其他目标、请求里带 ask 与 goal objective、只读（不碰 pending/reviews/goal）、
   历史截断标记、没有 LLM 服务时逐目标报错，以及实现文件不引用外部旁注插件。
+- `test/consult-contract.mjs` —— `consult_task` 的离线契约测试
+  （`node test/consult-contract.mjs`）：真的调 `prompt` 投递进目标会话、不创建 goal、
+  不写 pending/reviews；忙目标跳过、多目标并行且部分忙时整批 `partial`；超时/用户停止/
+  取消都不把半截回答冒充结论；空问题/未指定目标/无箭头/投递失败各自的拒绝文案；
+  以及 `dispatch_task` / `report_task` 的描述都把「咨询」指向 `consult_task`。
 - `test/control-contract.mjs` —— `control_task` 的离线契约测试
   （`node test/control-contract.mjs`）：停止正在跑 / 空闲 / 超时 / 已完成 / 越权的目标，
   断言 hook 停止与「先等 idle 再 pause」的顺序；唤醒 paused 与 active+disarmed，拒绝
@@ -997,6 +1050,7 @@ node test/dispatch-contract.mjs
 node test/dispatch-batch-contract.mjs
 node test/dispatch-restart-contract.mjs
 node test/report-contract.mjs
+node test/consult-contract.mjs
 node test/control-contract.mjs
 ```
 

@@ -199,8 +199,9 @@ export function boot(options) {
   const harness = createHostContext(options);
   host.apply(harness.ctx);
   const tool = harness.registered.find((definition) => definition.name === host.TOOL_NAME);
+  const consultTool = harness.registered.find((definition) => definition.name === host.CONSULT_TOOL_NAME);
   const controlTool = harness.registered.find((definition) => definition.name === host.CONTROL_TOOL_NAME);
-  return { ...harness, tool, controlTool };
+  return { ...harness, tool, consultTool, controlTool };
 }
 
 /**
@@ -217,8 +218,9 @@ export function reboot(options) {
   const harness = createHostContext(options);
   host.apply(harness.ctx);
   const tool = harness.registered.find((definition) => definition.name === host.TOOL_NAME);
+  const consultTool = harness.registered.find((definition) => definition.name === host.CONSULT_TOOL_NAME);
   const controlTool = harness.registered.find((definition) => definition.name === host.CONTROL_TOOL_NAME);
-  return { ...harness, tool, controlTool };
+  return { ...harness, tool, consultTool, controlTool };
 }
 
 /** 我们自己投进去的那条用户消息。 */

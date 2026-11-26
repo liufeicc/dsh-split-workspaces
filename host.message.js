@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { DISPATCH_TAG } from './host.constants.js';
+import { CONSULT_TAG, DISPATCH_TAG } from './host.constants.js';
 
 /**
  * 把任意抛出物转成一句能放进错误里的文字。
@@ -40,6 +40,42 @@ export function assistantText(data) {
     parts.push(block.text);
   }
   return parts.join('\n').trim();
+}
+
+/**
+ * 把 A 的「咨询」包装成一条目标模型能认出来的用户消息。
+ *
+ * 与 `wrapTask` 的区别是**不要求交付**：咨询只是问一个问题，目标回答完就结束，
+ * 不需要验收、不需要证据链、也不应该把回答写成任务汇报。但三条信息仍然必须写清：
+ *   1. 这条消息来自另一个会话，不是当前用户输入的；
+ *   2. 这是咨询，不是新任务 —— 否则目标会把它当成又一份活，开始改文件、跑长任务；
+ *   3. 允许用工具核实（读文件、跑命令，必要时修改），但要在回答里说明改了什么。
+ *
+ * 用户明确选择了「允许写」：目标可以为了验证或说明问题修改文件，副作用由它自己
+ * 在回答里交代。这不是硬权限，只是包装提示；真正的工具集仍由目标会话自己决定。
+ *
+ * @param question - A 的问题正文。
+ * @param sourceLabel - 发起方会话的显示名。
+ * @returns 完整的用户消息文本。
+ */
+export function wrapConsult(question, sourceLabel) {
+  const from = sourceLabel === undefined || sourceLabel === null || sourceLabel === ''
+    ? '另一个会话'
+    : '会话「' + sourceLabel + '」';
+  return [
+    CONSULT_TAG,
+    '这条咨询由' + from + '通过平铺面板的委派箭头发给你，不是当前用户输入的。',
+    '',
+    question,
+    '',
+    '—— 回答要求（这是咨询，不是派活）：',
+    '1. 目标是回答这个问题，不要把它当成新的交付任务；不需要写验收标准或任务汇报。',
+    '2. 请用你当前项目里的文件和命令核实后再回答：可以读文件、跑只读命令；',
+    '   为了验证或说明问题，也可以修改文件，但要在回答里明确「改了哪个文件、为什么改」。',
+    '3. 回答要给依据：文件路径与行号、命令输出、测试结果。没有依据的判断请标成「推断」。',
+    '4. 不要反问；信息不足时按最合理的理解回答，并说明你缺什么信息。',
+    '5. 直接回答，控制篇幅；回答完就停，不要自行扩大范围。',
+  ].join('\n');
 }
 
 /**

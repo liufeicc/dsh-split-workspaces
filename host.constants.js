@@ -44,6 +44,16 @@ export const TOOL_NAME = 'dispatch_task';
 export const REPORT_TOOL_NAME = 'report_task';
 
 /**
+ * 「咨询」工具名。
+ *
+ * 与 `dispatch_task` / `report_task` 分开：咨询走的是**真实投递**
+ * （`sessionController.prompt()`），但不建 goal、不进入派单状态机。
+ * 如果把它塞进 `dispatch_task` 的某个 mode，模型会在「派活」与「问问题」
+ * 之间反复选错；单独一只短工具边界最清楚。
+ */
+export const CONSULT_TOOL_NAME = 'consult_task';
+
+/**
  * 停止 / 唤醒工具名。
  *
  * 单独一只工具，而不是给 `dispatch_task` 加 `action`：`dispatch_task` 已经有
@@ -82,6 +92,26 @@ export const REPORT_MAX_CHARS = 4000;
 
 /** 喂给汇报助手的历史条数上限。 */
 export const REPORT_HISTORY_MESSAGES = 40;
+
+/**
+ * 一次最多向几个目标咨询。
+ *
+ * 与派单/汇报保持一致：8 个已经是一次工具调用能接受的上限。咨询是并行的一轮
+ * 问答，再多会让等待面与结果长度一起膨胀。
+ */
+export const MAX_CONSULT_TARGETS = 8;
+
+/** 咨询问题正文的长度上限（字符）。 */
+export const MAX_CONSULT_QUESTION_CHARS = 8000;
+
+/**
+ * 单个目标咨询一轮的超时。
+ *
+ * 咨询是「目标读文件/跑命令后回答一个问题」，通常几秒到几分钟；10 分钟还没回来，
+ * 多半是目标卡在某个长命令或网络请求上。超时不等于失败：已收到的文本会作为
+ * 「过程稿」返回，让 A 决定要不要重问。
+ */
+export const CONSULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** 喂给汇报助手的历史字符上限（大会话兜底）。 */
 export const REPORT_HISTORY_CHARS = 120000;
@@ -224,6 +254,14 @@ export const EDGE_NOTE_MAX = 200;
  * 所以它是**协议的一部分**，不是文案：改它会让重启前的派单认不回来。
  */
 export const DISPATCH_TAG = '[任务分派]';
+
+/**
+ * 咨询消息的固定开头。
+ *
+ * 与 `DISPATCH_TAG` 分开：目标模型看到这两个前缀就知道自己面对的是「派活」还是
+ * 「回答问题」。它只是文案，不参与重启认领，所以改它不会破坏派单恢复。
+ */
+export const CONSULT_TAG = '[任务分派 · 咨询]';
 
 /** 落盘格式版本。读到更早/更新的版本时按「读不懂就当作空表」处理，不猜。 */
 export const STORE_VERSION = 1;

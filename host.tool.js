@@ -13,7 +13,11 @@
  */
 
 import {
+  CONSULT_TIMEOUT_MS,
+  CONSULT_TOOL_NAME,
   MAX_BATCH_TARGETS,
+  MAX_CONSULT_QUESTION_CHARS,
+  MAX_CONSULT_TARGETS,
   MAX_REPORT_ASK_CHARS,
   MAX_REPORT_TARGETS,
   MAX_TASK_CHARS,
@@ -25,6 +29,7 @@ import {
   TOOL_NAME,
 } from './host.constants.js';
 import { normalizeWait, runBatch } from './host.batch.js';
+import { runConsults } from './host.consult.js';
 import { runReports } from './host.report.js';
 import { runReviews } from './host.reviews.js';
 import { adoptOrphanGoals } from './host.watch.js';
@@ -159,6 +164,8 @@ export function dispatchDescription(service, ownerId) {
     '不要一次只派一个、等它回来再派下一个 —— 那会让其余空闲目标干等。',
     '只有这些情况才不派或少派：目标在忙、文件/资源冲突、任务强依赖前一件、',
     '或目标的分工说明里明确不负责这块。没有连箭头时调用会直接报错，不要试图绕过它。',
+    '如果只是问目标一个具体问题、不需要它交付成果，用 consult_task（真实投递，目标可查文件回答）；',
+    '如果只是想审阅目标已有的历史，用 report_task。',
     '',
     '## 分配策略',
     '1. 先看下面的「当前可派目标」，按分工说明把活拆成与空闲目标数量匹配的独立块；',
@@ -258,7 +265,11 @@ export function dispatchDescription(service, ownerId) {
   }
   base.push('');
   base.push('## 当前可派目标');
-  base.push('每条后面是用户写的分工说明 —— 按它来决定派给谁。targets 里每一项用序号或标题的一部分即可：');
+  base.push('以下是全部连接线（标题 + 分工说明），按它决定派给谁：');
+  base.push('1) 标题含「专家」「顾问」等字样的，不派；');
+  base.push('2) 连接线描述明确说可以咨询的，不派。');
+  base.push('（不能给专家、顾问等类型的会话指派任务。）');
+  base.push('targets 里每一项用序号或标题即可：');
   for (let index = 0; index < roster.length; index += 1) {
     const item = roster[index];
     const note = item.note === undefined || item.note === ''
@@ -498,14 +509,17 @@ export function reportDescription(service, ownerId) {
   const bindings = service.bindings.get(ownerId) ?? [];
   const base = [
     '## 这个工具做什么',
-    '向一个或多个目标会话的**只读汇报助手**提问：它读取目标真正送给模型的历史，',
-    '按你的汇报要求生成一份总结，返回给你。它不会打断目标、不会修改目标、不会创建 goal、',
-    '不会给目标注入消息，也不会产生交付结论。',
+    '向一个或多个**下属会话**的**只读汇报助手**提问：它读取下属真正送给模型的历史，',
+    '按你的汇报要求生成一份总结，返回给你。它不会打断下属、不会修改下属、不会创建 goal、',
+    '不会给下属注入消息，也不会产生交付结论。',
     '',
     '## 什么时候用',
+    '- **只对下属使用**：这是审阅你派出去干活的执行进度，不是向专家请教；',
     '- `progress` 看不出方向，怀疑偏题、卡住或遗漏证据；',
-    '- 准备纠正、验收或向用户汇报之前，先让目标自己的历史回答你的具体问题；',
+    '- 准备纠正、验收或向用户汇报之前，先让下属自己的历史回答你的具体问题；',
     '- 不要用它代替 `dispatch_task` 的结果获取；它不改变派单状态，也不代替审核。',
+    '- 需要目标实际查文件、跑命令回答时，不要用它 —— 用 `consult_task` 把问题真正投递给目标。',
+    '- 专家/顾问不是下属：需要它们回答问题、查文件求证时，用 `consult_task`，不要用这个工具。',
     '',
     '## ask 怎么写',
     '- 写清楚你要它回答什么、引用什么证据；',
@@ -519,10 +533,22 @@ export function reportDescription(service, ownerId) {
     '- 汇报是另一个模型的总结，不是真相。关键结论要自己复核。',
   ];
   if (bindings.length === 0) {
-    base.push('', '当前没有可汇报的目标。');
+    base.push('', '当前没有可审阅的下属目标。');
     return base.join('\n');
   }
-  base.push('', '## 当前可汇报目标', '用 targets 里的序号或标题指定：', describeCandidates(bindings));
+  base.push('', '## 当前可审阅目标（下属的执行历史）');
+  base.push('以下是全部连接线（标题 + 分工说明），按它决定是否可以要求其汇报：');
+  base.push('1) 标题有「专家」「顾问」等字样；');
+  base.push('2) 连接线上有明确的可以咨询的描述。');
+  base.push('满足上面任意一点的，一定不能要求其汇报。');
+  base.push('targets 里每一项用序号或标题即可：');
+  for (let index = 0; index < bindings.length; index += 1) {
+    const item = bindings[index];
+    const note = item.note === undefined || item.note === ''
+      ? '（连接线上没有描述）'
+      : item.note;
+    base.push((index + 1) + ') ' + item.label + ' —— ' + note);
+  }
   return base.join('\n');
 }
 
@@ -631,6 +657,174 @@ export function createReportTool(service, ownerId) {
         historyMessages: service.reportHistoryMessages ?? REPORT_HISTORY_MESSAGES,
         historyChars: service.reportHistoryChars ?? REPORT_HISTORY_CHARS,
         maxChars: service.reportMaxChars ?? REPORT_MAX_CHARS,
+      });
+    },
+  };
+}
+
+/**
+ * `consult_task` 的工具描述。
+ *
+ * 必须同时讲清三件事，否则模型会继续拿 `report_task` 当咨询：
+ *   1. 它是**真实投递**，目标会用自己的工具核实后回答；
+ *   2. 它不建 goal、不交付、不审核，回答完这一轮就停；
+ *   3. 目标忙的时候会被跳过。
+ *
+ * @param service - 绑定表。
+ * @param ownerId - 发起方会话 id。
+ * @returns 工具描述。
+ */
+export function consultDescription(service, ownerId) {
+  const bindings = service.bindings.get(ownerId) ?? [];
+  const base = [
+    '向一个或多个目标会话**咨询**一个问题：把问题真正投递进目标的会话，',
+    '目标用自己的工具（读文件、跑命令、必要时修改文件）核实后回答，回答作为工具结果返回给你。',
+    '咨询内容和回答都会出现在目标会话里，用户看得到 —— 它不是后台总结。',
+    '',
+    '## 什么时候用',
+    '- 目标是你连了箭头的专家，你有一个具体问题需要它基于自己的项目/文件回答；',
+    '- 需要目标实际查代码、跑命令、给出有依据的答案，而不是你替它读；',
+    '- 不要用它派活：需要目标产出/修改/交付成果时用 dispatch_task；',
+    '- 不要用它审阅目标已有的历史：那用 report_task。',
+    '',
+    '## 怎么问',
+    '- 问题要具体：写清你要它回答什么、看哪些文件/模块、给什么证据；',
+    '- 一次最多 ' + MAX_CONSULT_TARGETS + ' 个目标，并行问；每个目标独立一轮，互不影响；',
+    '- 目标正忙（正在跑别的回合）会被跳过，结果里会说明。',
+    '',
+    '## 它不是派单',
+    '- 不创建 goal、不进入待审核、不产生交付结论；',
+    '- 目标回答完这一轮就停，不会自动继续推进。',
+  ];
+  if (bindings.length === 0) {
+    base.push('', '当前没有可咨询的目标。');
+    return base.join('\n');
+  }
+  base.push('', '## 当前可咨询目标');
+  base.push('以下是全部连接线（标题 + 分工说明），按它决定可向谁咨询：');
+  base.push('1) 标题有「专家」「顾问」等字样；');
+  base.push('2) 连接线上有明确的可以咨询的描述。');
+  base.push('（如果没有明确信息表明该会话可咨询，一定不能去咨询；忙的目标会在结果里标成 busy 并跳过。）');
+  /*
+   * 判定依据必须附上：模型看不到画布，只知道连接线存在，不知道每条线叫什么、
+   * 用户在上面写了什么。只给规则不给数据，它只能瞎猜或者对所有人都咨询一遍，
+   * 那正是「没有明确信息也去咨询」的反面。
+   */
+  base.push('targets 里每一项用序号或标题即可：');
+  for (let index = 0; index < bindings.length; index += 1) {
+    const item = bindings[index];
+    const note = item.note === undefined || item.note === ''
+      ? '（连接线上没有描述）'
+      : item.note;
+    base.push((index + 1) + ') ' + item.label + ' —— ' + note);
+  }
+  return base.join('\n');
+}
+
+/**
+ * 构造面向模型的 `consult_task` 工具。
+ *
+ * @param service - 绑定表。
+ * @param ownerId - 发起方会话 id。
+ * @returns 可以直接交给 `ctx.tools.register()` 的工具定义。
+ */
+export function createConsultTool(service, ownerId) {
+  return {
+    name: CONSULT_TOOL_NAME,
+    get description() {
+      return consultDescription(service, ownerId);
+    },
+    parameters: {
+      type: 'object',
+      properties: {
+        targets: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: MAX_CONSULT_TARGETS,
+          description: '要咨询哪些目标，每项可以是界面上的序号、完整标题、标题的一部分或会话 id。'
+            + '一次最多 ' + MAX_CONSULT_TARGETS + ' 个；多个目标会并行问。'
+            + '只能选标题含「专家」「顾问」等字样、或连接线描述明确表示可以咨询的目标；'
+            + '没有明确信息时不要调用本工具。',
+        },
+        question: {
+          type: 'string',
+          maxLength: MAX_CONSULT_QUESTION_CHARS,
+          description: '要咨询的问题。写清要它回答什么、看哪些文件/模块、给什么证据；'
+            + '对方看不到当前会话的历史。',
+        },
+      },
+      required: ['targets', 'question'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string' },
+          results: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                target: { type: 'string' },
+                status: { type: 'string' },
+                reply: { type: 'string' },
+                progress: { type: 'string' },
+                note: { type: 'string' },
+              },
+              required: ['target', 'status', 'reply', 'progress', 'note'],
+              additionalProperties: false,
+            },
+          },
+          note: { type: 'string' },
+        },
+        required: ['status', 'results', 'note'],
+        additionalProperties: false,
+      },
+      render(_args, value) {
+        const lines = ['咨询状态：' + value.status];
+        for (const item of value.results) {
+          lines.push('', '—— ' + item.target + '：' + item.status);
+          if (typeof item.reply === 'string' && item.reply !== '') lines.push(item.reply);
+          else if (typeof item.progress === 'string' && item.progress !== '') lines.push(item.progress);
+          else lines.push('（没有可读的回答）');
+          if (item.note !== '') lines.push(item.note);
+        }
+        if (value.note !== '') lines.push('', value.note);
+        return [{ type: 'text', text: lines.join('\n') }];
+      },
+    },
+    async execute(args, exec) {
+      const callerId = exec?.agent?.id;
+      if (typeof callerId !== 'string' || callerId === '') {
+        throw new Error('这个工具只能在会话里由模型调用。');
+      }
+      const bindings = service.bindings.get(callerId) ?? [];
+      if (bindings.length === 0) {
+        throw new Error(explainNoTarget(service, callerId, bindings));
+      }
+      const rawTargets = Array.isArray(args?.targets) ? args.targets : [];
+      if (rawTargets.length === 0) {
+        throw new Error('请用 targets 指明要咨询哪个目标：\n' + describeCandidates(bindings));
+      }
+      const question = typeof args?.question === 'string' ? args.question.trim() : '';
+      if (question === '') {
+        throw new Error('请用 question 写清你要咨询什么：要它回答什么、看哪些文件/模块、给什么证据。');
+      }
+      if (question.length > MAX_CONSULT_QUESTION_CHARS) {
+        throw new Error('咨询问题超过 ' + MAX_CONSULT_QUESTION_CHARS + ' 字符，请精简。');
+      }
+      const requested = pickTargets(bindings, rawTargets, '咨询');
+      if (requested.length > MAX_CONSULT_TARGETS) {
+        throw new Error('一次最多咨询 ' + MAX_CONSULT_TARGETS + ' 个目标，请分几批。');
+      }
+      return runConsults({
+        ctx: service.ctx,
+        bindings: requested,
+        question,
+        sourceLabel: service.labels.get(callerId) ?? callerId,
+        signal: exec.signal,
+        timeoutMs: service.consultTimeoutMs ?? CONSULT_TIMEOUT_MS,
       });
     },
   };

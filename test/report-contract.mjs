@@ -118,7 +118,7 @@ function setup(options = {}) {
   service.set({
     owner: OWNER,
     ownerLabel: '发起方',
-    targets: ids.map((id, index) => ({ id, label: '目标' + String(index + 1) })),
+    targets: ids.map((id, index) => ({ id, label: '目标' + String(index + 1), note: '负责目标' + String(index + 1) + '的活' })),
   });
   if (options.historyMessages !== undefined) service.reportHistoryMessages = options.historyMessages;
   if (options.timeoutMs !== undefined) service.reportTimeoutMs = options.timeoutMs;
@@ -151,6 +151,19 @@ const host = await import('../index.js');
   check('report_task 已注册', context.reportTool !== undefined);
   check('描述里列出可汇报目标', context.reportTool.description.includes('目标1'), context.reportTool.description);
   check('描述里写明最多 8 个', context.reportTool.description.includes('最多 8 个'), context.reportTool.description);
+  check('描述明确「只对下属使用」', context.reportTool.description.includes('只对下属使用'), context.reportTool.description);
+  check('描述把专家/顾问指向 consult_task',
+    context.reportTool.description.includes('专家/顾问不是下属')
+    && context.reportTool.description.includes('consult_task'),
+    context.reportTool.description);
+  check('名单标题改成「可审阅目标」', context.reportTool.description.includes('当前可审阅目标'), context.reportTool.description);
+  check('名单里带标题与连接线描述',
+    context.reportTool.description.includes('1) 目标1 —— 负责目标1的活'),
+    context.reportTool.description);
+  check('report 的排除规则用「任意一点」',
+    context.reportTool.description.includes('满足上面任意一点')
+    && context.reportTool.description.includes('一定不能要求其汇报'),
+    context.reportTool.description);
 
   const before = {
     pending: context.service.pending.size,

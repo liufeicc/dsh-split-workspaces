@@ -4,14 +4,16 @@
  * ## 为什么这一段必须在 Host 上
  *
  * 「派任务」要由 **A 的模型**发起（它得先理解要派什么），而模型能看见的只有工具；
- * 工具只能在 Host 进程里注册，浏览器插件注册不了。所以插件在 Host 侧提供两样东西：
+ * 工具只能在 Host 进程里注册，浏览器插件注册不了。所以插件在 Host 侧提供四样东西：
  *
  *   1. `paneDispatch` 服务 —— 客户端在界面上勾选了「A 可以派给谁」之后，把这个
  *      绑定关系同步过来，存在内存里；
  *   2. `dispatch_task` 工具 —— A 的模型调用它时，Host 负责把任务投进目标会话、
  *      等目标那一轮跑完、把它的回复原样交回去；
  *   3. `report_task` 工具 —— 只读的按需汇报：读目标会话的模型可见历史，
- *      按 A 的要求生成总结，不改变任何派单状态。
+ *      按 A 的要求生成总结，不改变任何派单状态；
+ *   4. `consult_task` 工具 —— 真投递的咨询：把问题作为一条用户消息送进目标会话，
+ *      目标用自己的工具核实后回答；不建 goal、不进入交付/审核状态机。
  *
  * ## 一次可以派给多个目标
  *
@@ -64,6 +66,7 @@
  *   - `host.batch.js` —— 一批目标的调度与收尾（预检、并发等待、all/any）；
  *   - `host.watch.js` —— 派出去之后的盯与认（后台监视、重启后认回孤儿单子）；
  *   - `host.report.js` —— 只读汇报的旁注请求（历史裁剪、提示词、并行与超时）；
+ *   - `host.consult.js` —— 真投递咨询的并行调度与结果整形；
  *   - `host.control.js` —— 停止与唤醒（等目标真正 idle、暂停、重新开票）；
  *   - `host.tool.js` —— 面向模型的 `dispatch_task` / `report_task` 工具定义；
  *   - `host.tool.control.js` —— 面向模型的 `control_task` 工具定义。
@@ -78,6 +81,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  CONSULT_TOOL_NAME,
   CONTROL_TOOL_NAME,
   REMOTE_MARKERS,
   REMOTE_METHODS,
@@ -88,7 +92,7 @@ import {
 import { adoptOrphanGoals } from './host.watch.js';
 import { errorText, noticeMessage } from './host.message.js';
 import { PaneDispatchService } from './host.service.js';
-import { createDispatchTool, createReportTool } from './host.tool.js';
+import { createConsultTool, createDispatchTool, createReportTool } from './host.tool.js';
 import { createControlTool } from './host.tool.control.js';
 
 /** 本行的 Loader row id 与插件名（必须与 cordis.patch.yml 里那一行一致）。 */
@@ -260,9 +264,10 @@ export function apply(ctx) {
         try {
           disposers.push(agent.ctx.tools.register(createDispatchTool(service, agentId)));
           disposers.push(agent.ctx.tools.register(createReportTool(service, agentId)));
+          disposers.push(agent.ctx.tools.register(createConsultTool(service, agentId)));
           disposers.push(agent.ctx.tools.register(createControlTool(service, agentId)));
         } catch (reason) {
-          // 三个工具要么都注册，要么都不留：只留半个作用域会让 A 看到不完整的工具面。
+          // 四个工具要么都注册，要么都不留：只留半个作用域会让 A 看到不完整的工具面。
           for (const dispose of disposers) {
             try {
               dispose();
@@ -389,6 +394,7 @@ export function apply(ctx) {
  * ------------------------------------------------------------------ */
 
 export {
+  CONSULT_TOOL_NAME,
   CONTROL_TOOL_NAME,
   DISPATCH_SLICE_MS,
   DISPATCH_TIMEOUT_MS,
@@ -397,8 +403,9 @@ export {
   TOOL_NAME,
 } from './host.constants.js';
 export { PaneDispatchService } from './host.service.js';
-export { assistantText, describeCandidates, matchBinding, wrapTask } from './host.message.js';
+export { assistantText, describeCandidates, matchBinding, wrapConsult, wrapTask } from './host.message.js';
 export {
+  consultAndWait,
   deliverAndWait,
   goalSupport,
   resolveTargetAgent,
@@ -407,12 +414,15 @@ export {
   waitForTurn,
 } from './host.wait.js';
 export {
+  consultDescription,
+  createConsultTool,
   createDispatchTool,
   createReportTool,
   dispatchDescription,
   explainNoTarget,
   reportDescription,
 } from './host.tool.js';
+export { runConsult, runConsults } from './host.consult.js';
 export { runReport, runReports } from './host.report.js';
 export { resumeBatch, stopBatch } from './host.control.js';
 export { controlDescription, createControlTool } from './host.tool.control.js';

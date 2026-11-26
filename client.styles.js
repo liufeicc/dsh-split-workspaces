@@ -318,6 +318,22 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphEdgeEditorInput:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
       '.dshSplitWs_graphEdgeEditorActions{display:flex;align-items:center;gap:6px}',
       '.dshSplitWs_graphEdgeEditorActions .dshSplitWs_button{flex:1 1 auto;width:auto;min-width:0}',
+      /*
+       * 改卡片名称的弹层。
+       *
+       * 遮罩铺满 `graphBody`（左侧选择器 + 画布），因此点画布别处、点选择器都会被
+       * 当成「取消」；面板本身 stopPropagation，点输入框与按钮不会误关。
+       * 层级比箭头编辑面板高一层：改名是短暂模态，编辑面板是常驻浮层。
+       */
+      '.dshSplitWs_graphRenameBackdrop{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(4,8,14,.55);backdrop-filter:blur(2px)}',
+      '.dshSplitWs_graphRenamePanel{width:min(360px,100%);display:flex;flex-direction:column;gap:8px;padding:14px 16px;border:.5px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 18px 48px rgba(0,0,0,.45)}',
+      '.dshSplitWs_graphRenameTitle{font-size:13px;line-height:20px;font-weight:600;color:var(--dsw-alias-label-primary)}',
+      '.dshSplitWs_graphRenameHint{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
+      '.dshSplitWs_graphRenameInput{width:100%;box-sizing:border-box;padding:7px 9px;border:.5px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px}',
+      '.dshSplitWs_graphRenameInput:focus-visible{outline:2px solid var(--dsw-alias-accent-primary,var(--dshSplitWs-accent));outline-offset:1px}',
+      '.dshSplitWs_graphRenameError{font-size:11.5px;line-height:17px;color:var(--dsw-alias-state-error-primary);word-break:break-word}',
+      '.dshSplitWs_graphRenameActions{display:flex;align-items:center;justify-content:flex-end;gap:8px}',
+      '.dshSplitWs_graphRenameActions .dshSplitWs_button{width:auto;min-width:64px}',
       '.dshSplitWs_graphEdgeDelete{pointer-events:auto;cursor:pointer}',
       '.dshSplitWs_graphEdgeDelete circle{fill:var(--dsw-alias-bg-layer-2);stroke:var(--dsw-alias-border-l2);stroke-width:1}',
       '.dshSplitWs_graphEdgeDelete path{stroke:var(--dsw-alias-label-secondary);stroke-width:1.4;stroke-linecap:round}',
@@ -325,6 +341,8 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphEdgeDelete:hover path{stroke:var(--dsw-static-neutral-00)}',
       '.dshSplitWs_graphCard{position:absolute;display:flex;flex-direction:row;gap:0;box-sizing:border-box;padding:0;border:.5px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;overflow:hidden}',
       '.dshSplitWs_graphCardBody{display:flex;flex:1 1 auto;flex-direction:column;gap:4px;min-width:0;padding:10px 12px}',
+      // 右上角有动作按钮时，正文右侧让出按钮那一列，标题不会被压住。
+      '.dshSplitWs_graphCard[data-actions=true] .dshSplitWs_graphCardBody{padding-right:28px}',
       // 左侧小人：固定宽度，竖线只占视觉宽度；整块不接收指针，点击仍落在卡片上。
       '.dshSplitWs_graphCardAgent{position:relative;flex:none;display:flex;align-items:center;justify-content:center;width:46px;color:var(--card-accent,var(--dshSplitWs-accent));opacity:.42;pointer-events:none}',
       '.dshSplitWs_graphCardAgent::before{content:"";position:absolute;right:0;top:10px;bottom:10px;width:1px;background:var(--dsw-alias-border-l1)}',
@@ -384,12 +402,23 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphCardState[data-tone=blocked],.dshSplitWs_graphPickerCardState[data-tone=blocked]{color:#ff7a8a}',
       '.dshSplitWs_graphCardState[data-tone=complete],.dshSplitWs_graphPickerCardState[data-tone=complete]{color:#6ef0b8}',
       '.dshSplitWs_graphCardState[data-tone=review],.dshSplitWs_graphPickerCardState[data-tone=review]{color:#c4a7ff;background:rgba(167,139,250,.1)}',
-      // 待连线卡片右上角的「移出画布」。平时淡一点，悬停/聚焦时清楚起来。
-      '.dshSplitWs_graphCardRemove{position:absolute;top:5px;right:5px;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;line-height:18px;text-align:center;cursor:pointer;opacity:.7}',
-      '.dshSplitWs_graphCardRemove:hover{opacity:1;color:var(--dsw-alias-label-primary)}',
-      '.dshSplitWs_graphCardRemove:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px;opacity:1}',
-      '.dshSplitWs_graphCardDelete{position:absolute;right:5px;z-index:2;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:center;cursor:pointer;opacity:.75}',
-      '.dshSplitWs_graphCardDelete:hover{opacity:1;color:var(--dsw-alias-state-error-primary);background:rgba(255,77,109,.15)}',
+      /*
+       * 卡片右上角的动作区：改名 / 移出画布 / 删除。
+       *
+       * 三个按钮放进同一个纵向容器，谁出现谁消失都不需要重算「下一个放第几行」；
+       * 平时淡一点，悬停卡片或键盘聚焦时整块变清楚。
+       */
+      '.dshSplitWs_graphCardActions{position:absolute;top:5px;right:5px;z-index:2;display:flex;flex-direction:column;align-items:center;gap:4px;opacity:.72;transition:opacity .12s ease}',
+      '.dshSplitWs_graphCard:hover .dshSplitWs_graphCardActions,.dshSplitWs_graphCardActions:focus-within{opacity:1}',
+      '.dshSplitWs_graphCardRename{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer}',
+      '.dshSplitWs_graphCardRename:hover{color:var(--dshSplitWs-accent);background:var(--dsw-alias-bg-layer-1)}',
+      '.dshSplitWs_graphCardRename:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
+      // 待连线卡片的「移出画布」。
+      '.dshSplitWs_graphCardRemove{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;line-height:18px;text-align:center;cursor:pointer}',
+      '.dshSplitWs_graphCardRemove:hover{color:var(--dsw-alias-label-primary)}',
+      '.dshSplitWs_graphCardRemove:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
+      '.dshSplitWs_graphCardDelete{width:18px;height:18px;padding:0;border:0;border-radius:50%;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;text-align:center;cursor:pointer}',
+      '.dshSplitWs_graphCardDelete:hover{color:var(--dsw-alias-state-error-primary);background:rgba(255,77,109,.15)}',
       // 出线端口：右边缘中点上那个圆点，拖动起点。命中区比看上去大（14px），
       // 因为 6px 的圆在触控板上很难一次按准。
       '.dshSplitWs_graphPort{position:absolute;right:-7px;top:50%;transform:translateY(-50%);width:14px;height:14px;padding:0;border:.5px solid var(--dsw-alias-border-l2);border-radius:50%;background:var(--dsw-alias-bg-base);cursor:crosshair;touch-action:none}',
@@ -429,10 +458,18 @@ window.__ModuleLoader__.load({
       // 会话卡片：左侧一道霓虹竖线，悬停轻微上浮并扫过一道光。
       '.dshSplitWs_graphPickerItem{position:relative;display:flex;flex-direction:column;gap:3px;margin:0 0 6px 10px;padding:9px 10px 8px;border:1px solid rgba(94,231,255,.16);border-radius:10px;background:linear-gradient(150deg,rgba(18,32,52,.85),rgba(8,14,24,.9));box-shadow:0 4px 14px rgba(0,0,0,.3),inset 0 0 18px rgba(94,231,255,.04);align-items:stretch;cursor:grab;user-select:none;overflow:hidden;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease;animation:dshSplitWsCardIn .26s cubic-bezier(.2,.8,.2,1) backwards}',
       // 每张会话卡片右上角的删除入口：普通会话、空白会话、员工目标统一走这里。
-      '.dshSplitWs_graphPickerDelete{position:absolute;top:4px;right:4px;z-index:2;width:18px;height:18px;padding:0;border:0;border-radius:5px;background:rgba(255,77,109,.08);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;opacity:.65;transition:opacity .12s ease,color .12s ease,background .12s ease}',
-      '.dshSplitWs_graphPickerItem:hover .dshSplitWs_graphPickerDelete,.dshSplitWs_graphPickerDelete:focus-visible{opacity:1}',
+      '.dshSplitWs_graphPickerActions{position:absolute;top:4px;right:4px;z-index:2;display:flex;align-items:center;gap:3px;opacity:.75;transition:opacity .12s ease}',
+      '.dshSplitWs_graphPickerItem:hover .dshSplitWs_graphPickerActions,.dshSplitWs_graphPickerActions:focus-within{opacity:1}',
+      '.dshSplitWs_graphPickerRename{width:18px;height:18px;padding:0;border:0;border-radius:5px;background:rgba(94,231,255,.08);color:var(--dsw-alias-label-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer}',
+      '.dshSplitWs_graphPickerRename:hover{background:rgba(94,231,255,.2);color:var(--dshSplitWs-accent,var(--sw-neon))}',
+      '.dshSplitWs_graphPickerRename:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
+      '.dshSplitWs_graphPickerDelete{width:18px;height:18px;padding:0;border:0;border-radius:5px;background:rgba(255,77,109,.08);color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}',
       '.dshSplitWs_graphPickerDelete:hover{background:rgba(255,77,109,.2);color:var(--dsw-alias-state-error-primary)}',
-      '.dshSplitWs_graphPickerCardTopWithDelete{padding-right:20px}',
+      /*
+       * 两个动作按钮并排占约 39px，标题/工作区那一行要给它让位，否则长名字会被
+       * 按钮压住（`overflow:hidden` 会直接裁掉，而不是显示省略号）。
+       */
+      '.dshSplitWs_graphPickerCardTopWithDelete{padding-right:44px}',
       '.dshSplitWs_graphPickerItem::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--pick-accent,var(--sw-neon));opacity:.75;box-shadow:0 0 10px var(--pick-accent,var(--sw-glow))}',
       '.dshSplitWs_graphPickerItem::after{content:"";position:absolute;right:-30%;top:-60%;width:60%;height:220%;background:linear-gradient(90deg,transparent,rgba(94,231,255,.10),transparent);transform:rotate(18deg);opacity:0;transition:opacity .2s ease;pointer-events:none}',
       '.dshSplitWs_graphPickerItem:hover{transform:translateY(-1px);border-color:var(--pick-accent,var(--sw-neon));box-shadow:0 8px 22px rgba(0,0,0,.42),0 0 18px color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 25%,transparent),inset 0 0 20px color-mix(in srgb,var(--pick-accent,var(--sw-neon)) 8%,transparent)}',
@@ -1104,6 +1141,17 @@ window.__ModuleLoader__.load({
       graphPickerCardState: 'dshSplitWs_graphPickerCardState',
       graphPickerDelete: 'dshSplitWs_graphPickerDelete',
       graphPickerCardTopWithDelete: 'dshSplitWs_graphPickerCardTopWithDelete',
+      graphCardActions: 'dshSplitWs_graphCardActions',
+      graphCardRename: 'dshSplitWs_graphCardRename',
+      graphPickerActions: 'dshSplitWs_graphPickerActions',
+      graphPickerRename: 'dshSplitWs_graphPickerRename',
+      graphRenameBackdrop: 'dshSplitWs_graphRenameBackdrop',
+      graphRenamePanel: 'dshSplitWs_graphRenamePanel',
+      graphRenameTitle: 'dshSplitWs_graphRenameTitle',
+      graphRenameHint: 'dshSplitWs_graphRenameHint',
+      graphRenameInput: 'dshSplitWs_graphRenameInput',
+      graphRenameError: 'dshSplitWs_graphRenameError',
+      graphRenameActions: 'dshSplitWs_graphRenameActions',
       graphCardRemove: 'dshSplitWs_graphCardRemove',
       graphCardDelete: 'dshSplitWs_graphCardDelete',
       graphPort: 'dshSplitWs_graphPort',

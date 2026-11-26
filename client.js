@@ -611,7 +611,7 @@ window.__ModuleLoader__.load({
       };
 
       /**
-       * 设计模式的三个动作。
+       * 设计模式的动作。
        *
        * `syncBindings` 直接透传给同步器：它自己做「只发变了的那些发起方」的差量，
        * 视图层每渲染一次都调它也没关系（没变化就一个请求都不发）。
@@ -621,6 +621,65 @@ window.__ModuleLoader__.load({
         removeEdge: (from, to) => graphStore.removeEdge(from, to),
         setNote: (from, to, note) => graphStore.setNote(from, to, note),
         syncBindings: (bindings) => dispatchSync.sync(bindings),
+
+        /**
+         * 改一张卡片的名称（= 改这个会话的标题）。
+         *
+         * 走平台**官方**的重命名路径：借一个会话引用，再调 `session.rename(title)`。
+         * 这样做的三个理由：
+         *   1. Host 会归一化标题（去首尾空白、限长），并把「用户显式命名」钉住，
+         *      不让自动标题生成再把它覆盖掉；
+         *   2. 成功后会写进 title 投影，会话列表自动刷新 —— 画布卡片、左侧选择器、
+         *      平铺窗格的标题栏都会跟着变成新名字，插件不需要另写一套刷新逻辑；
+         *   3. 失败（会话已删除、连接断了、旧部署没有重命名能力）会带着具体原因回来，
+         *      界面可以原样显示，而不是静默吞掉。
+         *
+         * @param sessionId - 要改名的会话 id（画布卡片的 key）。
+         * @param title - 新名称；两端空白会被去掉，空名称直接拒绝。
+         * @returns `{ ok: true }` 或 `{ ok: false, reason }`。
+         */
+        renameSession: async (sessionId, title) => {
+          if (typeof sessionId !== 'string' || sessionId === '') {
+            return { ok: false, reason: t('graph.renameInvalid') };
+          }
+          const text = typeof title === 'string' ? title.trim() : '';
+          if (text === '') return { ok: false, reason: t('graph.renameEmpty') };
+          const sessions = ctx.sessions;
+          if (sessions === undefined || sessions === null || typeof sessions.using !== 'function') {
+            return { ok: false, reason: t('graph.renameUnavailable') };
+          }
+          /*
+           * 未命名的会话（还没有标题的空白会话 / 未命名员工）不允许改名。
+           *
+           * 界面已经不给这类卡片渲染铅笔，这里再挡一层：调用方绕过来时也只会得到
+           * 一句人话，而不是「改完还是未命名」。判定看会话列表里的 `title` ——
+           * 它存在才说明这个会话已经有名字。
+           */
+          const list = sessions.list;
+          const snapshot = list !== undefined && list !== null && typeof list.getSnapshot === 'function'
+            ? list.getSnapshot()
+            : undefined;
+          const summary = snapshot === undefined || snapshot === null || snapshot.byId === undefined
+            ? undefined
+            : snapshot.byId[sessionId];
+          if (summary === undefined) return { ok: false, reason: t('graph.renameInvalid') };
+          if (typeof summary.title !== 'string' || summary.title === '') {
+            return { ok: false, reason: t('graph.renameUntitled') };
+          }
+          try {
+            await sessions.using(sessionId, { source: mods.model.SESSION_SOURCE }, async (reference) => {
+              const result = await reference.binding.session.rename(text);
+              if (result === undefined || result === null || result.ok !== true) {
+                const message = result === undefined || result === null ? undefined : result.error?.message;
+                throw new Error(typeof message === 'string' && message !== '' ? message : 'rename failed');
+              }
+              return result;
+            });
+            return { ok: true };
+          } catch (reason) {
+            return { ok: false, reason: mods.presets.errorText(reason) };
+          }
+        },
       };
 
       // 连接重建后 Host 的模式清单可能变了，重新读一次（技能库同理：目录可能刚被改过）。
@@ -875,6 +934,19 @@ window.__ModuleLoader__.load({
  * 不变）；左侧所有会话卡片都带删除按钮。改动落在 client.view.js / client.graph.view.js /
  * client.graph.model.js / client.styles.js / client.dicts.js；入口 revision 同样靠这条
  * 注释推进，已打开的页面才会重新拉取新的代码块。
+ */
+
+/*
+ * 2026-11-26：任务分派画布与左侧选择器增加「改卡片名称」。
+ *   - 卡片与选择器条目右上角各一个铅笔，点开**同一个**弹层（由 GraphBoard 托管）；
+ *   - 改名走平台官方路径 `sessions.using(...).binding.session.rename(title)`，
+ *     成功后标题投影更新，左侧、画布、平铺窗格标题栏一起变；
+ *   - **未命名会话 / 未命名员工没有铅笔**：没有标题的占位卡改了也显示不出来；
+ *     动作层同样拒绝（`graph.renameUntitled`），防止绕过界面调用；
+ *   - 空白会话有显式标题时优先显示标题（否则改完名仍显示「未命名会话」）。
+ * 改动落在 client.js / client.view.js / client.graph.view.js / client.styles.js /
+ * client.dicts.js / test/board.mjs / test/harness.mjs；新增 test/rename-contract.mjs
+ * 与 tools/rename-probe.mjs。入口 revision 靠这条注释推进。
  */
 
 /*

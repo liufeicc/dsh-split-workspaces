@@ -243,6 +243,28 @@ window.__ModuleLoader__.load({
         }));
     }
 
+    /**
+     * 「改卡片名称」的铅笔图标。
+     *
+     * 与其它图标一样用内联 svg + `currentColor`：主题切换、悬停变色都跟着走，
+     * 不同平台也不会被渲染成彩色 emoji。
+     */
+    function renameIcon() {
+      return h('svg', { width: 11, height: 11, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+        h('path', {
+          d: 'M3 13h2.6l7-7-2.6-2.6-7 7V13z',
+          stroke: 'currentColor',
+          strokeWidth: 1.2,
+          strokeLinejoin: 'round',
+        }),
+        h('path', {
+          d: 'M9.6 3.8l2.6 2.6',
+          stroke: 'currentColor',
+          strokeWidth: 1.2,
+          strokeLinecap: 'round',
+        }));
+    }
+
     /** 工作区行右侧的「创建员工」图标：人形加号。 */
     function createTargetIcon() {
       return h('svg', { width: 13, height: 13, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
@@ -286,7 +308,7 @@ window.__ModuleLoader__.load({
      * @param props.dragMime - 拖拽时写入的私有 MIME。
      */
     function GraphPicker(props) {
-      const { groups, onStage, t, css, cx, dragMime, states, onCollapse, onDeleteSession, onCreateSession, onCreateTarget } = props;
+      const { groups, onStage, t, css, cx, dragMime, states, onCollapse, onDeleteSession, onCreateSession, onCreateTarget, onRenameSession } = props;
       /** 展开的工作区 key 集合；默认全折叠，先让用户选工作区。 */
       const [open, setOpen] = useState(() => new Set());
       /**
@@ -438,7 +460,7 @@ window.__ModuleLoader__.load({
               },
                 h('div', {
                   key: 'top',
-                  className: typeof onDeleteSession === 'function'
+                  className: typeof onDeleteSession === 'function' || typeof onRenameSession === 'function'
                     ? cx(css.graphPickerCardTop, css.graphPickerCardTopWithDelete)
                     : css.graphPickerCardTop,
                 },
@@ -472,34 +494,61 @@ window.__ModuleLoader__.load({
                     strokeLinejoin: 'round',
                   }))),
                 /*
+                 * 右上角动作区：改名 + 删除。
+                 *
                  * 所有卡片都能删：空白会话与普通会话在平台原生侧边栏里要么不显示、
                  * 要么入口很远；员工目标更是只存在本面板。统一走平台的删除确认框，
                  * 删除目标时 onDeleted 会顺手清目标记录与箭头。
+                 *
+                 * 改名与画布卡片上的铅笔是同一个入口（都由 GraphBoard 的弹层处理），
+                 * 两处名字永远一致。
                  */
-                typeof onDeleteSession === 'function'
-                  ? h('button', {
-                      key: 'delete-session',
-                      type: 'button',
-                      draggable: false,
-                      className: css.graphPickerDelete,
-                      title: t('graph.deleteSessionNamed', { title: item.label }),
-                      'aria-label': t('graph.deleteSessionNamed', { title: item.label }),
-                      onPointerDown: (event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                      },
-                      onClick: (event) => {
-                        event.stopPropagation();
-                        onDeleteSession(item.key, item.label);
-                      },
-                    }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
-                      h('path', {
-                        d: 'M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8',
-                        stroke: 'currentColor',
-                        strokeWidth: 1.2,
-                        strokeLinecap: 'round',
-                        strokeLinejoin: 'round',
-                      })))
+                (typeof onRenameSession === 'function' && item.renameable !== false)
+                  || typeof onDeleteSession === 'function'
+                  ? h('div', { key: 'actions', className: css.graphPickerActions },
+                    typeof onRenameSession === 'function' && item.renameable !== false
+                      ? h('button', {
+                          key: 'rename-session',
+                          type: 'button',
+                          draggable: false,
+                          className: css.graphPickerRename,
+                          title: t('graph.renameCard'),
+                          'aria-label': t('graph.renameNamed', { title: item.label }),
+                          onPointerDown: (event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          },
+                          onClick: (event) => {
+                            event.stopPropagation();
+                            onRenameSession(item.key, item.label);
+                          },
+                        }, renameIcon())
+                      : null,
+                    typeof onDeleteSession === 'function'
+                      ? h('button', {
+                          key: 'delete-session',
+                          type: 'button',
+                          draggable: false,
+                          className: css.graphPickerDelete,
+                          title: t('graph.deleteSessionNamed', { title: item.label }),
+                          'aria-label': t('graph.deleteSessionNamed', { title: item.label }),
+                          onPointerDown: (event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          },
+                          onClick: (event) => {
+                            event.stopPropagation();
+                            onDeleteSession(item.key, item.label);
+                          },
+                        }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                          h('path', {
+                            d: 'M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8',
+                            stroke: 'currentColor',
+                            strokeWidth: 1.2,
+                            strokeLinecap: 'round',
+                            strokeLinejoin: 'round',
+                          })))
+                      : null)
                   : null);
               })
             ) : null));
@@ -526,6 +575,145 @@ window.__ModuleLoader__.load({
             : rows));
     }
     GraphPicker.displayName = 'GraphPicker';
+
+    /**
+     * 改卡片名称的弹层。
+     *
+     * 卡片与左侧选择器共用同一个弹层（都由 `GraphBoard` 托管状态），所以两处点了
+     * 之后看到的是**同一套**输入、校验与错误提示，不会各写一份行为还不一致。
+     *
+     * 交互约定：
+     *   - 打开时输入框自动获得焦点并全选，直接输入就是替换旧名；
+     *   - `Enter` 保存、`Escape` 取消；点遮罩取消、点面板内部不取消；
+     *   - 名称只做 `trim`，空名称当场拒绝（不发请求）；
+     *   - 保存中禁用按钮（连点不会发两次请求），失败时把平台给的原因原样显示在面板里，
+     *     面板保持打开，用户可以改完再试。
+     *
+     * @param props.request - `{ sessionId, title }`：改哪个会话、当前显示名。
+     * @param props.onSubmit - `(sessionId, title) => Promise<{ ok, reason? }>`。
+     * @param props.onClose - 关闭弹层（取消、成功、点遮罩都走它）。
+     * @param props.t / props.css / props.cx - 文案、class 表、class 拼接。
+     */
+    function GraphRenameDialog(props) {
+      const { request, onSubmit, onClose, t, css, cx } = props;
+      const [draft, setDraft] = useState(() => (typeof request.title === 'string' ? request.title : ''));
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState(null);
+      const inputRef = useRef(null);
+      /** 卸载后不再写 state：成功时父组件会立刻关掉弹层。 */
+      const aliveRef = useRef(true);
+      useEffect(() => () => {
+        aliveRef.current = false;
+      }, []);
+
+      /*
+       * 打开时聚焦并全选。用 ref 而不是 `autoFocus`：测试替身没有 DOM 时
+       * `autoFocus` 会变成渲染树里的一个属性，看起来「做了」但其实没验证过；
+       * 这里显式调用，测试也能对着同一个入口断言。
+       */
+      useEffect(() => {
+        const node = inputRef.current;
+        if (node === null || node === undefined) return;
+        if (typeof node.focus === 'function') node.focus();
+        if (typeof node.select === 'function') node.select();
+      }, []);
+
+      const submit = async () => {
+        if (busy) return;
+        const text = typeof draft === 'string' ? draft.trim() : '';
+        if (text === '') {
+          setError(t('graph.renameEmpty'));
+          return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+          const result = await onSubmit(request.sessionId, text);
+          if (result !== undefined && result !== null && result.ok === true) {
+            if (aliveRef.current) onClose();
+            return;
+          }
+          const reason = result !== undefined && result !== null && typeof result.reason === 'string'
+            ? result.reason
+            : '';
+          if (!aliveRef.current) return;
+          setError(t('graph.renameFailed') + (reason === '' ? '' : ': ' + reason));
+        } catch (reason) {
+          if (!aliveRef.current) return;
+          const message = reason instanceof Error ? reason.message : String(reason);
+          setError(t('graph.renameFailed') + (message === '' ? '' : ': ' + message));
+        } finally {
+          if (aliveRef.current) setBusy(false);
+        }
+      };
+
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          if (!busy) onClose();
+          return;
+        }
+        if (event.key === 'Enter' && event.shiftKey !== true) {
+          event.preventDefault();
+          void submit();
+        }
+      };
+
+      return h('div', {
+        key: 'rename-backdrop',
+        className: css.graphRenameBackdrop,
+        // 点遮罩 = 取消；保存中不给关，避免「已提交但面板没了」。
+        onPointerDown: (event) => {
+          event.stopPropagation();
+          if (!busy) onClose();
+        },
+      },
+        h('div', {
+          key: 'rename-panel',
+          className: css.graphRenamePanel,
+          role: 'dialog',
+          'aria-modal': 'true',
+          'aria-label': t('graph.renameTitle'),
+          onPointerDown: (event) => event.stopPropagation(),
+          onClick: (event) => event.stopPropagation(),
+          onKeyDown,
+        },
+          h('div', { key: 'title', className: css.graphRenameTitle }, t('graph.renameTitle')),
+          h('div', { key: 'hint', className: css.graphRenameHint }, t('graph.renameHint')),
+          h('input', {
+            key: 'input',
+            className: css.graphRenameInput,
+            ref: inputRef,
+            type: 'text',
+            value: draft,
+            // 与平台重命名的输入上限一致：Host 还会再归一化一次。
+            maxLength: 80,
+            placeholder: t('graph.renamePlaceholder'),
+            disabled: busy,
+            'aria-label': t('graph.renameTitle'),
+            onChange: (event) => setDraft(event.target.value),
+          }),
+          error === null ? null : h('div', {
+            key: 'error',
+            className: css.graphRenameError,
+            role: 'alert',
+          }, error),
+          h('div', { key: 'actions', className: css.graphRenameActions },
+            h('button', {
+              key: 'save',
+              type: 'button',
+              className: cx(css.button, css.primary),
+              disabled: busy,
+              onClick: () => { void submit(); },
+            }, busy ? t('graph.renameSaving') : t('graph.renameSave')),
+            h('button', {
+              key: 'cancel',
+              type: 'button',
+              className: css.button,
+              disabled: busy,
+              onClick: onClose,
+            }, t('graph.renameCancel')))));
+    }
 
     /**
      * 一条边的几何：起点在源卡片右边缘中点，终点在目标卡片左边缘偏里一点。
@@ -577,6 +765,25 @@ window.__ModuleLoader__.load({
       const [rejectCode, setRejectCode] = useState(null);
       /** 正在编辑说明的那条边 `{ from, to }`；null 表示没有在编辑。 */
       const [editing, setEditing] = useState(null);
+      /**
+       * 正在改名的目标 `{ sessionId, title }`；null 表示弹层关着。
+       *
+       * 卡片与左侧选择器共用这一份状态：两处点铅笔打开的是同一个弹层，
+       * 输入、校验与错误提示只有一套。
+       */
+      const [renameTarget, setRenameTarget] = useState(null);
+      const openRename = useCallback((sessionId, title) => {
+        if (typeof sessionId !== 'string' || sessionId === '') return;
+        setEditing(null);
+        setRejectCode(null);
+        setRenameTarget({
+          sessionId,
+          title: typeof title === 'string' ? title : '',
+        });
+      }, []);
+      const closeRename = useCallback(() => setRenameTarget(null), []);
+      /** 当前部署/宿主是否支持改名；不支持时整块图标不渲染，而不是留一个点了没反应的按钮。 */
+      const canRename = typeof actions.renameSession === 'function';
       /** 编辑中的说明草稿。 */
       const [draft, setDraft] = useState('');
       /** 左侧会话正被拖到画布上方；用来给画布加一圈高亮。 */
@@ -705,11 +912,21 @@ window.__ModuleLoader__.load({
         const item = itemsByKey.get(card.key);
         if (item === undefined) return null;
         /*
+         * 「未命名会话 / 未命名员工」不给改名：它们的标题还没有确定（平台会回退成
+         * 目录名或占位名），改了也显示不出来。能不能改由视图层的 `renameable` 决定，
+         * 这里只负责不给入口 —— 判断只在**一处**，卡片与左侧列表用的是同一份数据。
+         */
+        const canRenameCard = canRename && card.renameable !== false;
+        /*
          * 「待连线」以布局结果为准，而不是看 staged 集合：会话连上箭头之后仍会留在
          * 集合里（删掉箭头要能回到待连线），但布局已经把它当成树节点，卡片就不该
          * 再显示虚线边框和移除按钮。
          */
         const isStaged = item.staged === true;
+        /** 这张卡片右上角有没有动作按钮；有的话正文要给按钮让出一列，标题不会被压住。 */
+        const hasActions = canRenameCard
+          || isStaged
+          || (card.target === true && typeof actions.deleteSession === 'function');
         const label = card.label === undefined || card.label === '' ? t('pane.untitled') : card.label;
         const badges = stateBadges(states === undefined || states === null ? undefined : states[card.key], t);
         return h('div', {
@@ -726,6 +943,7 @@ window.__ModuleLoader__.load({
           'data-session': card.key,
           'data-running': card.running === true ? 'true' : 'false',
           'data-staged': isStaged ? 'true' : 'false',
+          'data-actions': hasActions ? 'true' : undefined,
           /*
            * 点卡片 = 打开这张卡片对应会话的浮动窗格（输入、切会话都照旧）。
            * 不再切回平铺：任务分派里点开一段对话看细节，不该把画布本身关掉。
@@ -754,47 +972,78 @@ window.__ModuleLoader__.load({
                 ? h('span', { key: 'staged', className: css.graphCardStaged }, t('graph.stagedBadge'))
                 : null)),
           /*
-           * 待连线卡片右上角的「移出画布」。连上箭头之后它就不再是待连线，
-           * 这个按钮也跟着消失 —— 移除关系走箭头上的编辑面板，两个动作不混。
+           * 右上角的一列动作按钮。
+           *
+           * 放进同一个纵向容器（而不是各自 absolute 定位）有两个好处：
+           *   - 谁出现谁消失都不用重算「下一个按钮放第几行」，卡片状态再多也不会叠住；
+           *   - 悬停/聚焦时整块一起变清楚，视觉上是一个动作区而不是几个散落的点。
+           *
+           * 顺序固定：改名 → 移出画布（待连线） → 删除（目标）。
            */
-          isStaged ? h('button', {
-            key: 'remove',
-            type: 'button',
-            className: css.graphCardRemove,
-            title: t('graph.removeStaged'),
-            'aria-label': t('graph.removeStaged'),
-            onPointerDown: (event) => event.stopPropagation(),
-            onClick: (event) => {
-              event.stopPropagation();
-              actions.unstageSession(card.key);
-            },
-          }, '×') : null,
-          /*
-           * 目标卡片的删除入口。空目标不会出现在平台会话列表里，所以画布/左侧
-           * 必须给一个删除位置；已连线的目标也允许从这里删，边会随会话一起清掉。
-           * 待连线时右上角已经有「移出画布」，删除放到它下面一行，避免两个 × 叠住。
-           */
-          card.target === true && typeof actions.deleteSession === 'function'
-            ? h('button', {
-                key: 'delete-target',
-                type: 'button',
-                className: css.graphCardDelete,
-                style: { top: isStaged ? '28px' : '5px' },
-                title: t('graph.deleteSessionNamed', { title: label }),
-                'aria-label': t('graph.deleteSessionNamed', { title: label }),
-                onPointerDown: (event) => event.stopPropagation(),
-                onClick: (event) => {
-                  event.stopPropagation();
-                  actions.deleteSession(card.key, label);
-                },
-              }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
-                h('path', {
-                  d: 'M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8',
-                  stroke: 'currentColor',
-                  strokeWidth: 1.2,
-                  strokeLinecap: 'round',
-                  strokeLinejoin: 'round',
-                }))) : null,
+          hasActions
+            ? h('div', { key: 'actions', className: css.graphCardActions },
+              canRenameCard
+                ? h('button', {
+                    key: 'rename',
+                    type: 'button',
+                    className: css.graphCardRename,
+                    title: t('graph.renameCard'),
+                    'aria-label': t('graph.renameNamed', { title: label }),
+                    onPointerDown: (event) => {
+                      // 阻止卡片开始拖动；点击落到按钮上时不该同时打开浮窗。
+                      event.preventDefault();
+                      event.stopPropagation();
+                    },
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      openRename(card.key, label);
+                    },
+                  }, renameIcon())
+                : null,
+              /*
+               * 待连线卡片右上角的「移出画布」。连上箭头之后它就不再是待连线，
+               * 这个按钮也跟着消失 —— 移除关系走箭头上的编辑面板，两个动作不混。
+               */
+              isStaged
+                ? h('button', {
+                    key: 'remove',
+                    type: 'button',
+                    className: css.graphCardRemove,
+                    title: t('graph.removeStaged'),
+                    'aria-label': t('graph.removeStaged'),
+                    onPointerDown: (event) => event.stopPropagation(),
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      actions.unstageSession(card.key);
+                    },
+                  }, '×')
+                : null,
+              /*
+               * 目标卡片的删除入口。空目标不会出现在平台会话列表里，所以画布/左侧
+               * 必须给一个删除位置；已连线的目标也允许从这里删，边会随会话一起清掉。
+               */
+              card.target === true && typeof actions.deleteSession === 'function'
+                ? h('button', {
+                    key: 'delete-target',
+                    type: 'button',
+                    className: css.graphCardDelete,
+                    title: t('graph.deleteSessionNamed', { title: label }),
+                    'aria-label': t('graph.deleteSessionNamed', { title: label }),
+                    onPointerDown: (event) => event.stopPropagation(),
+                    onClick: (event) => {
+                      event.stopPropagation();
+                      actions.deleteSession(card.key, label);
+                    },
+                  }, h('svg', { width: 12, height: 12, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true },
+                    h('path', {
+                      d: 'M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.2,
+                      strokeLinecap: 'round',
+                      strokeLinejoin: 'round',
+                    })))
+                : null)
+            : null,
           /*
            * 出线端口：拖动起点。用 `pointerdown` 而不是 `click`，因为这是一次拖动；
            * `stopPropagation` 保证它不会顺带把卡片自己的点击也点出去。
@@ -1049,6 +1298,8 @@ window.__ModuleLoader__.load({
                 onDeleteSession: actions.deleteSession,
                 onCreateSession: actions.createSession,
                 onCreateTarget: actions.createTarget,
+                // 左侧铅笔与画布卡片共用同一个改名弹层。
+                onRenameSession: canRename ? openRename : undefined,
                 t,
                 css,
                 cx,
@@ -1088,7 +1339,22 @@ window.__ModuleLoader__.load({
               layout.items.length === 0
                 ? h('div', { key: 'empty', className: css.graphEmpty }, t('graph.emptyCanvas'))
                 : null),
-            diagnostic === undefined ? null : h('div', { key: 'diag', className: css.graphDiagnostic }, diagnostic))));
+            diagnostic === undefined ? null : h('div', { key: 'diag', className: css.graphDiagnostic }, diagnostic)),
+          /*
+           * 改名弹层挂在 `graphBody` 之内、画布之外：它能盖住左侧选择器与画布，
+           * 又不会跑到面板外面去（`graphWrap` 就是这块面板的边界）。
+           */
+          renameTarget === null
+            ? null
+            : h(GraphRenameDialog, {
+                key: 'rename',
+                request: renameTarget,
+                onSubmit: actions.renameSession,
+                onClose: closeRename,
+                t,
+                css,
+                cx,
+              })));
     }
     GraphBoard.displayName = 'GraphBoard';
 

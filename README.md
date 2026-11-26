@@ -248,8 +248,18 @@ permission.
   at the end. Ordinary blank sessions appear as **"Untitled session"** cards (newest one per
   workspace only, so historic shells do not flood the picker); a blank session carrying a
   **target record** appears as "Untitled employee". Once it has content or a real title, that
-  title is shown instead. **Every card has a delete button at its top-right**, for ordinary,
-  blank, and employee sessions alike; target deletion also clears the target record and edges.
+  title is shown instead. **A renamed session always shows its new name**, even while it is
+  still blank. **Every card has a delete button at its top-right**, and **cards that already
+  have a title also get a rename pencil**:
+  - the pencil opens a rename dialog that changes the **session title** through the platform's
+    rename path (the Host normalizes it and pins it against automatic regeneration), so the new
+    name survives a reload/restart; conversations and arrows are untouched. The picker and the
+    canvas card share one dialog, so both always show the same name;
+  - **untitled sessions / untitled employees have no pencil**: they have no title yet, the
+    platform falls back to the directory name or a placeholder, so a rename would not be
+    visible. The action layer refuses such calls too — start a conversation first, then rename;
+  - the trash button opens the platform's delete confirmation; target deletion also clears the
+    target record and edges.
 - **Collapse the left column**: click `‹` next to "Session nodes" to collapse the whole column
   and let the canvas fill the panel; click `›` in the canvas's top-left corner to expand it.
   The collapsed state is per page and resets on a mode switch or reload.
@@ -927,7 +937,8 @@ the whole implementation.
 - `client.graph.model.js` — the pure model: the four edge checks, layered layout, drop
   resolution, and the graph → bindings conversion. No React, so it runs under Node.
 - `client.graph.view.js` — design mode: the collapsible workspace/session picker that drags
-  cards onto the canvas, plus cards, bezier arrows, drag-to-connect and delete buttons.
+  cards onto the canvas, plus cards, bezier arrows, drag-to-connect, delete buttons, and the
+  **rename dialog** shared by both pencils (card and picker row).
 - `client.skill.js` — the per-workspace SKILL switch: same shape as the MCP block, but its items
   come from scanning the skill directory and every row carries a description; empty / missing /
   broken directory each get their own message.
@@ -956,6 +967,14 @@ the whole implementation.
   (`node test/views-contract.mjs`): zero views / Chat-only leaves the old behaviour untouched,
   the strip appears and switches, blank sessions hide it, a vanished view falls back to Chat,
   and Trajectory never appears in a pane.
+- `test/rename-contract.mjs` — offline contract tests for "rename a card"
+  (`node test/rename-contract.mjs`): every rename string exists in both dictionaries; both the
+  canvas card and the picker row carry a pencil opening the **same** dialog; the input is seeded
+  with the current name; submit goes through the platform path (`sessions.using` →
+  `session.rename`) and trims; an empty name is rejected without a request; a failure shows the
+  platform's reason and keeps the dialog open; Escape cancels without a request; a host without
+  rename support renders **no** pencil; and a blank session with an explicit title shows that
+  title instead of "Untitled session".
 - `test/drag-contract.mjs` — offline contract tests for the two kinds of dragging
   (`node test/drag-contract.mjs`): resizing with a splitter (including keyboard fine-tuning
   and double-click balance), and the whole chain of **drag-to-swap on the title bar**. The
@@ -1036,6 +1055,15 @@ the whole implementation.
   rather than the pane closed and reopened) — and leaves screenshots of the open menu and of
   the result (`node tools/replace-probe.mjs`, about a minute;
   `DSH_REPLACE_PROBE_URL` reuses a running service).
+- `tools/rename-probe.mjs` — a **real-browser** probe for the rename flow. It starts its own
+  `dsh web` on a **temporary `DSH_HOME`** (a fresh empty `sessions/` directory; only the plugin
+  and workspace roster are symlinked/copied), so it never touches your conversations. By
+  default it verifies the **untitled rule**: a freshly created blank session and an untitled
+  employee show **no** pencil on either the picker row or the card (the delete button is still
+  there). Pass `DSH_RENAME_PROBE_SESSION=<sessionId>` to also run the positive case: the probe
+  **copies** that already-titled session into the temp home and renames the copy, checking both
+  surfaces update, the name survives a reload, an empty name is rejected, and cancelling leaves
+  the name intact (`node tools/rename-probe.mjs`, about a minute).
 - `tools/swap-probe.mjs` — a **real-browser** probe: it starts its own separate `dsh web`
   (without touching the window you have open) plus a headless Chrome, and really drags twice
   with **trusted mouse input** to measure three things the offline tests cannot answer — that
@@ -1077,6 +1105,7 @@ node test/tint-contract.mjs
 node test/font-contract.mjs
 node test/save-contract.mjs
 node test/staged-save-contract.mjs
+node test/rename-contract.mjs
 node test/host-layout-contract.mjs
 node test/drag-contract.mjs
 node test/focus-contract.mjs

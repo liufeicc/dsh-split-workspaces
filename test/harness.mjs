@@ -260,7 +260,13 @@ export const byClass = (token) => (node) => typeof node.props.className === 'str
 export const byData = (name) => (node) => node.props[name] !== undefined;
 
 /** Client Context 替身：记录槽位注册、词典、固定快捷键与到达宿主命名空间的调用。 */
-export function createStubContext({ presets = [], respond } = {}) {
+/**
+ * @param options.presets - 模式清单替身。
+ * @param options.respond - 自定义远端回答。
+ * @param options.rename - 重命名替身：`(sessionId, title) => RemoteResult`。
+ *   默认成功，返回归一化后的标题；用例可以让它失败来验证错误提示。
+ */
+export function createStubContext({ presets = [], respond, rename } = {}) {
   const registered = [];
   const calls = [];
   /** 插件通过 `registerFixed` 登记的固定快捷键（按登记顺序）。 */
@@ -270,6 +276,16 @@ export function createStubContext({ presets = [], respond } = {}) {
    * 用例在渲染前往里放，`$mount` 之后由服务表转发过去。
    */
   const remoteHandlers = {};
+  /** `ctx.sessions.list` 的快照：`byId[id].title` 决定这个会话能不能改名。 */
+  const sessionListState = { ids: [], byId: {}, phase: 'ready', projectionsBySession: {} };
+  /**
+   * 填入会话列表快照（只填 `byId`；`ids` 按 key 顺序推出来）。
+   * @param byId - `{ [sessionId]: { id, title?, blank?, ... } }`
+   */
+  const setSessionList = (byId) => {
+    sessionListState.byId = { ...byId };
+    sessionListState.ids = Object.keys(byId);
+  };
   /** 远端命名空间挂载记录（`ctx.remote.$mount` 的替身往里写）。 */
   const mounted = [];
   /** 卸载记录（disposer 被调用时写）。 */
@@ -406,9 +422,47 @@ export function createStubContext({ presets = [], respond } = {}) {
         return () => {};
       },
     },
-    sessions: { create: () => Promise.resolve('session-created'), retain: () => ({ release: () => {} }) },
+    /*
+     * 会话服务替身。
+     *
+     * 改名走的是真实形状：`using(target, options, operation)` 借一个引用，
+     * 回调里调 `binding.session.rename(title)`。替身照着这条路径实现，
+     * 于是「插件到底有没有走官方重命名」可以在测试里断言（`calls` 里能看到），
+     * 而不是只验证「某个假函数被调用了」。
+     */
+    sessions: {
+      create: () => Promise.resolve('session-created'),
+      retain: () => ({ release: () => {} }),
+      /*
+       * 会话列表快照。改名的动作层会读 `byId[id].title` 判断「这个会话有没有名字」；
+       * 默认为空（= 什么都没加载），需要走改名路径的用例用 `setSessionList` 填。
+       */
+      list: { getSnapshot: () => sessionListState, subscribe: () => () => {} },
+      using: async (target, options, operation) => {
+        const reference = {
+          sessionId: target,
+          binding: {
+            session: {
+              rename: async (title) => {
+                calls.push({ namespace: 'sessions', method: 'rename', sessionId: target, title });
+                const handler = typeof rename === 'function'
+                  ? rename
+                  : (sessionId, text) => ({ ok: true, value: { title: text, seq: 1 } });
+                return handler(target, title);
+              },
+            },
+          },
+          release: () => {},
+        };
+        try {
+          return await operation(reference);
+        } finally {
+          reference.release();
+        }
+      },
+    },
     workspaces: { list: source({ items: [], archivedSessionIds: [] }) },
     uiWorkspace: { pickDirectory: () => Promise.resolve(null) },
   };
-  return { ctx, registered, calls, connection, fixedShortcuts, effects, services, mounted, unmounted, remoteHandlers };
+  return { ctx, registered, calls, connection, fixedShortcuts, effects, services, mounted, unmounted, remoteHandlers, sessionListState, setSessionList };
 }

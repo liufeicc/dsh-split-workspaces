@@ -93,8 +93,8 @@ export function report() {
  * @param options.pickerThrows - 让文件夹选择器直接失败，用来检查报错文案。
  * @param options.createdId - `workspaces.create` 建出来的工作区 id。
  */
-export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new', preloadPanes = true, remoteHandlers = {}, extraSessions = [] } = {}) {
-  const stub = createStubContext({ presets: [] });
+export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows = false, createdId = 'ws-new', preloadPanes = true, remoteHandlers = {}, extraSessions = [], rename } = {}) {
+  const stub = createStubContext({ presets: [], rename });
   Object.assign(stub.remoteHandlers, remoteHandlers);
   await mod.apply(stub.ctx);
   const main = stub.registered.find((definition) => definition.name === 'main');
@@ -119,9 +119,11 @@ export async function renderBoard(mod, { pickedPath = '/tmp/new', pickerThrows =
   ];
   const sessionIds = ['s-a', 's-b', 's-blank', 's-c', 's-orphan-blank'];
   const sessionById = {
-    's-a': { id: 's-a', displayTitle: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
-    's-b': { id: 's-b', displayTitle: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
-    's-c': { id: 's-c', displayTitle: 'c', blank: false, origin: 'user', updatedAt: 0, retainedBy: {}, projectionValues: {} },
+    // `title` 是平台的标题投影：有内容/有名字的会话才有它，空白会话没有。
+    // 任务分派据此判断「能不能改名」（未命名的不给改）。
+    's-a': { id: 's-a', displayTitle: 'a', title: 'a', blank: false, origin: 'user', updatedAt: 2, retainedBy: {}, projectionValues: {} },
+    's-b': { id: 's-b', displayTitle: 'b', title: 'b', blank: false, origin: 'user', updatedAt: 1, retainedBy: {}, projectionValues: {} },
+    's-c': { id: 's-c', displayTitle: 'c', title: 'c', blank: false, origin: 'user', updatedAt: 0, retainedBy: {}, projectionValues: {} },
     // 没发过消息的空白会话：会话菜单不该列它，但「新建会话」应当优先复用它。
     // displayTitle 故意填项目目录名：平台对无标题会话的回退就是 cwd basename，
     // 任务分派必须按 blank 标志显示「未命名会话」，不能把这个目录名当标题。

@@ -1012,15 +1012,27 @@ window.__ModuleLoader__.load({
              * 按 `blank` 标志统一显示成「未命名会话」。
              */
             const target = targetIds.has(row.id);
+            /*
+             * 用户**显式改过名**的会话（快照里带 `title`）优先显示这个名字。
+             *
+             * 这条要多说一句：平台对空白会话的 `displayTitle` 会回退成项目目录名，
+             * 所以下面按 `blank` 统一显示「未命名会话 / 未命名员工」。但用户刚在
+             * 「改卡片名称」里输入的名字也是一条 `title`，如果仍走那条回退规则，
+             * 改完名卡片上还是「未命名会话」—— 改名的结果当场就看不见了。
+             * 因此只要 `title` 有值，就以它为准；空白会话的回退只用于**没有**标题的。
+             */
+            const explicitTitle = typeof row.title === 'string' && row.title.trim() !== '' ? row.title.trim() : '';
             return {
               key: row.id,
               /*
                * 目标空会话叫「未命名目标」；一旦有了内容/标题，就与普通会话一样用
                * 真实标题（目标标记仍在，只影响「空会话是否显示」，不再影响命名）。
                */
-              label: target && row.blank === true
-                ? t('pane.untitledTarget')
-                : (row.blank === true || title === undefined || title === '' ? t('pane.untitled') : title),
+              label: explicitTitle !== ''
+                ? explicitTitle
+                : (target && row.blank === true
+                  ? t('pane.untitledTarget')
+                  : (row.blank === true || title === undefined || title === '' ? t('pane.untitled') : title)),
               // 分组用：同一个工作区的候选卡片聚在一起。会话不属于任何工作区时留空，
               // 由模型把它归入「未归属工作区」并固定排在最后。
               workspaceKey: workspace === undefined ? '' : workspace.workspaceId,
@@ -1030,6 +1042,15 @@ window.__ModuleLoader__.load({
               // 空白会话（建了但没输入内容）要区分「目标」与普通空壳。
               blank: row.blank === true,
               target,
+              /*
+               * 能不能改名：**只有已经有明确标题的会话**才行。
+               *
+               * 「未命名会话」和「未命名员工」都是还没有标题的占位卡：平台会把它们的
+               * 标题回退成项目目录名或「未命名」，即便写进一个标题，界面上也仍然显示
+               * 占位名。所以这类卡片干脆不给改名入口（铅笔不渲染），避免用户改完
+               * 发现「名字没变」。`explicitTitle` 为空就是这一类。
+               */
+              renameable: explicitTitle !== '',
             };
           });
         }, [items, sessionState, archivedSessionIds, panes, panePlan, model, t, targetIds, targetState, stagedSessions]);
@@ -1138,6 +1159,8 @@ window.__ModuleLoader__.load({
                   // 后者用于画布/删除时的语义判断。
                   blank: card.blank === true,
                   target: card.target === true,
+                  // 未命名的卡片不给改名入口（理由见 `graphCards` 里的 `renameable`）。
+                  renameable: card.renameable === true,
                 })),
             }));
         }, [graphCards, graphCardById, graphState.edges, stagedSessions, graphModel, items, t]);
@@ -1605,6 +1628,12 @@ window.__ModuleLoader__.load({
             removeEdge: graphActions.removeEdge,
             // 少了这一行：编辑器打开后点「保存」会调一个 undefined —— 什么都不发生。
             setNote: graphActions.setNote,
+            /*
+             * 改卡片名称：走平台官方重命名（GraphActions 在 client.js 里实现）。
+             * 画布卡片与左侧选择器共用它；旧部署没有这个方法时，两处的铅笔图标
+             * 都不渲染，不会出现点了没反应的按钮。
+             */
+            renameSession: graphActions.renameSession,
             /*
              * 点卡片 = 打开这张卡片对应会话的浮动窗格，不再切回平铺。
              * 工作区 id 用来给浮窗里的 PaneFrame 找标题与替换菜单。

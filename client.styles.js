@@ -317,7 +317,7 @@ window.__ModuleLoader__.load({
       '.dshSplitWs_graphEdgeEditorInput{width:100%;min-height:64px;resize:vertical;box-sizing:border-box;padding:6px 8px;border:.5px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px}',
       '.dshSplitWs_graphEdgeEditorInput:focus-visible{outline:2px solid var(--dshSplitWs-accent);outline-offset:1px}',
       '.dshSplitWs_graphEdgeEditorActions{display:flex;align-items:center;gap:6px}',
-      '.dshSplitWs_graphEdgeEditorActions .dshSplitWs_button{flex:1 1 auto;width:auto;min-width:0}',
+      '.dshSplitWs_graphEdgeEditorActions .dshSplitWs_button{flex:1 1 auto;width:auto;min-width:0;justify-content:center;text-align:center}',
       /*
        * 改卡片名称的弹层。
        *

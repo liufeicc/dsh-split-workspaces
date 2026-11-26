@@ -107,11 +107,11 @@ export const MAX_CONSULT_QUESTION_CHARS = 8000;
 /**
  * 单个目标咨询一轮的超时。
  *
- * 咨询是「目标读文件/跑命令后回答一个问题」，通常几秒到几分钟；10 分钟还没回来，
+ * 咨询是「目标读文件/跑命令后回答一个问题」，通常几秒到几分钟；20 分钟还没回来，
  * 多半是目标卡在某个长命令或网络请求上。超时不等于失败：已收到的文本会作为
  * 「过程稿」返回，让 A 决定要不要重问。
  */
-export const CONSULT_TIMEOUT_MS = 10 * 60 * 1000;
+export const CONSULT_TIMEOUT_MS = 20 * 60 * 1000;
 
 /** 喂给汇报助手的历史字符上限（大会话兜底）。 */
 export const REPORT_HISTORY_CHARS = 120000;

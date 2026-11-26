@@ -179,7 +179,7 @@ export function waitForTurn(ctx, targetId, requestId, signal, options) {
     signal.addEventListener('abort', onAbort, { once: true });
     timer = setTimeout(() => finish(outcomeOf('timeout', lastText)), timeoutMs);
     /*
-     * 兜底定时器**不许吊住事件循环**：它最长由调用方指定（派单默认 20 分钟、咨询 10 分钟），
+     * 兜底定时器**不许吊住事件循环**：它最长由调用方指定（派单与咨询默认 20 分钟），
      * 而它唯一的作用是「万一没人叫醒这个 Promise」。在长驻宿主里这没什么，但在短命进程
      * （离线测试、一次性脚本）里，一个没人再等的计时器会让进程白白挂到超时才退出。
      */

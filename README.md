@@ -389,7 +389,7 @@ Boundaries:
 - **The target may modify files** (the user explicitly chose this): the wrapper asks it to state
   which files it changed and why. This is a prompt-level instruction, not a hard permission; the
   target's own toolset still decides what it can do;
-- Per-target timeout is 10 minutes; on timeout / user stop / cancellation, any received text goes
+- Per-target timeout is 20 minutes; on timeout / user stop / cancellation, any received text goes
   to `progress` and is not passed off as an answer;
 - The Q&A stays in the target's history, so the target remembers the conversation afterwards.
 
